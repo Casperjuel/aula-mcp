@@ -93,6 +93,11 @@ const WIDGET_PROVIDER_MAP: Readonly<
     provider: 'easyiq_skoleportal',
     tool: 'aula.ugeplan.easyiq_skoleportal',
   },
+  '0142': {
+    capability: 'lektier',
+    provider: 'easyiq_lektier',
+    tool: 'aula.lektier.easyiq',
+  },
 });
 
 export async function buildDiscoverManifest(context: AulaContext): Promise<DiscoverManifest> {
@@ -182,6 +187,7 @@ function buildCapabilities(detectedWidgets: string[]): Record<string, Discovered
   const opgaverDetected = detectedByCapability.get('opgaver') ?? [];
   const ugebrevDetected = detectedByCapability.get('ugebrev') ?? [];
   const huskelistenDetected = detectedByCapability.get('huskelisten') ?? [];
+  const lektierDetected = detectedByCapability.get('lektier') ?? [];
 
   // When detection picked a provider for a third-party capability, expose
   // ONLY that tool. Listing alternates as fallbacks invites Claude to fan
@@ -259,6 +265,16 @@ function buildCapabilities(detectedWidgets: string[]): Record<string, Discovered
         ? {
             notes:
               'Systematic widget (0062) not detected — call may return empty. Skip if user did not specifically ask for huskelisten.',
+          }
+        : {}),
+    },
+    lektier: {
+      summary: 'Homework items from EasyIQ Lektier (widget 0142).',
+      tools: ['aula.lektier.easyiq'],
+      ...(lektierDetected.length === 0
+        ? {
+            notes:
+              'EasyIQ Lektier widget (0142) not detected — call may return empty. Skip if user did not specifically ask for lektier.',
           }
         : {}),
     },

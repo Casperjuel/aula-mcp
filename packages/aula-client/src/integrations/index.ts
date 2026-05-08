@@ -1,4 +1,5 @@
 export { EasyIqClient, type EasyIqOptions } from './easyiq.ts';
+export { EasyIqLektierClient, type EasyIqLektierOptions } from './easyiq-lektier.ts';
 export {
   EasyIqSkoleportalClient,
   type EasyIqSkoleportalOptions,

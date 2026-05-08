@@ -12,6 +12,7 @@ import { describe, expect, test } from 'bun:test';
 import { FakeHttp } from '../test-helpers.ts';
 import type { WidgetTokenManager } from '../widget-token-manager.ts';
 import { EasyIqClient } from './easyiq.ts';
+import { EasyIqLektierClient } from './easyiq-lektier.ts';
 import { EasyIqSkoleportalClient } from './easyiq-skoleportal.ts';
 import { MeebookClient } from './meebook.ts';
 import { MinUddannelseClient } from './min-uddannelse.ts';
@@ -421,6 +422,157 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
     expect(auth?.headers?.['authorization']).toBe('Bearer TKN-1');
     const events = http.requested[1];
     expect(events?.url).toContain('loginId=LOGIN');
+  });
+});
+
+// --------------------------------------------------------------------------
+// EasyIQ Lektier (widget 0142)
+// --------------------------------------------------------------------------
+
+describe('EasyIqLektierClient.getLektier', () => {
+  test('auth + GetChildren + per-child events; maps to NormalisedWeekPlanItem', async () => {
+    const http = new FakeHttp().enqueue(
+      // 1. Auth — session loginId, ignored
+      {
+        status: 200,
+        body: JSON.stringify({
+          loginId: 9999,
+          loginTypeId: 10,
+          child: 'u1234567',
+          childName: 'Lucas Bruun Bech-Larsen',
+          schoolName: 'Vestergårdsskolen',
+          schoolId: 'D12345',
+        }),
+      },
+      // 2. GetChildren — per-child Ids keyed by Login (the userId token)
+      {
+        status: 200,
+        body: JSON.stringify({
+          Children: [
+            { Id: 3113339, Login: 'u1234567', Name: 'Lucas Bruun Bech-Larsen' },
+            { Id: 3053244, Login: 'u9876543', Name: 'Oliver Bruun Bech-Larsen' },
+          ],
+        }),
+      },
+      // 3. Lektier for u1234567
+      {
+        status: 200,
+        body: JSON.stringify([
+          {
+            Id: 15529081,
+            StartTime: '2026/05/13 08:00',
+            StartTimeISO: '2026-05-13T08:00:00.0000000',
+            CoursesDisplay: 'Matematik',
+            ActivitiesDisplay: '1A',
+            Title: ' ',
+            ChapterTitle: null,
+            Description: 'Aflevering af matematikh&aelig;fte med lektier.',
+          },
+        ]),
+      },
+      // 4. Lektier for u9876543 — empty
+      { status: 200, body: '[]' },
+    );
+    const client = new EasyIqLektierClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getLektier(
+      ctx({ childIds: [1234567, 9876543], childUserIds: ['u1234567', 'u9876543'] }),
+    );
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0]).toMatchObject({
+      childName: 'Lucas Bruun Bech-Larsen',
+      date: '2026-05-13T08:00:00.0000000',
+      subject: 'Matematik / 1A',
+      // Description's `&aelig;` decoded.
+      content: expect.stringContaining('matematikhæfte'),
+      kind: 'lektier',
+    });
+    // Title is whitespace-only ⇒ skipped (not set).
+    expect(plan.items[0]?.title).toBeUndefined();
+    expect(plan.warnings).toBeUndefined();
+  });
+
+  test('queries `/Aula/GetChildren` between auth and the per-child fetch', async () => {
+    const http = new FakeHttp().enqueue(
+      { status: 200, body: JSON.stringify({ loginId: 'session-id' }) },
+      { status: 200, body: JSON.stringify({ Children: [{ Id: 1, Login: 'u1' }] }) },
+      { status: 200, body: '[]' },
+    );
+    const client = new EasyIqLektierClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    await client.getLektier(ctx({ childIds: [1], childUserIds: ['u1'] }));
+    expect(http.requested[0]?.url).toContain('/Aula/AuthenticateAulaUser');
+    expect(http.requested[1]?.url).toContain('/Aula/GetChildren');
+    expect(http.requested[2]?.url).toContain('/AulaHuskeliste/GetWeekplanEvents');
+    // Per-child loginId from GetChildren feeds the events query as `loginId=1`.
+    expect(http.requested[2]?.url).toContain('loginId=1');
+    // activityFilter is sent as the literal string `null`.
+    expect(http.requested[2]?.url).toContain('activityFilter=null');
+  });
+
+  test('child missing from GetChildren response surfaces as a warning', async () => {
+    const http = new FakeHttp().enqueue(
+      { status: 200, body: JSON.stringify({ loginId: 'session-id' }) },
+      // GetChildren returns only u1; we ask for u1 + u2.
+      { status: 200, body: JSON.stringify({ Children: [{ Id: 1, Login: 'u1', Name: 'A' }] }) },
+      { status: 200, body: JSON.stringify([{ StartTime: '2026/05/04', CoursesDisplay: 'Dansk' }]) },
+    );
+    const client = new EasyIqLektierClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getLektier(ctx({ childIds: [1, 2], childUserIds: ['u1', 'u2'] }));
+    expect(plan.items).toHaveLength(1);
+    expect(plan.warnings).toBeDefined();
+    expect(plan.warnings?.[0]).toContain('child 2');
+    expect(plan.warnings?.[0]).toContain('GetChildren');
+  });
+
+  test('per-child Lektier fetch error surfaces as warning; other children still succeed', async () => {
+    const http = new FakeHttp().enqueue(
+      { status: 200, body: JSON.stringify({ loginId: 'session-id' }) },
+      {
+        status: 200,
+        body: JSON.stringify({
+          Children: [
+            { Id: 1, Login: 'u1', Name: 'A' },
+            { Id: 2, Login: 'u2', Name: 'B' },
+          ],
+        }),
+      },
+      // u1: 500
+      { status: 500, body: 'oops' },
+      // u2: ok
+      { status: 200, body: JSON.stringify([{ StartTime: '2026/05/04', CoursesDisplay: 'Dansk' }]) },
+    );
+    const client = new EasyIqLektierClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getLektier(ctx({ childIds: [1, 2], childUserIds: ['u1', 'u2'] }));
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0]?.childName).toBe('B');
+    expect(plan.warnings?.[0]).toContain('child 1');
+  });
+
+  test('passes the Lektier-specific headers (referer, x-child, x-childfilter)', async () => {
+    const http = new FakeHttp().enqueue(
+      { status: 200, body: JSON.stringify({ loginId: 'session-id' }) },
+      { status: 200, body: JSON.stringify({ Children: [{ Id: 99, Login: 'abcd1234' }] }) },
+      { status: 200, body: '[]' },
+    );
+    const client = new EasyIqLektierClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    await client.getLektier(
+      ctx({
+        childIds: [42],
+        childUserIds: ['abcd1234'],
+        institutionCodes: ['G42', 'G99'],
+        guardianId: 'fili3436',
+      }),
+    );
+    const auth = http.requested[0];
+    // Lektier referer = /LektierWidget (NOT /UgeplanWidget).
+    expect(auth?.headers?.['referer']).toBe('https://skoleportal.easyiqcloud.dk/LektierWidget');
+    // x-child = the child being acted on; x-childfilter = csv of all kids.
+    expect(auth?.headers?.['x-child']).toBe('abcd1234');
+    expect(auth?.headers?.['x-childfilter']).toBe('abcd1234');
+    expect(auth?.headers?.['x-institutionfilter']).toBe('G42,G99');
+    // x-login is the Aula guardianId, not the MitID username — confirmed
+    // against a captured browser request (the real wire format).
+    expect(auth?.headers?.['x-login']).toBe('fili3436');
+    expect(auth?.headers?.['authorization']).toBe('Bearer TKN-1');
   });
 });
 

@@ -80,6 +80,7 @@ describe('buildDiscoverManifest', () => {
     expect(Object.keys(m.capabilities).sort()).toEqual([
       'calendar',
       'huskelisten',
+      'lektier',
       'messages',
       'notifications',
       'opgaver',
@@ -114,18 +115,26 @@ describe('buildDiscoverManifest', () => {
     expect(m.capabilities.ugeplan?.tools[0]).toBe('aula.ugeplan.easyiq_skoleportal');
   });
 
-  test('all five known widgets light up their respective capabilities', async () => {
+  test('all known widgets light up their respective capabilities', async () => {
     const m = await buildDiscoverManifest(
-      fakeContext({ widgets: ['0001', '0029', '0030', '0062', '0128'] }),
+      fakeContext({ widgets: ['0001', '0029', '0030', '0062', '0128', '0142'] }),
     );
-    expect(m.detectedWidgets).toEqual(['0001', '0029', '0030', '0062', '0128']);
+    expect(m.detectedWidgets).toEqual(['0001', '0029', '0030', '0062', '0128', '0142']);
     // ugeplan has both EasyIQ and SkolePortal detected
     expect(m.capabilities.ugeplan?.tools).toContain('aula.ugeplan.easyiq');
     expect(m.capabilities.ugeplan?.tools).toContain('aula.ugeplan.easyiq_skoleportal');
+    // lektier surfaces only when 0142 is detected.
+    expect(m.capabilities.lektier?.tools).toEqual(['aula.lektier.easyiq']);
+    expect(m.capabilities.lektier?.notes).toBeUndefined();
     // No 'not detected' notes for these capabilities
     expect(m.capabilities.opgaver?.notes).toBeUndefined();
     expect(m.capabilities.ugebrev?.notes).toBeUndefined();
     expect(m.capabilities.huskelisten?.notes).toBeUndefined();
+  });
+
+  test('lektier carries a "not detected" note when 0142 absent', async () => {
+    const m = await buildDiscoverManifest(fakeContext({ widgets: [] }));
+    expect(m.capabilities.lektier?.notes).toContain('0142');
   });
 
   test('rawRequestEnabled reflects AULA_MCP_RAW env', async () => {

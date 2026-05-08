@@ -297,6 +297,22 @@ export function registerTools(server: McpServer, context: AulaContext): void {
   );
 
   server.registerTool(
+    'aula.lektier.easyiq',
+    {
+      title: 'EasyIQ Lektier (homework)',
+      description:
+        'Homework items from EasyIQ Lektier (widget 0142) — same vendor as ' +
+        '`aula.ugeplan.easyiq_skoleportal` but a separate "Lektier" product. ' +
+        'Use when discover.detectedWidgets contains "0142".',
+      inputSchema: integrationContextShape,
+    },
+    async (args) => {
+      const lektier = await context.getEasyIqLektier();
+      return jsonContent(await lektier.getLektier(await buildIntegrationCtx(args)));
+    },
+  );
+
+  server.registerTool(
     'aula.opgaver.minuddannelse',
     {
       title: 'Min Uddannelse opgaveliste',

@@ -31,6 +31,8 @@ export {
 export {
   decodeHtmlEntities,
   EasyIqClient,
+  EasyIqLektierClient,
+  type EasyIqLektierOptions,
   type EasyIqOptions,
   EasyIqSkoleportalClient,
   type EasyIqSkoleportalOptions,

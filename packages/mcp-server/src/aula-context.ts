@@ -23,6 +23,7 @@ import {
 import {
   AulaClient,
   EasyIqClient,
+  EasyIqLektierClient,
   EasyIqSkoleportalClient,
   MeebookClient,
   MinUddannelseClient,
@@ -128,6 +129,13 @@ export class AulaContext {
 
   async getEasyIqSkoleportal(): Promise<EasyIqSkoleportalClient> {
     return new EasyIqSkoleportalClient({
+      http: this.http,
+      widgets: await this.getWidgetManager(),
+    });
+  }
+
+  async getEasyIqLektier(): Promise<EasyIqLektierClient> {
+    return new EasyIqLektierClient({
       http: this.http,
       widgets: await this.getWidgetManager(),
     });
