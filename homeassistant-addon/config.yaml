@@ -20,7 +20,9 @@ ports:
 ports_description:
   7878/tcp: aula-mcp HTTP (/mcp) + SSE (/sse)
 map:
-  - config:rw
+  # `homeassistant_config:rw` is the modern spelling; the older `config:rw`
+  # still works but emits a deprecation warning in recent Supervisor builds.
+  - homeassistant_config:rw
 options:
   aula_mcp_key: ""
   log: false

@@ -24,12 +24,16 @@ export AULA_MCP_DIR="/config/aula-mcp"
 mkdir -p "$AULA_MCP_DIR"
 
 # The MCP server refuses non-loopback binds by default; HA's whole point is
-# the LAN serving everyone in the household, so default to remote-allowed.
-# Users can disable via the addon option if they front the addon with
-# something like NPM/Ingress.
-export AULA_MCP_HOST="0.0.0.0"
+# serving the LAN, so the default `allow_remote: true` opens it up. Setting
+# `allow_remote: false` keeps the MCP traffic loopback-only inside the
+# container — useful if you front it with HA Ingress / a reverse proxy, but
+# in that case the LAN can't reach :7878 directly so HA's MCP client
+# integration won't either. Don't flip unless you know what you're doing.
 if [ "$ALLOW_REMOTE" = "true" ]; then
+  export AULA_MCP_HOST="0.0.0.0"
   export AULA_MCP_ALLOW_REMOTE=1
+else
+  export AULA_MCP_HOST="127.0.0.1"
 fi
 
 if [ "$LOG" = "true" ]; then
