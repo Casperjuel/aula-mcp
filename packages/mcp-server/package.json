@@ -19,6 +19,6 @@
     "@aula-mcp/aula-client": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "hono": "^4.12.18",
-    "zod": "^4.4.2"
+    "zod": "^4.4.3"
   }
 }
