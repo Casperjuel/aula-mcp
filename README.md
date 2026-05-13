@@ -39,6 +39,7 @@ TypeScript + Bun + Hono. Bygget på skuldrene af [`scaarup/aula`](https://github
 - [Hvad serveren rør ved](#hvad-serveren-rør-ved)
 - [Kom i gang](#kom-i-gang)
 - [Forbind til Claude Code (eller claude.ai)](#forbind-til-claude-code-eller-claudeai)
+- [Home Assistant (Assist + Voice)](./docs/home-assistant.md)
 - [Self-hosting](#self-hosting)
 - [Hvad er der i manifestet](#hvad-er-der-i-manifestet)
 - [CLI-kommandoer](#cli-kommandoer)
@@ -221,18 +222,15 @@ aula.dithjem.dk {
 
 ### Mulighed 3: Home Assistant add-on
 
-Den nemmeste vej for HA-brugere. `aula-mcp` kører som en del af din HA-installation og er tilgængelig fra HA's Voice/Assist + alle dine HA-automatiseringer. Hvis du har **Nabu Casa**, åbner det også for sikker fjernadgang via deres tunnel.
+Den nemmeste vej for HA-brugere. Add-on'en pakker `aula-mcp` ind så den kører som en del af din HA-installation og er tilgængelig fra HA's Voice/Assist + alle dine HA-automatiseringer. Hvis du har **Nabu Casa**, åbner det også for sikker fjernadgang via deres tunnel.
 
-[![Open your Home Assistant instance and add the aula-mcp add-on repository.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/Casperjuel/aula-mcp)
+**👉 Fuld guide: [`docs/home-assistant.md`](./docs/home-assistant.md)** — installation, MitID-login, MCP-integration, valg af LLM, og stemmeopsætning.
 
-1. Klik badget ovenfor (eller manuelt: Settings → Add-ons → ⋮ → Repositories → indsæt `https://github.com/Casperjuel/aula-mcp`).
-2. Installer `aula-mcp` add-on'en fra det repository der dukker op.
-3. Kopier dine tokens fra en workstation ind i `/config/aula-mcp/` (kør `pnpm login` + `pnpm aula tokens export` på workstation, og SCP/Samba til HA).
-4. Settings → Devices & Services → Add Integration → **Model Context Protocol** → `http://homeassistant.local:7878/sse`.
+Korte stik:
 
-Full walkthrough med detaljerede skridt: [`homeassistant-addon/README.md`](./homeassistant-addon/README.md).
-
-`aula-mcp` taler både den nye Streamable HTTP-protokol (`/mcp`) og den ældre SSE-dialekt (`/sse`) — HA's officielle [`mcp` (client) integration](https://www.home-assistant.io/integrations/mcp/) bruger SSE, så du peger den bare på `http://<ha-host>:7878/sse`. Så har Assist + dit valgte LLM (Anthropic / OpenAI / Ollama) adgang til alle `aula.*` tools — inklusive via voice.
+- Et-klik install: [![Open your Home Assistant instance and add the aula-mcp add-on repository.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/Casperjuel/aula-mcp)
+- `aula-mcp` taler både Streamable HTTP (`/mcp`) og den ældre SSE-dialekt (`/sse`) — HA's officielle [`mcp` (client) integration](https://www.home-assistant.io/integrations/mcp/) bruger SSE.
+- Login sker inde i add-on'ens egen sidebar-UI (MitID-QR + identitetsvalg).
 
 ### Mulighed 4: VPS i Tyskland (Hetzner, Coolify)
 
