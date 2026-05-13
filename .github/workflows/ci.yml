@@ -15,7 +15,7 @@ jobs:
       # pnpm version is read from package.json's "packageManager" field
       # (pnpm@10.12.1). Don't set `version` here — the action errors with
       # ERR_PNPM_BAD_PM_VERSION when both are specified.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       - uses: actions/setup-node@v4
         with:
