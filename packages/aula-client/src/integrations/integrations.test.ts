@@ -439,8 +439,8 @@ describe('EasyIqLektierClient.getLektier', () => {
           loginId: 9999,
           loginTypeId: 10,
           child: 'u1234567',
-          childName: 'Lucas Bruun Bech-Larsen',
-          schoolName: 'Vestergårdsskolen',
+          childName: 'Emilie Færgemand',
+          schoolName: 'Demo Skole',
           schoolId: 'D12345',
         }),
       },
@@ -449,8 +449,8 @@ describe('EasyIqLektierClient.getLektier', () => {
         status: 200,
         body: JSON.stringify({
           Children: [
-            { Id: 3113339, Login: 'u1234567', Name: 'Lucas Bruun Bech-Larsen' },
-            { Id: 3053244, Login: 'u9876543', Name: 'Oliver Bruun Bech-Larsen' },
+            { Id: 3113339, Login: 'u1234567', Name: 'Emilie Færgemand' },
+            { Id: 3053244, Login: 'u9876543', Name: 'Rasmus Færgemand' },
           ],
         }),
       },
@@ -479,7 +479,7 @@ describe('EasyIqLektierClient.getLektier', () => {
     );
     expect(plan.items).toHaveLength(1);
     expect(plan.items[0]).toMatchObject({
-      childName: 'Lucas Bruun Bech-Larsen',
+      childName: 'Emilie Færgemand',
       date: '2026-05-13T08:00:00.0000000',
       subject: 'Matematik / 1A',
       // Description's `&aelig;` decoded.
@@ -559,7 +559,7 @@ describe('EasyIqLektierClient.getLektier', () => {
         childIds: [42],
         childUserIds: ['abcd1234'],
         institutionCodes: ['G42', 'G99'],
-        guardianId: 'fili3436',
+        guardianId: 'dema9876',
       }),
     );
     const auth = http.requested[0];
@@ -571,7 +571,7 @@ describe('EasyIqLektierClient.getLektier', () => {
     expect(auth?.headers?.['x-institutionfilter']).toBe('G42,G99');
     // x-login is the Aula guardianId, not the MitID username — confirmed
     // against a captured browser request (the real wire format).
-    expect(auth?.headers?.['x-login']).toBe('fili3436');
+    expect(auth?.headers?.['x-login']).toBe('dema9876');
     expect(auth?.headers?.['authorization']).toBe('Bearer TKN-1');
   });
 });
