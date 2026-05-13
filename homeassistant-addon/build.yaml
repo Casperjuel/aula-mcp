@@ -1,0 +1,13 @@
+# HA Supervisor build config for the aula-mcp add-on.
+#
+# `build_from` overrides the default base image per architecture. We use
+# the official Bun image for both supported arches (amd64, aarch64) since
+# Bun publishes pre-built binaries for both.
+#
+# To pin the add-on to a specific tag instead of `main`, override
+# AULA_MCP_REF here (e.g. `AULA_MCP_REF: "v1.0.1"`).
+build_from:
+  amd64: oven/bun:1.3-debian
+  aarch64: oven/bun:1.3-debian
+args:
+  AULA_MCP_REF: main

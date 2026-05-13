@@ -1,0 +1,31 @@
+name: aula-mcp
+version: "1.0.1"
+slug: aula_mcp
+description: >-
+  MCP server for the Danish school platform Aula. Exposes aula.discover,
+  ugeplan, lektier, messages and more as MCP tools that HA's Assist
+  conversation agent (Anthropic / OpenAI / Ollama / etc.) can call —
+  including via Voice. Point HA's official `mcp` (client) integration
+  at http://homeassistant.local:7878/sse after install.
+url: "https://github.com/Casperjuel/aula-mcp"
+arch:
+  - amd64
+  - aarch64
+init: false
+boot: auto
+startup: services
+host_network: false
+ports:
+  7878/tcp: 7878
+ports_description:
+  7878/tcp: aula-mcp HTTP (/mcp) + SSE (/sse)
+map:
+  - config:rw
+options:
+  aula_mcp_key: ""
+  log: false
+  allow_remote: true
+schema:
+  aula_mcp_key: "password?"
+  log: bool
+  allow_remote: bool
