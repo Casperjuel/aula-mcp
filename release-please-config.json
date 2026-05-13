@@ -3,6 +3,8 @@
   "release-type": "node",
   "include-component-in-tag": false,
   "separate-pull-requests": false,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": false,
   "plugins": [
     {
       "type": "linked-versions",
