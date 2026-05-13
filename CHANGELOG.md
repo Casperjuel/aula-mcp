@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/Casperjuel/aula-mcp/compare/v1.0.0...v1.0.1) (2026-05-13)
+
+
+### Bug Fixes
+
+* **release:** wire PAT for release-please + workflow_dispatch on release ([#16](https://github.com/Casperjuel/aula-mcp/issues/16)) ([a3021a7](https://github.com/Casperjuel/aula-mcp/commit/a3021a79c05621f96482f9a24025bee33d06322b))
+
 ## 1.0.0 (2026-05-13)
 
 
