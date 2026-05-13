@@ -1,0 +1,29 @@
+name: Release Please
+
+# Watches main, accumulates Conventional Commits into a "Release PR" that
+# bumps versions + writes CHANGELOG.md. Merging the Release PR tags the
+# release and creates a GitHub Release with the changelog as the body —
+# which then triggers `release.yml` to compile + attach the binaries.
+#
+# Bump rules (Conventional Commits):
+#   fix:                                    → patch
+#   feat:                                   → minor
+#   feat!: / fix!: / BREAKING CHANGE footer → major
+#   chore:/docs:/refactor:/ci:/test:        → no bump (listed under "Misc")
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

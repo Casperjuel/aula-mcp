@@ -1,0 +1,26 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "include-component-in-tag": false,
+  "separate-pull-requests": false,
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "aula-mcp",
+      "components": [
+        "aula-mcp",
+        "@aula-mcp/cli",
+        "@aula-mcp/aula-auth",
+        "@aula-mcp/aula-client",
+        "@aula-mcp/mcp-server"
+      ]
+    }
+  ],
+  "packages": {
+    ".": { "package-name": "aula-mcp" },
+    "apps/cli": { "package-name": "@aula-mcp/cli" },
+    "packages/aula-auth": { "package-name": "@aula-mcp/aula-auth" },
+    "packages/aula-client": { "package-name": "@aula-mcp/aula-client" },
+    "packages/mcp-server": { "package-name": "@aula-mcp/mcp-server" }
+  }
+}

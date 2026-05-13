@@ -86,12 +86,16 @@ jobs:
       - name: Inspect artifacts
         run: ls -la artifacts/
 
+      # release-please owns the release body (auto-generated changelog).
+      # We append the install snippet as a footer below it so both the
+      # changelog and install instructions appear in the GitHub Release UI.
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
-          generate_release_notes: true
           fail_on_unmatched_files: true
+          append_body: true
           body: |
+            ---
             ## Install
 
             Download the binary for your platform, mark executable, and put it on your PATH:
