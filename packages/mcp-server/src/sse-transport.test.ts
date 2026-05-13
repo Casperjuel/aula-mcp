@@ -18,6 +18,15 @@ import { HonoSseTransport } from './sse-transport.ts';
 interface SseSession {
   transport: HonoSseTransport;
   mcp: McpServer;
+  errors: Error[];
+}
+
+interface TestApp {
+  app: Hono;
+  /** Live session map mirroring the wiring in server.ts. Tests use this to
+   *  inspect the transport state directly (e.g. simulate a torn-down stream
+   *  whose map entry hasn't been swept yet). */
+  sessions: Map<string, SseSession>;
 }
 
 /**
@@ -25,18 +34,22 @@ interface SseSession {
  * the wiring in `server.ts` but with a single in-memory tool so we never
  * touch Aula/AulaContext.
  */
-function buildTestApp(): Hono {
+function buildTestApp(): TestApp {
   const sessions = new Map<string, SseSession>();
   const app = new Hono();
 
   app.get('/sse', (c) =>
     streamSSE(c, async (stream) => {
       const sessionId = crypto.randomUUID();
+      const errors: Error[] = [];
       const transport = new HonoSseTransport({
         sessionId,
         messageEndpoint: '/messages',
         stream,
       });
+      transport.onerror = (err) => {
+        errors.push(err);
+      };
       const mcp = new McpServer(
         { name: 'aula-mcp-test', version: '0.0.0' },
         { capabilities: { tools: {} } },
@@ -50,7 +63,7 @@ function buildTestApp(): Hono {
         },
         async ({ msg }) => ({ content: [{ type: 'text', text: msg }] }),
       );
-      sessions.set(sessionId, { transport, mcp });
+      sessions.set(sessionId, { transport, mcp, errors });
 
       const closed = new Promise<void>((resolve) => {
         stream.onAbort(async () => {
@@ -75,12 +88,12 @@ function buildTestApp(): Hono {
     if (!sessionId) return c.json({ error: 'missing sessionId' }, 400);
     const session = sessions.get(sessionId);
     if (!session) return c.json({ error: 'unknown sessionId' }, 404);
-    const body = (await c.req.json()) as JSONRPCMessage;
+    const body = (await c.req.json()) as unknown;
     session.transport.receive(body);
     return c.body(null, 202);
   });
 
-  return app;
+  return { app, sessions };
 }
 
 interface SseEvent {
@@ -194,7 +207,7 @@ async function sendMessage(
 
 describe('HonoSseTransport', () => {
   test('opens SSE, announces endpoint, completes initialize handshake', async () => {
-    const app = buildTestApp();
+    const { app } = buildTestApp();
     const { reader, sessionId } = await openSse(app);
 
     const initReq: JSONRPCMessage = {
@@ -223,7 +236,7 @@ describe('HonoSseTransport', () => {
   });
 
   test('tools/list returns the echo tool after initialize', async () => {
-    const app = buildTestApp();
+    const { app } = buildTestApp();
     const { reader, sessionId } = await openSse(app);
 
     await sendMessage(app, sessionId, {
@@ -264,7 +277,7 @@ describe('HonoSseTransport', () => {
   });
 
   test('tools/call round-trips through SSE', async () => {
-    const app = buildTestApp();
+    const { app } = buildTestApp();
     const { reader, sessionId } = await openSse(app);
 
     await sendMessage(app, sessionId, {
@@ -303,7 +316,7 @@ describe('HonoSseTransport', () => {
   });
 
   test('POST to /messages with unknown sessionId returns 404', async () => {
-    const app = buildTestApp();
+    const { app } = buildTestApp();
     const res = await sendMessage(app, '00000000-0000-0000-0000-000000000000', {
       jsonrpc: '2.0',
       id: 1,
@@ -314,7 +327,7 @@ describe('HonoSseTransport', () => {
   });
 
   test('POST to /messages without sessionId returns 400', async () => {
-    const app = buildTestApp();
+    const { app } = buildTestApp();
     const res = await app.fetch(
       new Request('http://test/messages', {
         method: 'POST',
@@ -326,7 +339,7 @@ describe('HonoSseTransport', () => {
   });
 
   test('concurrent SSE sessions get distinct ids and isolated tool calls', async () => {
-    const app = buildTestApp();
+    const { app } = buildTestApp();
     const a = await openSse(app);
     const b = await openSse(app);
     expect(a.sessionId).not.toBe(b.sessionId);
@@ -373,5 +386,80 @@ describe('HonoSseTransport', () => {
 
     await a.reader.close();
     await b.reader.close();
+  });
+
+  test('POST to /messages after stream torn down but entry still present is a no-op (onerror, no onmessage)', async () => {
+    // Pins the behaviour at the race between `stream.onAbort` clearing the
+    // session map and a late POST landing on /messages. The route resolves
+    // the entry, calls `transport.receive()`, and the transport short-circuits
+    // because `this.closed === true` — surfacing the late delivery as an
+    // `onerror` event rather than forwarding it to the McpServer (which has
+    // already been torn down).
+    const { app, sessions } = buildTestApp();
+    const { reader, sessionId } = await openSse(app);
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('session missing immediately after open');
+
+    // Replace onmessage with a spy so we can prove it is NOT invoked.
+    let onmessageCalls = 0;
+    const realOnmessage = session.transport.onmessage;
+    session.transport.onmessage = (msg, extra) => {
+      onmessageCalls += 1;
+      realOnmessage?.(msg, extra);
+    };
+
+    // Tear down the transport WITHOUT removing it from the session map,
+    // simulating the window between `stream.aborted` flipping true and
+    // the abort handler reaching its `sessions.delete()` call.
+    await session.transport.close();
+    expect(sessions.has(sessionId)).toBe(true);
+
+    const errorsBefore = session.errors.length;
+    const res = await sendMessage(app, sessionId, {
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/list',
+    } as JSONRPCMessage);
+    // The route handler treats a known sessionId as 202 Accepted regardless
+    // of the transport's internal state — the actual outcome is reflected
+    // only in the transport's onerror channel.
+    expect(res.status).toBe(202);
+    expect(onmessageCalls).toBe(0);
+    expect(session.errors.length).toBeGreaterThan(errorsBefore);
+    expect(session.errors[session.errors.length - 1]?.message).toMatch(/closed/i);
+
+    await reader.close();
+  });
+
+  test('POST to /messages with malformed JSON-RPC surfaces onerror, not onmessage', async () => {
+    // The transport mirrors the stock SSEServerTransport: inbound payloads
+    // are validated against JSONRPCMessageSchema before being passed to
+    // onmessage. A body missing the `jsonrpc` field must round-trip as an
+    // onerror event so the McpServer never sees a half-typed value.
+    const { app, sessions } = buildTestApp();
+    const { reader, sessionId } = await openSse(app);
+    const session = sessions.get(sessionId);
+    if (!session) throw new Error('session missing immediately after open');
+
+    let onmessageCalls = 0;
+    const realOnmessage = session.transport.onmessage;
+    session.transport.onmessage = (msg, extra) => {
+      onmessageCalls += 1;
+      realOnmessage?.(msg, extra);
+    };
+
+    const errorsBefore = session.errors.length;
+    const res = await app.fetch(
+      new Request(`http://test/messages?sessionId=${encodeURIComponent(sessionId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ foo: 'bar' }),
+      }),
+    );
+    expect(res.status).toBe(202);
+    expect(onmessageCalls).toBe(0);
+    expect(session.errors.length).toBeGreaterThan(errorsBefore);
+
+    await reader.close();
   });
 });

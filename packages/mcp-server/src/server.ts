@@ -25,11 +25,14 @@
  *   AULA_MCP_ALLOW_REMOTE=1   — allow binding to non-loopback addresses (refuses
  *                               by default; the server is single-user and any
  *                               peer with /mcp access can drive your tokens)
+ *   AULA_MCP_SSE_MAX_SESSIONS — max concurrent legacy /sse sessions before new
+ *                               GET /sse requests get 503'd (default 16)
+ *   AULA_MCP_SSE_IDLE_MS      — evict /sse sessions idle for >this many ms
+ *                               (default 300_000 = 5 min)
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { createMcpApp, type McpApp } from './setup.ts';
@@ -71,45 +74,100 @@ app.delete('/mcp', (c) => handleMcp(c.req.raw));
 // GET /sse opens a fresh session: own McpServer instance, own AulaContext,
 // own sessionId. POSTs to /messages?sessionId=… get routed back to the
 // matching session's transport.
+//
+// The session map is capped + idle-evicted. The MCP server defaults to
+// loopback, but the HA addon exposes it on the LAN, so an unbounded map is
+// a footgun — a crashed/looping client could pile up sessions indefinitely.
 interface SseSession {
   transport: HonoSseTransport;
   app: McpApp;
+  lastActivityAt: number;
 }
+const SSE_MAX_SESSIONS = Math.max(1, Number(process.env.AULA_MCP_SSE_MAX_SESSIONS ?? 16));
+const SSE_IDLE_MS = Math.max(1_000, Number(process.env.AULA_MCP_SSE_IDLE_MS ?? 300_000));
+const SSE_SWEEP_INTERVAL_MS = Math.max(1_000, Math.floor(SSE_IDLE_MS / 4));
 const sseSessions = new Map<string, SseSession>();
 
-app.get('/sse', (c) =>
-  streamSSE(c, async (stream) => {
+async function closeSseSession(sessionId: string, reason: string): Promise<void> {
+  const session = sseSessions.get(sessionId);
+  if (!session) return;
+  sseSessions.delete(sessionId);
+  try {
+    await session.transport.close();
+  } catch (err) {
+    logger.error('aula-mcp.sse.transport_close_error', {
+      sessionId,
+      reason,
+      error: (err as Error).message,
+    });
+  }
+  try {
+    await session.app.mcp.close();
+  } catch (err) {
+    logger.error('aula-mcp.sse.mcp_close_error', {
+      sessionId,
+      reason,
+      error: (err as Error).message,
+    });
+  }
+}
+
+// Single sweeper, started once at boot. `unref()` so the interval doesn't
+// keep the process alive on its own — the shutdown handler clears it
+// explicitly anyway, but unref() is belt-and-braces in case of a bug.
+const sseSweeper: ReturnType<typeof setInterval> = setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, session] of sseSessions) {
+    if (now - session.lastActivityAt > SSE_IDLE_MS) {
+      logger.info('aula-mcp.sse.session_evicted_idle', {
+        sessionId,
+        idleMs: now - session.lastActivityAt,
+      });
+      void closeSseSession(sessionId, 'idle');
+    }
+  }
+}, SSE_SWEEP_INTERVAL_MS);
+sseSweeper.unref?.();
+
+app.get('/sse', (c) => {
+  if (sseSessions.size >= SSE_MAX_SESSIONS) {
+    logger.error('aula-mcp.sse.session_rejected_cap', {
+      active: sseSessions.size,
+      cap: SSE_MAX_SESSIONS,
+    });
+    return c.json(
+      {
+        error: 'sse session cap reached',
+        active: sseSessions.size,
+        cap: SSE_MAX_SESSIONS,
+      },
+      503,
+    );
+  }
+  return streamSSE(c, async (stream) => {
     const sessionId = crypto.randomUUID();
     const sseTransport = new HonoSseTransport({
       sessionId,
       messageEndpoint: '/messages',
       stream,
+      onActivity: () => {
+        const s = sseSessions.get(sessionId);
+        if (s) s.lastActivityAt = Date.now();
+      },
     });
     // McpServer.connect() binds a single transport, so we instantiate a
     // fresh server per SSE connection. AulaContext is cheap to construct
     // — it just lazily wraps the shared token store on first call.
     const sessionApp = createMcpApp({ logger });
-    sseSessions.set(sessionId, { transport: sseTransport, app: sessionApp });
+    sseSessions.set(sessionId, {
+      transport: sseTransport,
+      app: sessionApp,
+      lastActivityAt: Date.now(),
+    });
 
     const closed = new Promise<void>((resolve) => {
       stream.onAbort(async () => {
-        sseSessions.delete(sessionId);
-        try {
-          await sseTransport.close();
-        } catch (err) {
-          logger.error('aula-mcp.sse.transport_close_error', {
-            sessionId,
-            error: (err as Error).message,
-          });
-        }
-        try {
-          await sessionApp.mcp.close();
-        } catch (err) {
-          logger.error('aula-mcp.sse.mcp_close_error', {
-            sessionId,
-            error: (err as Error).message,
-          });
-        }
+        await closeSseSession(sessionId, 'abort');
         resolve();
       });
     });
@@ -124,27 +182,28 @@ app.get('/sse', (c) =>
         sessionId,
         error: (err as Error).message,
       });
-      sseSessions.delete(sessionId);
+      await closeSseSession(sessionId, 'connect_failed');
       return;
     }
 
     // Hold the SSE stream open until the client disconnects.
     await closed;
     logger.info('aula-mcp.sse.session_closed', { sessionId });
-  }),
-);
+  });
+});
 
 app.post('/messages', async (c) => {
   const sessionId = c.req.query('sessionId');
   if (!sessionId) return c.json({ error: 'missing sessionId query parameter' }, 400);
   const session = sseSessions.get(sessionId);
   if (!session) return c.json({ error: 'unknown sessionId' }, 404);
-  let body: JSONRPCMessage;
+  let body: unknown;
   try {
-    body = (await c.req.json()) as JSONRPCMessage;
+    body = await c.req.json();
   } catch {
     return c.json({ error: 'invalid JSON body' }, 400);
   }
+  session.lastActivityAt = Date.now();
   session.transport.receive(body);
   // The actual JSON-RPC response is delivered over the SSE channel; the POST
   // is just an inbound carrier, so 202 Accepted is the spec-correct ack.
@@ -171,7 +230,14 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   process.stdout.write(`\n${signal} received — shutting down gracefully…\n`);
+  // Stop the idle sweeper first so it can't fire mid-shutdown and race with
+  // session cleanup; this also lets the event loop drain if anything still
+  // refs the interval.
+  clearInterval(sseSweeper);
   try {
+    await Promise.all(
+      Array.from(sseSessions.keys()).map((sid) => closeSseSession(sid, 'shutdown')),
+    );
     await server.stop();
     await mcp.close();
   } catch (err) {

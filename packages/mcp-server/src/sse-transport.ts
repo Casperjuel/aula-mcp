@@ -23,7 +23,11 @@ import type {
   Transport,
   TransportSendOptions,
 } from '@modelcontextprotocol/sdk/shared/transport.js';
-import type { JSONRPCMessage, MessageExtraInfo } from '@modelcontextprotocol/sdk/types.js';
+import {
+  type JSONRPCMessage,
+  JSONRPCMessageSchema,
+  type MessageExtraInfo,
+} from '@modelcontextprotocol/sdk/types.js';
 import type { SSEStreamingApi } from 'hono/streaming';
 
 export interface HonoSseTransportOptions {
@@ -31,6 +35,11 @@ export interface HonoSseTransportOptions {
   /** Path the client should POST follow-up messages to. */
   messageEndpoint: string;
   stream: SSEStreamingApi;
+  /**
+   * Invoked whenever the transport sees inbound or outbound traffic. Used by
+   * the host to update a `lastActivityAt` field for idle-session eviction.
+   */
+  onActivity?: () => void;
 }
 
 export class HonoSseTransport implements Transport {
@@ -42,6 +51,7 @@ export class HonoSseTransport implements Transport {
 
   private readonly stream: SSEStreamingApi;
   private readonly messageEndpoint: string;
+  private readonly onActivity: (() => void) | undefined;
   private closed = false;
   private started = false;
 
@@ -49,6 +59,7 @@ export class HonoSseTransport implements Transport {
     this.sessionId = opts.sessionId;
     this.stream = opts.stream;
     this.messageEndpoint = opts.messageEndpoint;
+    this.onActivity = opts.onActivity;
   }
 
   async start(): Promise<void> {
@@ -65,6 +76,7 @@ export class HonoSseTransport implements Transport {
   async send(message: JSONRPCMessage, _options?: TransportSendOptions): Promise<void> {
     if (this.closed || this.stream.aborted || this.stream.closed) return;
     await this.stream.writeSSE({ event: 'message', data: JSON.stringify(message) });
+    this.onActivity?.();
   }
 
   async close(): Promise<void> {
@@ -83,8 +95,14 @@ export class HonoSseTransport implements Transport {
   /**
    * Feed a JSON-RPC message that arrived via POST /messages into the
    * transport's onmessage callback. Called by the route handler.
+   *
+   * Mirrors the stock `SSEServerTransport.handleMessage()` behaviour from
+   * the MCP SDK: the inbound payload is run through `JSONRPCMessageSchema`
+   * before it ever reaches `onmessage`, so a malformed body surfaces as an
+   * `onerror` event instead of being passed up the stack as a half-typed
+   * value the SDK will trip over.
    */
-  receive(message: JSONRPCMessage, extra?: MessageExtraInfo): void {
+  receive(message: unknown, extra?: MessageExtraInfo): void {
     if (this.closed) {
       this.onerror?.(new Error('Received message on closed SSE transport'));
       return;
@@ -98,6 +116,14 @@ export class HonoSseTransport implements Transport {
       this.onerror?.(new Error('Received message before onmessage handler installed'));
       return;
     }
-    this.onmessage(message, extra);
+    let parsed: JSONRPCMessage;
+    try {
+      parsed = JSONRPCMessageSchema.parse(message);
+    } catch (err) {
+      this.onerror?.(err as Error);
+      return;
+    }
+    this.onActivity?.();
+    this.onmessage(parsed, extra);
   }
 }
