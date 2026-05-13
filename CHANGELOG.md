@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0](https://github.com/Casperjuel/aula-mcp/compare/v1.0.1...v1.1.0) (2026-05-13)
+
+
+### Features
+
+* **ha-addon:** Home Assistant add-on packaging ([#19](https://github.com/Casperjuel/aula-mcp/issues/19)) ([2da9135](https://github.com/Casperjuel/aula-mcp/commit/2da91359b55f50584ceba35e8d5d9b12cd84c21f))
+* **ha-addon:** in-addon MitID login UI via HA Ingress ([#20](https://github.com/Casperjuel/aula-mcp/issues/20)) ([3899ab5](https://github.com/Casperjuel/aula-mcp/commit/3899ab561a50a0833a3085c2d073561f3c3702d8))
+* **mcp-server:** add legacy SSE transport for Home Assistant compatibility ([#18](https://github.com/Casperjuel/aula-mcp/issues/18)) ([e6af96d](https://github.com/Casperjuel/aula-mcp/commit/e6af96d181a73c4537bbd0c19b9842bacd3a4f1b))
+
+
+### Bug Fixes
+
+* **mcp-server:** cap + idle-evict SSE sessions, validate inbound JSON-RPC ([#21](https://github.com/Casperjuel/aula-mcp/issues/21)) ([6f7f003](https://github.com/Casperjuel/aula-mcp/commit/6f7f003041f7dbd3dbcf7c817d83ed653427584d))
+
 ## [1.0.1](https://github.com/Casperjuel/aula-mcp/compare/v1.0.0...v1.0.1) (2026-05-13)
 
 
