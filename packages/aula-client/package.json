@@ -1,6 +1,6 @@
 {
   "name": "@aula-mcp/aula-client",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Aula API client + integration plugins (EasyIQ, Meebook, Min Uddannelse, Systematic).",
   "license": "MIT",

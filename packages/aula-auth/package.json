@@ -1,6 +1,6 @@
 {
   "name": "@aula-mcp/aula-auth",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "MitID + SRP + OAuth/SAML auth flow for Aula. Pure HTTP, no headless browser.",
   "license": "MIT",

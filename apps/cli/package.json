@@ -1,6 +1,6 @@
 {
   "name": "@aula-mcp/cli",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Command-line entry point for aula-mcp: login, status, logout.",
   "license": "MIT",
