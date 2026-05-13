@@ -5,6 +5,10 @@
  *   POST /mcp             — MCP JSON-RPC requests (Streamable HTTP transport)
  *   GET  /mcp             — Streamable HTTP SSE channel
  *   DELETE /mcp           — session close
+ *   GET  /sse             — Legacy MCP SSE transport (Home Assistant's MCP
+ *                           client integration speaks this dialect)
+ *   POST /messages        — Client→server channel for the /sse session,
+ *                           selected by ?sessionId=… query param
  *   GET  /healthz         — liveness probe
  *
  * For stdio transport (e.g. spawn-by-agent-runtime use cases like Claude
@@ -25,8 +29,11 @@
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { Hono } from 'hono';
-import { createMcpApp } from './setup.ts';
+import { streamSSE } from 'hono/streaming';
+import { createMcpApp, type McpApp } from './setup.ts';
+import { HonoSseTransport } from './sse-transport.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
 const HOST = process.env.AULA_MCP_HOST ?? '127.0.0.1';
@@ -58,6 +65,91 @@ const handleMcp = async (request: Request): Promise<Response> => transport.handl
 app.post('/mcp', (c) => handleMcp(c.req.raw));
 app.get('/mcp', (c) => handleMcp(c.req.raw));
 app.delete('/mcp', (c) => handleMcp(c.req.raw));
+
+// Legacy MCP SSE transport — for clients that haven't moved to Streamable HTTP
+// yet, notably Home Assistant's official `mcp` (client) integration. Each
+// GET /sse opens a fresh session: own McpServer instance, own AulaContext,
+// own sessionId. POSTs to /messages?sessionId=… get routed back to the
+// matching session's transport.
+interface SseSession {
+  transport: HonoSseTransport;
+  app: McpApp;
+}
+const sseSessions = new Map<string, SseSession>();
+
+app.get('/sse', (c) =>
+  streamSSE(c, async (stream) => {
+    const sessionId = crypto.randomUUID();
+    const sseTransport = new HonoSseTransport({
+      sessionId,
+      messageEndpoint: '/messages',
+      stream,
+    });
+    // McpServer.connect() binds a single transport, so we instantiate a
+    // fresh server per SSE connection. AulaContext is cheap to construct
+    // — it just lazily wraps the shared token store on first call.
+    const sessionApp = createMcpApp({ logger });
+    sseSessions.set(sessionId, { transport: sseTransport, app: sessionApp });
+
+    const closed = new Promise<void>((resolve) => {
+      stream.onAbort(async () => {
+        sseSessions.delete(sessionId);
+        try {
+          await sseTransport.close();
+        } catch (err) {
+          logger.error('aula-mcp.sse.transport_close_error', {
+            sessionId,
+            error: (err as Error).message,
+          });
+        }
+        try {
+          await sessionApp.mcp.close();
+        } catch (err) {
+          logger.error('aula-mcp.sse.mcp_close_error', {
+            sessionId,
+            error: (err as Error).message,
+          });
+        }
+        resolve();
+      });
+    });
+
+    try {
+      // mcp.connect() calls transport.start(), which writes the spec-required
+      // first event (`endpoint`) telling the client where to POST.
+      await sessionApp.mcp.connect(sseTransport);
+      logger.info('aula-mcp.sse.session_opened', { sessionId });
+    } catch (err) {
+      logger.error('aula-mcp.sse.connect_failed', {
+        sessionId,
+        error: (err as Error).message,
+      });
+      sseSessions.delete(sessionId);
+      return;
+    }
+
+    // Hold the SSE stream open until the client disconnects.
+    await closed;
+    logger.info('aula-mcp.sse.session_closed', { sessionId });
+  }),
+);
+
+app.post('/messages', async (c) => {
+  const sessionId = c.req.query('sessionId');
+  if (!sessionId) return c.json({ error: 'missing sessionId query parameter' }, 400);
+  const session = sseSessions.get(sessionId);
+  if (!session) return c.json({ error: 'unknown sessionId' }, 404);
+  let body: JSONRPCMessage;
+  try {
+    body = (await c.req.json()) as JSONRPCMessage;
+  } catch {
+    return c.json({ error: 'invalid JSON body' }, 400);
+  }
+  session.transport.receive(body);
+  // The actual JSON-RPC response is delivered over the SSE channel; the POST
+  // is just an inbound carrier, so 202 Accepted is the spec-correct ack.
+  return c.body(null, 202);
+});
 
 logger.info('aula-mcp.listening', { host: HOST, port: PORT });
 process.stdout.write(`aula-mcp listening on http://${HOST}:${PORT}/mcp (healthz at /healthz)\n`);

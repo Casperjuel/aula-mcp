@@ -223,6 +223,8 @@ aula.dithjem.dk {
 
 Den nemmeste vej for HA-brugere bliver en addon der pakker `aula-mcp` ind, så den kører som en del af din HA-installation og er tilgængelig fra HA's Voice/Assist + alle dine HA-automatiseringer. Hvis du har **Nabu Casa**, åbner det også for sikker fjernadgang via deres tunnel.
 
+`aula-mcp` taler både den nye Streamable HTTP-protokol (`/mcp`) og den ældre SSE-dialekt (`/sse`) — HA's officielle [`mcp` (client) integration](https://www.home-assistant.io/integrations/mcp/) bruger SSE, så du peger den bare på `http://<ha-host>:7878/sse`, så har Assist + dit valgte LLM (Anthropic / OpenAI / Ollama) adgang til alle `aula.*` tools.
+
 > 🛣️ Spores som [issue (TBD)] — feedback fra HA-folk meget velkommen. Hvis du har erfaring med HA add-on-byggeri, så bliver det her din hjælp.
 
 ### Mulighed 4: VPS i Tyskland (Hetzner, Coolify)
