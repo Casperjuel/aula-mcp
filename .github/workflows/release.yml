@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - 'v*'
+  # Tag pushes from the GITHUB_TOKEN (e.g. when release-please creates
+  # a release) do NOT fire workflow runs — GitHub's anti-recursion rule.
+  # workflow_dispatch lets us rebuild binaries onto an existing tag with:
+  #   gh workflow run release.yml --ref v1.2.3
+  workflow_dispatch:
 
 permissions:
   contents: write

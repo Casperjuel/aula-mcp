@@ -25,5 +25,11 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         with:
+          # Tags pushed by GITHUB_TOKEN don't trigger downstream workflows
+          # (anti-recursion). Pass a PAT so the tag push fires release.yml
+          # automatically. Falls back to GITHUB_TOKEN if the secret is not
+          # set — release-please still works, but you'll need to dispatch
+          # release.yml manually after each Release PR merges.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
