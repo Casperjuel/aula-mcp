@@ -26,6 +26,7 @@
  * aren't useful and aren't supported.
  */
 
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   AulaHttpClient,
@@ -41,6 +42,11 @@ import { Hono } from 'hono';
 import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
 
+/** Max time we'll hold a login session waiting on the user to pick their
+ *  MitID identity after the picker is shown. After this the login rejects
+ *  with a timeout so the session entry gets cleaned up instead of leaking. */
+const IDENTITY_PICK_TIMEOUT_MS = 5 * 60 * 1000;
+
 export interface SetupAppOptions {
   logger?: Logger;
   /** Override the token store (tests). Production uses the addon's
@@ -52,18 +58,20 @@ interface LoginSession {
   sessionId: string;
   username: string;
   stream?: SSEStreamingApi;
-  /** Resolves when the SSE stream is attached, so events posted before the
-   *  browser GETs /login/events get buffered + delivered. */
-  streamReady: Promise<SSEStreamingApi>;
-  resolveStream: (s: SSEStreamingApi) => void;
   /** Resolver waiting on user identity choice; null when no pending pick. */
   pendingIdentity: ((index: number) => void) | null;
   /** Queue of events that arrived before the stream was attached. */
   bufferedEvents: Array<{ event: string; data: string }>;
   abort: AbortController;
-  /** Set when the login resolves (success or error) so /login/events can
-   *  emit the terminal event and close cleanly. */
+  /** Set when the login resolves (success or error). The terminal event has
+   *  already been sent via `emit()` — this is just a flag so a late-attaching
+   *  SSE stream can replay it on connect. */
   terminal?: { event: 'success' | 'error'; data: string };
+  /** Resolves when runLogin has finished (after the terminal event has been
+   *  emitted). The SSE route handler awaits this instead of polling. */
+  done: Promise<void>;
+  /** Called by runLogin after the terminal event lands. */
+  signalDone: () => void;
 }
 
 const ICON_SVG = `<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 3 1 9l11 6 9-4.91V17h2V9z"/></svg>`;
@@ -102,18 +110,18 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (!username) return c.json({ error: 'username is required' }, 400);
 
     const sessionId = crypto.randomUUID();
-    let resolveStream!: (s: SSEStreamingApi) => void;
-    const streamReady = new Promise<SSEStreamingApi>((resolve) => {
-      resolveStream = resolve;
+    let signalDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      signalDone = resolve;
     });
     const session: LoginSession = {
       sessionId,
       username,
-      streamReady,
-      resolveStream,
       pendingIdentity: null,
       bufferedEvents: [],
       abort: new AbortController(),
+      done,
+      signalDone,
     };
     loginSessions.set(sessionId, session);
 
@@ -134,7 +142,6 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
 
     return streamSSE(c, async (stream) => {
       session.stream = stream;
-      session.resolveStream(stream);
 
       // Drain any events buffered before the stream attached.
       for (const ev of session.bufferedEvents) {
@@ -142,39 +149,20 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       }
       session.bufferedEvents.length = 0;
 
-      // Replay terminal event if login already finished before the browser
-      // got here (shouldn't happen in practice — login takes seconds — but
-      // belt and suspenders).
-      if (session.terminal) {
-        await stream.writeSSE(session.terminal);
-        loginSessions.delete(sessionId);
-        return;
-      }
-
-      // Hold the stream open until the login finishes. The login emits
-      // events via session.stream.writeSSE directly; this promise resolves
-      // when the terminal event is sent.
-      await new Promise<void>((resolve) => {
+      // Hold the stream open until either the user disconnects or runLogin
+      // finishes. runLogin emits its terminal event via `emit()` (which now
+      // writes to this attached stream); we just need to wait for it to
+      // signal completion via `session.done`.
+      const aborted = new Promise<'aborted'>((resolve) => {
         stream.onAbort(() => {
           session.abort.abort();
-          loginSessions.delete(sessionId);
-          resolve();
+          resolve('aborted');
         });
-        // resolveOnTerminal hook installed by runLogin via session.terminal
-        const interval = setInterval(() => {
-          if (session.terminal) {
-            clearInterval(interval);
-            // Replay terminal in case it landed after the buffer drain.
-            session.stream
-              ?.writeSSE(session.terminal)
-              .catch(() => {})
-              .finally(() => {
-                loginSessions.delete(sessionId);
-                resolve();
-              });
-          }
-        }, 250);
       });
+      const finished = session.done.then(() => 'finished' as const);
+
+      await Promise.race([aborted, finished]);
+      loginSessions.delete(sessionId);
     });
   });
 
@@ -191,8 +179,10 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       return c.json({ error: 'invalid JSON body' }, 400);
     }
     const index = Number(body.index);
-    if (!Number.isInteger(index) || index < 0) {
-      return c.json({ error: 'index must be a non-negative integer' }, 400);
+    // MitID identity indices are 1-based — `0` is treated as "no identity
+    // selected" by the rest of the auth pipeline, so refuse it explicitly.
+    if (!Number.isInteger(index) || index < 1) {
+      return c.json({ error: 'index must be a positive integer' }, 400);
     }
     session.pendingIdentity(index);
     session.pendingIdentity = null;
@@ -236,12 +226,28 @@ async function runLogin(session: LoginSession, store: TokenStore, logger: Logger
         await emit('identity', {
           options: options.map((o) => ({ index: o.index, name: o.name })),
         });
+        // Wait for the user to POST /login/identity, with two escape hatches:
+        // (a) the request abort (browser closes the SSE stream) and
+        // (b) a hard timeout so a user who walks away doesn't leak the
+        //     session entry forever.
         const choice = await new Promise<number>((resolve, reject) => {
-          session.pendingIdentity = resolve;
-          session.abort.signal.addEventListener('abort', () => reject(new Error('aborted')), {
-            once: true,
-          });
+          let settled = false;
+          const settle = (fn: () => void): void => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            session.abort.signal.removeEventListener('abort', onAbort);
+            fn();
+          };
+          session.pendingIdentity = (idx) => settle(() => resolve(idx));
+          const onAbort = (): void => settle(() => reject(new Error('aborted')));
+          session.abort.signal.addEventListener('abort', onAbort, { once: true });
+          const timer = setTimeout(
+            () => settle(() => reject(new Error('identity selection timed out'))),
+            IDENTITY_PICK_TIMEOUT_MS,
+          );
         });
+        session.pendingIdentity = null;
         identityIndex = choice;
         identityName = options.find((o) => o.index === choice)?.name;
         await emit('identity-selected', { index: choice, name: identityName ?? null });
@@ -300,11 +306,20 @@ async function runLogin(session: LoginSession, store: TokenStore, logger: Logger
       name: error.name,
       message: error.message,
     });
+  } finally {
+    // Always signal — the SSE route handler waits on this to clean up the
+    // session entry. Without this, an unexpected throw could leak the entry
+    // until process restart.
+    session.signalDone();
   }
 }
 
 function defaultAddonStore(): TokenStore {
-  const dir = process.env.AULA_MCP_DIR ?? '/config/aula-mcp';
+  // Mirror AulaContext's default store path resolution: honour AULA_MCP_DIR
+  // when set (the HA addon's run.sh exports it to /config/aula-mcp), and
+  // otherwise fall back to ~/.config/aula-mcp so non-addon deployments (dev
+  // boxes, VPS) don't try to write into a non-existent /config directory.
+  const dir = process.env.AULA_MCP_DIR ?? join(homedir(), '.config', 'aula-mcp');
   return new EncryptedFileTokenStore({
     filePath: join(dir, 'tokens.json'),
     keyFilePath: join(dir, '.key'),
