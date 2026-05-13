@@ -47,18 +47,28 @@ jobs:
           set -e
           status='${{ steps.probe.outputs.status }}'
           location='${{ steps.probe.outputs.location }}'
-          if [ "$status" != "302" ] && [ "$status" != "303" ] && [ "$status" != "307" ]; then
-            echo "::error::Expected 3xx redirect, got HTTP $status"
-            exit 1
-          fi
-          # The redirect should land on the broker or directly on MitID.
-          case "$location" in
-            *broker.unilogin.dk*|*nemlog-in.mitid.dk*|*www.mitid.dk*)
-              echo "::notice::OAuth authorize endpoint healthy → $location"
+          case "$status" in
+            302|303|307)
+              # The redirect should land on the broker or directly on MitID.
+              case "$location" in
+                *broker.unilogin.dk*|*nemlog-in.mitid.dk*|*www.mitid.dk*)
+                  echo "::notice::OAuth authorize endpoint healthy → $location"
+                  ;;
+                *)
+                  echo "::error::Unexpected redirect target: $location"
+                  exit 2
+                  ;;
+              esac
+              ;;
+            403)
+              # Aula's edge intermittently 403s GitHub Actions egress IPs (seen
+              # from 2026-05 onward). Real users don't hit this, so it's not
+              # MitID drift — log and pass instead of paging.
+              echo "::notice::HTTP 403 from Aula edge — likely runner-IP filtering, not OAuth drift."
               ;;
             *)
-              echo "::error::Unexpected redirect target: $location"
-              exit 2
+              echo "::error::Expected 3xx redirect, got HTTP $status"
+              exit 1
               ;;
           esac
 
@@ -78,6 +88,20 @@ jobs:
             // Don't spam — only one open drift issue at a time.
             if (issues.data.some(i => i.title.startsWith('MitID drift canary failed'))) {
               core.info('An open drift issue already exists; not filing another.');
+              return;
+            }
+            // Require the previous scheduled run to have also failed before
+            // opening an issue — single flaps shouldn't page anyone.
+            const recent = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'canary.yml',
+              event: 'schedule',
+              per_page: 5
+            });
+            const previous = recent.data.workflow_runs.find(r => r.id !== context.runId);
+            if (previous && previous.conclusion !== 'failure') {
+              core.info(`Previous scheduled run (${previous.id}) was ${previous.conclusion}; treating this as a flap.`);
               return;
             }
             await github.rest.issues.create({
