@@ -223,7 +223,9 @@ aula.dithjem.dk {
 
 Den nemmeste vej for HA-brugere. `aula-mcp` kører som en del af din HA-installation og er tilgængelig fra HA's Voice/Assist + alle dine HA-automatiseringer. Hvis du har **Nabu Casa**, åbner det også for sikker fjernadgang via deres tunnel.
 
-1. Tilføj dette repo som add-on repository i HA: Settings → Add-ons → ⋮ → Repositories → indsæt `https://github.com/Casperjuel/aula-mcp`.
+[![Open your Home Assistant instance and add the aula-mcp add-on repository.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/Casperjuel/aula-mcp)
+
+1. Klik badget ovenfor (eller manuelt: Settings → Add-ons → ⋮ → Repositories → indsæt `https://github.com/Casperjuel/aula-mcp`).
 2. Installer `aula-mcp` add-on'en fra det repository der dukker op.
 3. Kopier dine tokens fra en workstation ind i `/config/aula-mcp/` (kør `pnpm login` + `pnpm aula tokens export` på workstation, og SCP/Samba til HA).
 4. Settings → Devices & Services → Add Integration → **Model Context Protocol** → `http://homeassistant.local:7878/sse`.

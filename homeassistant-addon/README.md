@@ -10,11 +10,10 @@ etc.) gets every `aula.*` tool — including for voice queries like
 
 ## Install
 
-1. **Add this repository to your Supervisor add-on store.** Settings → Add-ons
-   → Add-on Store → ⋮ (top-right) → Repositories → paste:
-   ```
-   https://github.com/Casperjuel/aula-mcp
-   ```
+[![Open your Home Assistant instance and add the aula-mcp add-on repository.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https://github.com/Casperjuel/aula-mcp)
+
+1. **Click the badge above** (or manually: Settings → Add-ons → Add-on Store
+   → ⋮ (top-right) → Repositories → paste `https://github.com/Casperjuel/aula-mcp`).
 2. **Install the `aula-mcp` add-on** from the now-visible repository.
 3. **Don't start it yet** — first transfer your Aula tokens (next section).
 
