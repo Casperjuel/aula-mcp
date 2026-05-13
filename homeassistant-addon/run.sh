@@ -36,6 +36,10 @@ else
   export AULA_MCP_HOST="127.0.0.1"
 fi
 
+# Boot the in-addon setup/login UI on the port HA Ingress proxies to.
+# config.yaml's `ingress_port` MUST stay in sync with this value.
+export AULA_MCP_INGRESS_PORT=8099
+
 if [ "$LOG" = "true" ]; then
   export AULA_MCP_LOG=1
 fi

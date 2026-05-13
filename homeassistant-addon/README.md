@@ -17,31 +17,38 @@ etc.) gets every `aula.*` tool — including for voice queries like
 2. **Install the `aula-mcp` add-on** from the now-visible repository.
 3. **Don't start it yet** — first transfer your Aula tokens (next section).
 
-## First-time: transfer your tokens
+## First-time: log in via the add-on's web UI
 
-aula-mcp's MitID login needs an interactive browser, which a headless HA box
-can't provide. The supported pattern is: log in on a workstation once, then
-copy the encrypted bundle to your HA `/config/aula-mcp/` directory.
+1. Start the add-on.
+2. Open the **aula-mcp** entry in your HA sidebar (added automatically via the
+   add-on's Ingress panel). You should see *"Ikke logget ind"*.
+3. Type your **MitID username** and click **Start login**.
+4. Two QR codes appear. Open your **MitID app**, scan either of them (they
+   alternate as an anti-phishing check), and approve the login on your phone.
+5. If MitID returns multiple identities (rare — typically only parents with
+   several login routes), pick the one your school knows you by.
+6. On success the page flips to *"Logget ind"* and the tokens are persisted
+   encrypted in `/config/aula-mcp/` automatically.
 
-On your workstation (macOS or Linux):
+The whole flow happens inside HA's Ingress proxy — your browser never leaves
+the HA UI, and the MitID-app talks to nemlog-in.dk directly. The add-on only
+sees the resulting OAuth tokens.
+
+### Fallback: workstation export
+
+If you'd rather not type your MitID username into HA's UI (or you're hardening
+a setup with no browser access), the original workstation flow still works:
 
 ```sh
 git clone https://github.com/Casperjuel/aula-mcp.git && cd aula-mcp
 pnpm install
-pnpm login          # MitID QR-code flow, fully interactive
-pnpm aula tokens export ./aula-bundle
-# Writes ./aula-bundle/tokens.json + ./aula-bundle/.key
+pnpm login                                 # MitID QR-code flow on workstation
+pnpm aula tokens export ./aula-bundle      # writes tokens.json + .key
+scp aula-bundle/tokens.json aula-bundle/.key homeassistant:/config/aula-mcp/
 ```
 
-Then copy `tokens.json` and `.key` into your HA's `/config/aula-mcp/`:
-
-```sh
-# From your workstation; HA accessible over SSH or Samba
-scp aula-bundle/tokens.json aula-bundle/.key \
-    homeassistant:/config/aula-mcp/
-```
-
-Or use the **File editor** add-on / Samba share if you'd rather drag-and-drop.
+The encrypted bundle is interchangeable — the add-on picks it up on next
+restart regardless of which path produced it.
 
 ## Configure
 

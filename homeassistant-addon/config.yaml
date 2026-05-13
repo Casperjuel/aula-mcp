@@ -23,6 +23,14 @@ map:
   # `homeassistant_config:rw` is the modern spelling; the older `config:rw`
   # still works but emits a deprecation warning in recent Supervisor builds.
   - homeassistant_config:rw
+# In-addon login UI exposed via HA Ingress. The addon binds two ports:
+# - 7878 (above): MCP traffic, exposed to the LAN per `ports:`.
+# - 8099 (below): setup/login UI, only reachable through HA's Ingress proxy.
+#   `ingress_port` MUST stay in sync with AULA_MCP_INGRESS_PORT in run.sh.
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:school
+panel_title: aula-mcp
 options:
   aula_mcp_key: ""
   log: false

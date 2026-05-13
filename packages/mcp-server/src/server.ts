@@ -16,7 +16,7 @@
  * different transport.
  *
  * Env:
- *   AULA_MCP_PORT             — port to bind (default 7878)
+ *   AULA_MCP_PORT             — port to bind for MCP traffic (default 7878)
  *   AULA_MCP_HOST             — interface to bind (default 127.0.0.1)
  *   AULA_MCP_DIR              — config dir (default ~/.config/aula-mcp)
  *   AULA_MCP_KEY              — encryption key for the token store
@@ -29,6 +29,9 @@
  *                               GET /sse requests get 503'd (default 16)
  *   AULA_MCP_SSE_IDLE_MS      — evict /sse sessions idle for >this many ms
  *                               (default 300_000 = 5 min)
+ *   AULA_MCP_INGRESS_PORT     — if set, also boots the in-addon setup/login UI
+ *                               on this port (bound to 0.0.0.0 for HA Ingress).
+ *                               Default unset; the HA addon sets it to 8099.
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
@@ -36,6 +39,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { createMcpApp, type McpApp } from './setup.ts';
+import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
@@ -224,6 +228,33 @@ const server = Bun.serve({
   fetch: app.fetch,
 });
 
+// Optional in-addon setup/login UI. The HA addon sets AULA_MCP_INGRESS_PORT
+// to 8099; HA Supervisor proxies its Ingress traffic to that port, giving
+// users a one-click login flow inside HA's sidebar. Skipped when unset so
+// non-addon deployments (CLI workstation, VPS) don't open an extra port.
+let setupServer: ReturnType<typeof Bun.serve> | null = null;
+const INGRESS_PORT_RAW = process.env.AULA_MCP_INGRESS_PORT;
+if (INGRESS_PORT_RAW) {
+  const ingressPort = Number(INGRESS_PORT_RAW);
+  if (!Number.isInteger(ingressPort) || ingressPort <= 0) {
+    process.stderr.write(`AULA_MCP_INGRESS_PORT="${INGRESS_PORT_RAW}" is not a valid port.\n`);
+    process.exit(2);
+  }
+  const setupApp = createSetupApp({ logger });
+  setupServer = Bun.serve({
+    port: ingressPort,
+    // HA Ingress proxies from the Supervisor host *to* this port, so bind on
+    // all interfaces — the addon container's network namespace already isolates
+    // the port from the LAN unless config.yaml exposes it via `ports:`.
+    hostname: '0.0.0.0',
+    fetch: setupApp.fetch,
+  });
+  logger.info('aula-mcp.setup_ui.listening', { port: ingressPort });
+  process.stdout.write(
+    `aula-mcp setup UI listening on http://0.0.0.0:${ingressPort}/ (HA Ingress)\n`,
+  );
+}
+
 // Graceful shutdown — finish in-flight requests before exiting.
 let shuttingDown = false;
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
@@ -239,6 +270,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
       Array.from(sseSessions.keys()).map((sid) => closeSseSession(sid, 'shutdown')),
     );
     await server.stop();
+    if (setupServer) await setupServer.stop();
     await mcp.close();
   } catch (err) {
     logger.error('aula-mcp.shutdown_error', { error: (err as Error).message });
