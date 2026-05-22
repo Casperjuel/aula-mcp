@@ -26,9 +26,10 @@ apps/cli/bin/
 tokens.json
 *.tokens.json
 
-# claude's working notes
+# agent working notes + local worktrees
 .aula-mcp-plan.md
 .claude-scratch/
+.claude/
 
 # editor + os
 .DS_Store

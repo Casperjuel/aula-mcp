@@ -13,7 +13,7 @@
   "engines": {
     "node": ">=20.10"
   },
-  "packageManager": "pnpm@10.12.1",
+  "packageManager": "pnpm@11.1.3",
   "scripts": {
     "aula": "bun apps/cli/src/index.ts",
     "mcp": "bun packages/mcp-server/src/server.ts",
@@ -32,13 +32,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
-    "@types/bun": "^1.3.13",
+    "@types/bun": "^1.3.14",
+    "@types/node": "^25.9.1",
+    "bun-types": "^1.3.14",
     "typescript": "^6.0.3"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@biomejs/biome",
-      "esbuild"
-    ]
   }
 }

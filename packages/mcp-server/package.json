@@ -19,7 +19,7 @@
     "@aula-mcp/aula-auth": "workspace:*",
     "@aula-mcp/aula-client": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "hono": "^4.12.18",
+    "hono": "^4.12.21",
     "qrcode": "^1.5.4",
     "zod": "^4.4.3"
   },
