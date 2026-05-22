@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/Casperjuel/aula-mcp/compare/v1.0.0...v1.1.0) (2026-05-22)
+
+
+### Features
+
+* **presence:** komme/gå template read + write tools ([#31](https://github.com/Casperjuel/aula-mcp/issues/31)) ([3a7c3da](https://github.com/Casperjuel/aula-mcp/commit/3a7c3da531d29aa55d62d6919088da848bdf7da7))
+
 ## 1.0.0 (2026-05-13)
 
 
