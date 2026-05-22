@@ -7,6 +7,7 @@
  * `aula login` from the terminal "just works" with any running server.
  */
 
+import { type FSWatcher, watch } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -52,11 +53,73 @@ export class AulaContext {
    *  or an opaque alphanumeric token; we treat it as opaque to match
    *  upstream Python's `str(child["userId"])` handling. */
   private cachedGuardianUserId: string | undefined;
+  private tokenFileWatcher: FSWatcher | undefined;
+  private tokenFileChangeDebounce: NodeJS.Timeout | undefined;
 
   constructor(options: AulaContextOptions = {}) {
     this.store = options.store ?? defaultStore();
     this.logger = options.logger ?? silentLogger;
     this.http = new AulaHttpClient({ logger: this.logger });
+    this.watchTokenFile();
+  }
+
+  /**
+   * If the underlying store is file-backed, watch its path and invalidate the
+   * cached client whenever the file changes (e.g. an out-of-band `aula login`
+   * or `aula refresh-stepup` rotates tokens). Without this, the cached client
+   * keeps serving 401/403 against the rotated session until its access token
+   * naturally expires (~60min).
+   *
+   * Best-effort: errors here are non-fatal. The original token-expiry
+   * invalidation in `getClient()` is still the backstop.
+   *
+   * Duck-typed (`'filePath' in store && typeof string`) rather than
+   * `instanceof EncryptedFileTokenStore`: Bun's `--compile` bundler can
+   * produce two copies of the same class when the package is imported via
+   * different specifiers across the bundled graph, breaking `instanceof`
+   * silently — the watcher then never gets attached and stale tokens linger.
+   */
+  private watchTokenFile(): void {
+    const filePath = (this.store as { filePath?: unknown }).filePath;
+    if (typeof filePath !== 'string' || filePath.length === 0) return;
+    const path = filePath;
+    try {
+      this.tokenFileWatcher = watch(path, { persistent: false }, (eventType) => {
+        // fs.watch tends to fire multiple events per write (the writer does
+        // write + close + chmod). Debounce so we only invalidate once.
+        if (this.tokenFileChangeDebounce) clearTimeout(this.tokenFileChangeDebounce);
+        this.tokenFileChangeDebounce = setTimeout(() => {
+          this.tokenFileChangeDebounce = undefined;
+          this.logger.info('aula-context.token_file_changed_invalidating', {
+            path,
+            eventType,
+          });
+          this.invalidate();
+        }, 250);
+      });
+      this.tokenFileWatcher.on('error', (err) => {
+        this.logger.warn('aula-context.token_file_watch_error', {
+          path,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    } catch (err) {
+      this.logger.warn('aula-context.token_file_watch_setup_failed', {
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /** Close the token-file watcher. Tests should call this; long-lived servers
+   *  can leave it until process exit. */
+  dispose(): void {
+    if (this.tokenFileChangeDebounce) {
+      clearTimeout(this.tokenFileChangeDebounce);
+      this.tokenFileChangeDebounce = undefined;
+    }
+    this.tokenFileWatcher?.close();
+    this.tokenFileWatcher = undefined;
   }
 
   /**
@@ -159,6 +222,21 @@ export class AulaContext {
   }
 
   private async buildClient(): Promise<AulaClient> {
+    // Plain refresh_token grant. The scaarup/aula HA integration has
+    // proven empirically that Aula's OAuth server preserves the
+    // `aula-sensitive` scope through refresh_token grants — HA reads
+    // sensitive endpoints (messaging.getMessagesForThread) for months
+    // from a single MitID login using nothing but
+    // `grant_type=refresh_token` against simplesaml/.../token.php.
+    // Earlier suspicion that step-up assurance was bound to the
+    // broker session at unilogin.dk was a misdiagnosis — the 403s we
+    // were seeing were the v22→v23 apiVersion deprecation (fixed in
+    // 60c4246), not step-up loss. Silent SSO was "working" via side
+    // effect (each reauth rebuilt AulaContext via fs.watch
+    // invalidation, which re-probed apiVersion to v23). The `aula
+    // refresh-stepup` CLI command is kept as a manual recovery tool
+    // when the refresh_token chain breaks (e.g. after a long
+    // downtime), but the MCP child no longer invokes it.
     const record = await withFreshTokens({
       store: this.store,
       http: this.http,

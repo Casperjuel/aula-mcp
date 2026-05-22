@@ -214,7 +214,18 @@ export class AulaClient {
     threadId: number,
     opts: { page?: number } = {},
   ): Promise<{ subject?: string; messages: ThreadMessage[] }> {
-    const url = this.apiUrl(this.apiVersion, {
+    // Probe-aware version: every OTHER method routes through
+    // getJsonRaw / postJson, which call ensureApiVersion() implicitly
+    // and end up on the current working version (currently v23). This
+    // one bypasses both helpers because it needs custom 403 → step-up
+    // handling, and used to pin `this.apiVersion` (default 22) directly
+    // — so a session that called get_thread before anything else
+    // (e.g. straight from a cached threadId, skipping discover /
+    // list_threads) hit /api/v22/ and got HTTP 410 from Aula's
+    // deprecated-version response, surfacing as "410 error" to the
+    // agent with no recovery.
+    const version = await this.ensureApiVersion();
+    const url = this.apiUrl(version, {
       method: 'messaging.getMessagesForThread',
       threadId: String(threadId),
       page: String(opts.page ?? 0),

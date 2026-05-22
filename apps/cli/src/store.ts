@@ -34,6 +34,9 @@ export function transcriptDir(): string {
 export function loginLogPath(): string {
   return join(aulaMcpDir(), 'login-log.jsonl');
 }
+export function cookiesFile(): string {
+  return join(aulaMcpDir(), 'cookies.json');
+}
 
 /** Display path that survives both backends — KeychainTokenStore.path
  *  returns "keychain://aula-mcp/tokens" so commands that print location

@@ -87,6 +87,15 @@ export class AulaLoginError extends AulaAuthError {
   override readonly name: string = 'AulaLoginError';
 }
 
+/**
+ * Thrown by attemptSilentReauthorize when the broker/MitID session has
+ * lapsed and a fresh interactive login is required. Callers should fall
+ * back to the full login() flow.
+ */
+export class AulaSilentSsoFailedError extends AulaAuthError {
+  override readonly name: string = 'AulaSilentSsoFailedError';
+}
+
 export class AulaLoginClient {
   readonly http: AulaHttpClient;
   readonly oauth: AulaOAuthConfig;
@@ -206,6 +215,98 @@ export class AulaLoginClient {
   /** Refresh tokens. Returns new tokens (caller decides whether to persist). */
   async refresh(refreshToken: string): Promise<AulaTokens> {
     return refreshAccessToken(this.http, this.oauth, refreshToken, this.logger);
+  }
+
+  /**
+   * Attempt a silent OIDC re-authorize using whatever cookies are
+   * already in the HTTP client's jar. Walks the authorize chain and
+   * expects the broker (unilogin Keycloak) to silent-SSO via its session
+   * cookie — if the upstream MitID assurance is still valid, this hands
+   * back fresh tokens (including a refreshed step-up level) without any
+   * user interaction.
+   *
+   * Throws AulaSilentSsoFailedError when the chain lands on a MitID UI
+   * page or the broker IdP-selection page — i.e., when the broker
+   * session has expired and a fresh `login()` is required. Throws
+   * AulaLoginError for protocol-level surprises.
+   */
+  async attemptSilentReauthorize(): Promise<AulaTokens> {
+    const pkce = generatePkce();
+    const state = generateState(16);
+    const authorizeUrl = buildAuthorizeUrl({
+      config: this.oauth,
+      state,
+      codeChallenge: pkce.challenge,
+    });
+    this.logger.info('aula.silent_reauthorize.start');
+    this.logger.debug('oauth.silent.authorize_url', { authorizeUrl });
+
+    let currentUrl = authorizeUrl;
+    for (let hop = 0; hop < 15; hop++) {
+      const res = await this.http.request(currentUrl, { method: 'GET' });
+      this.logger.debug('oauth.silent.hop', { hop, status: res.status, url: currentUrl });
+
+      if (res.status >= 300 && res.status < 400) {
+        const loc = res.headers.get('location');
+        if (!loc) {
+          throw new AulaLoginError(`Silent SSO: ${res.status} with no Location at hop ${hop}`);
+        }
+        const next = new URL(loc, currentUrl).toString();
+        // Silent-SSO success terminus: redirect URI carrying ?code=...
+        if (next.startsWith(this.oauth.redirectUri) && next.includes('code=')) {
+          const code = new URL(next).searchParams.get('code');
+          const returnedState = new URL(next).searchParams.get('state');
+          if (returnedState !== state) {
+            throw new AulaLoginError(
+              `OAuth state mismatch in silent flow: expected ${state}, got ${returnedState}`,
+            );
+          }
+          if (!code) {
+            throw new AulaSilentSsoFailedError(
+              `Silent SSO terminus had no code in URL: ${next.slice(0, 200)}`,
+            );
+          }
+          this.logger.info('aula.silent_reauthorize.code_received');
+          const tokens = await exchangeAuthorizationCode(
+            this.http,
+            this.oauth,
+            { code, codeVerifier: pkce.verifier },
+            this.logger,
+          );
+          this.logger.info('aula.silent_reauthorize.success');
+          return tokens;
+        }
+        currentUrl = next;
+        continue;
+      }
+
+      if (res.status === 200) {
+        const url = new URL(currentUrl);
+        if (url.host === 'nemlog-in.mitid.dk' || url.host === 'www.mitid.dk') {
+          throw new AulaSilentSsoFailedError(
+            'Broker session lapsed; silent re-authorize landed on MitID. Run `aula login` to re-authenticate.',
+          );
+        }
+        if (url.host === 'broker.unilogin.dk') {
+          throw new AulaSilentSsoFailedError(
+            'Silent re-authorize hit the broker IdP-selection page; broker session is gone. Run `aula login`.',
+          );
+        }
+        const metaUrl = extractMetaRefreshUrl(res.body);
+        if (metaUrl) {
+          currentUrl = new URL(metaUrl, currentUrl).toString();
+          continue;
+        }
+        throw new AulaLoginError(
+          `Silent SSO landed on unexpected host (${url.host}) at hop ${hop}`,
+        );
+      }
+
+      throw new AulaLoginError(
+        `Silent SSO unexpected status ${res.status} at hop ${hop}: ${res.body.slice(0, 200)}`,
+      );
+    }
+    throw new AulaLoginError('Silent SSO chain exceeded 15 hops');
   }
 
   // ============ Private orchestration helpers ================================

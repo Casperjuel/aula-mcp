@@ -7,7 +7,7 @@
  * safe to paste into a GitHub issue when something fails.
  */
 
-import { mkdir } from 'node:fs/promises';
+import { chown, mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import {
   AulaHttpClient,
@@ -26,7 +26,7 @@ import {
 import qrcode from 'qrcode-terminal';
 import { fail, fmt, info, ok, prompt, promptSecret, rule, selectFromList, warn } from '../io.ts';
 import { appendLoginLog } from '../login-log.ts';
-import { defaultStore, transcriptPath } from '../store.ts';
+import { aulaMcpDir, cookiesFile, defaultStore, transcriptPath } from '../store.ts';
 
 export interface LoginCommandArgs {
   username?: string;
@@ -119,6 +119,31 @@ export async function runLogin(args: LoginCommandArgs): Promise<void> {
       ...(identityName ? { identityName } : {}),
     };
     await defaultStore().save(record);
+
+    // Persist the cookie jar so `aula refresh-stepup` can attempt silent
+    // SSO against the broker (unilogin) without dragging the user through
+    // MitID every time the assurance level drops.
+    try {
+      await mkdir(aulaMcpDir(), { recursive: true });
+      const serialized = await http.jar.serialize();
+      await writeFile(cookiesFile(), serialized, { mode: 0o600 });
+      // When AULA_MCP_DIR is owned by a service account (e.g. openclaw
+      // on the gateway VM) but `aula login` is being run as root, a
+      // freshly-created cookies.json lands root-owned and the
+      // service-account-run refresh-stepup timer can't read it. Match
+      // the directory's ownership.
+      try {
+        const dirStat = await stat(aulaMcpDir());
+        if (dirStat.uid !== process.getuid?.()) {
+          await chown(cookiesFile(), dirStat.uid, dirStat.gid);
+        }
+      } catch {
+        // chown is best-effort — non-root can't, and that's fine when
+        // the running user already owns the dir.
+      }
+    } catch (e) {
+      warn(`Could not persist cookies: ${(e as Error).message}`);
+    }
 
     ok(`Login successful. Tokens saved to ${fmt.dim(defaultStore().path)}`);
     info(

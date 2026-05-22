@@ -115,7 +115,10 @@ const DEFAULT_KEY_FILE = join(DEFAULT_DIR, '.key');
 const DEFAULT_ENV = 'AULA_MCP_KEY';
 
 export class EncryptedFileTokenStore implements TokenStore {
-  private readonly filePath: string;
+  /** Resolved on-disk path. Exposed (read-only) so long-lived consumers can
+   *  watch it for external writes (e.g. `aula login` from another process
+   *  rotating tokens beneath a running MCP server). */
+  readonly filePath: string;
   private readonly keyFilePath: string;
   private readonly envVar: string;
   private readonly explicitKey?: Buffer;

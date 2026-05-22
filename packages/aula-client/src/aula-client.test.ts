@@ -160,30 +160,41 @@ describe('AulaClient envelope handling', () => {
 });
 
 describe('AulaClient.getMessagesForThread step-up', () => {
-  // getMessagesForThread doesn't call ensureApiVersion (it uses
-  // this.apiVersion directly), so these tests queue exactly one response.
+  // getMessagesForThread calls ensureApiVersion() at the top (probe-aware,
+  // same contract as the rest of the client) so each test queues a
+  // version-probe response first, then the actual fetch response.
 
   test('throws AulaStepUpRequiredError on status.code 403', async () => {
     const http = new FakeHttp();
-    http.enqueue({
-      status: 200,
-      body: JSON.stringify({
-        status: { code: 403, message: 'sensitive thread requires step-up' },
-      }),
-    });
+    http.enqueue(
+      // version probe: profiles.getProfilesByLogin at v22 OK
+      { status: 200, body: envelope({ profiles: [] }) },
+      // actual fetch: envelope code 403 = sensitive thread
+      {
+        status: 200,
+        body: JSON.stringify({
+          status: { code: 403, message: 'sensitive thread requires step-up' },
+        }),
+      },
+    );
     const c = makeClient(http);
     await expect(c.getMessagesForThread(123)).rejects.toBeInstanceOf(AulaStepUpRequiredError);
   });
 
   test('returns subject + messages when status is OK', async () => {
     const http = new FakeHttp();
-    http.enqueue({
-      status: 200,
-      body: envelope({
-        subject: 'Skoleudflugt',
-        messages: [{ text: { plain: 'hej' }, sender: { fullName: 'Anders' } }],
-      }),
-    });
+    http.enqueue(
+      // version probe: profiles.getProfilesByLogin at v22 OK
+      { status: 200, body: envelope({ profiles: [] }) },
+      // actual fetch
+      {
+        status: 200,
+        body: envelope({
+          subject: 'Skoleudflugt',
+          messages: [{ text: { plain: 'hej' }, sender: { fullName: 'Anders' } }],
+        }),
+      },
+    );
     const c = makeClient(http);
     const out = await c.getMessagesForThread(123);
     expect(out.subject).toBe('Skoleudflugt');

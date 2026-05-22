@@ -5,6 +5,7 @@ export {
   type AulaLoginCredentials,
   AulaLoginError,
   type AulaLoginOptions,
+  AulaSilentSsoFailedError,
   type IdentitySelector,
 } from './aula-login-client.ts';
 export {

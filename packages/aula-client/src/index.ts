@@ -26,6 +26,7 @@ export {
   type ProfileContextData,
   type ProfilesByLoginData,
   type ThreadMessage,
+  type ThreadMessageAttachment,
   type ThreadMessagesData,
   type ThreadsData,
   type UpdatePresenceTemplateArgs,

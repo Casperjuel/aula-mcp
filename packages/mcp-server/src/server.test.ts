@@ -213,6 +213,7 @@ describe('MCP server: tools/list', () => {
     expect(names).toContain('aula.calendar.events');
     expect(names).toContain('aula.messages.list_threads');
     expect(names).toContain('aula.messages.get_thread');
+    expect(names).toContain('aula.messages.get_attachment');
     expect(names).toContain('aula.notifications.list');
     expect(names).toContain('aula.posts.list');
     expect(names).toContain('aula.ugeplan.easyiq');
