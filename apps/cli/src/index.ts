@@ -20,6 +20,7 @@ import { runDoctor } from './commands/doctor.ts';
 import { runLog } from './commands/log.ts';
 import { runLogin } from './commands/login.ts';
 import { runLogout } from './commands/logout.ts';
+import { runNotificationsListIds } from './commands/notifications.ts';
 import { runRefreshStepup } from './commands/refresh-stepup.ts';
 import { runStatus } from './commands/status.ts';
 import { runThreadFetch, runThreadsListIds } from './commands/threads.ts';
@@ -43,6 +44,7 @@ ${fmt.bold('Usage')}:
   aula tokens export <dir>
   aula tokens import <dir>
   aula threads list-ids [--page-size N] [--json]
+  aula notifications list-ids [--json]
   aula ugeplan fetch --child-ids <csv> --institution-codes <csv> [--iso-weeks <csv>]
   aula thread fetch <id> [--page N]
   aula transcript list [--json]
@@ -156,6 +158,19 @@ async function main(): Promise<void> {
         default:
           process.stderr.write(`Unknown threads subcommand: ${sub ?? '<missing>'}\n`);
           process.stderr.write('Try: aula threads list-ids [--page-size N]\n');
+          process.exit(2);
+      }
+      break;
+    }
+    case 'notifications': {
+      const sub = args.positional[0];
+      switch (sub) {
+        case 'list-ids':
+          await runNotificationsListIds();
+          break;
+        default:
+          process.stderr.write(`Unknown notifications subcommand: ${sub ?? '<missing>'}\n`);
+          process.stderr.write('Try: aula notifications list-ids\n');
           process.exit(2);
       }
       break;
