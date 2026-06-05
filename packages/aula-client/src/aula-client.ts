@@ -347,10 +347,22 @@ export class AulaClient {
    * `posts.getAllPosts` — class-level news feed (teacher posts, etc.).
    * Returns the raw `data` field. Pagination via `limit` + `index` (both 0-based).
    */
-  async getPosts(opts: { limit?: number; index?: number } = {}): Promise<unknown> {
-    const params: Record<string, string> = {};
-    if (opts.limit !== undefined) params.limit = String(opts.limit);
-    if (opts.index !== undefined) params.index = String(opts.index);
+  async getPosts(opts: Record<string, any> = {}): Promise<unknown> {
+    const params: Record<string, any> = {};
+    
+    if (opts.limit !== undefined) params.limit = opts.limit;
+    if (opts.index !== undefined) params.index = opts.index;
+    if (opts.parent !== undefined) params.parent = opts.parent;
+    if (opts.isUnread !== undefined) params.isUnread = opts.isUnread;
+
+    // Manually serialize the array into separate, numbered keys!
+    // This produces: institutionProfileIds[0]=3288873&institutionProfileIds[1]=3288893
+    if (opts.profileIds && Array.isArray(opts.profileIds)) {
+      opts.profileIds.forEach((id: number, index: number) => {
+        params[`institutionProfileIds[${index}]`] = id;
+      });
+    }
+
     return this.getJson<unknown>('posts.getAllPosts', params);
   }
 
