@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/Casperjuel/aula-mcp/compare/v1.2.0...v1.3.0) (2026-06-09)
+
+
+### Features
+
+* **cli:** add `aula ugeplan fetch` for no-LLM week-plan pre-check ([#40](https://github.com/Casperjuel/aula-mcp/issues/40)) ([0a2ba72](https://github.com/Casperjuel/aula-mcp/commit/0a2ba721f96980db0110faedcc9af3e8589af728))
+
 ## [1.2.0](https://github.com/Casperjuel/aula-mcp/compare/v1.1.0...v1.2.0) (2026-05-22)
 
 
