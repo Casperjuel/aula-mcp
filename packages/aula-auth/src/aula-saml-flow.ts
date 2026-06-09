@@ -136,11 +136,20 @@ export function parseIdentitySelectionPage(html: string): {
   // We can't easily get aligned arrays from extractAllAttr because the labels
   // live in a child div, so use cheerio directly here.
   const $ = cheerio.load(html);
+  // The live page wraps each `a.list-link` inside a `div.list-link-box`, so
+  // this selector matches both the container *and* its nested anchor — and
+  // each identity would be yielded twice (the duplicated-list bug). Dedupe on
+  // the underlying anchor element so every identity is emitted exactly once.
+  // Bare anchors (no wrapping box, as in our fixtures) still match once.
+  const seenAnchors = new Set<unknown>();
   $('a.list-link, div.list-link-box').each((_: number, el) => {
     const $el = $(el);
     const $a = $el.is('a') ? $el : $el.find('a').first();
+    const anchor = $a.get(0);
+    if (!anchor || seenAnchors.has(anchor)) return;
     const json = $a.attr('data-loginoptions');
     if (!json) return;
+    seenAnchors.add(anchor);
     optionsJson.push(json);
     const labelEl = $el.find('div.list-link-text').first();
     labels.push(labelEl.length ? labelEl.text().trim() : `Option ${optionsJson.length}`);

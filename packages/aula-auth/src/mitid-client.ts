@@ -41,7 +41,11 @@ import type {
   NextAuthenticatorResponse,
   SrpInitResponse,
 } from './mitid-types.ts';
-import { AUTHENTICATOR_TO_COMBINATION_ID, COMBINATION_ID_TO_AUTHENTICATOR } from './mitid-types.ts';
+import {
+  AUTHENTICATOR_TO_COMBINATION_ID,
+  COMBINATION_ID_TO_AUTHENTICATOR,
+  normalizeAuthenticatorType,
+} from './mitid-types.ts';
 import { mitidUrls } from './mitid-urls.ts';
 import { CustomSrp } from './srp.ts';
 
@@ -636,7 +640,9 @@ export class MitidClient {
   }
 
   private applyNextAuthenticator(next: NextAuthenticator): void {
-    const human = next.authenticatorType as MitidAuthenticatorType;
+    // The server may use a different label than our human type — notably it
+    // returns `TOKEN` for the hardware kodeviser, which we call `CODE_TOKEN`.
+    const human = normalizeAuthenticatorType(next.authenticatorType);
     this.currentAuthenticatorType = human;
     this.currentAuthenticatorSessionFlowKey = next.authenticatorSessionFlowKey;
     this.currentAuthenticatorEafeHash = next.eafeHash;
