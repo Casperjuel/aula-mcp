@@ -25,6 +25,7 @@ import { runStatus } from './commands/status.ts';
 import { runThreadFetch, runThreadsListIds } from './commands/threads.ts';
 import { runTokensExport, runTokensImport } from './commands/tokens.ts';
 import { runTranscriptList, runTranscriptPrune, runTranscriptView } from './commands/transcript.ts';
+import { runUgeplanFetch } from './commands/ugeplan.ts';
 import { runWhoami } from './commands/whoami.ts';
 import { fmt } from './io.ts';
 import { parseArgs } from './parse-args.ts';
@@ -42,6 +43,7 @@ ${fmt.bold('Usage')}:
   aula tokens export <dir>
   aula tokens import <dir>
   aula threads list-ids [--page-size N] [--json]
+  aula ugeplan fetch --child-ids <csv> --institution-codes <csv> [--iso-weeks <csv>]
   aula thread fetch <id> [--page N]
   aula transcript list [--json]
   aula transcript view <file> [--json]
@@ -154,6 +156,56 @@ async function main(): Promise<void> {
         default:
           process.stderr.write(`Unknown threads subcommand: ${sub ?? '<missing>'}\n`);
           process.stderr.write('Try: aula threads list-ids [--page-size N]\n');
+          process.exit(2);
+      }
+      break;
+    }
+    case 'ugeplan': {
+      const sub = args.positional[0];
+      switch (sub) {
+        case 'fetch': {
+          const childIdsRaw = args.flags['child-ids'] ?? args.flags.childIds;
+          const instRaw = args.flags['institution-codes'] ?? args.flags.institutionCodes;
+          const weeksRaw = args.flags['iso-weeks'] ?? args.flags.isoWeeks;
+          const childIds =
+            typeof childIdsRaw === 'string'
+              ? childIdsRaw
+                  .split(',')
+                  .map((s) => Number.parseInt(s.trim(), 10))
+                  .filter((n) => Number.isFinite(n) && n > 0)
+              : [];
+          const institutionCodes =
+            typeof instRaw === 'string'
+              ? instRaw
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0)
+              : [];
+          const isoWeeks =
+            typeof weeksRaw === 'string'
+              ? weeksRaw
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0)
+              : undefined;
+          if (childIds.length === 0 || institutionCodes.length === 0) {
+            process.stderr.write(
+              'Usage: aula ugeplan fetch --child-ids <csv> --institution-codes <csv> [--iso-weeks <csv>]\n',
+            );
+            process.exit(2);
+          }
+          await runUgeplanFetch({
+            childIds,
+            institutionCodes,
+            ...(isoWeeks ? { isoWeeks } : {}),
+          });
+          break;
+        }
+        default:
+          process.stderr.write(`Unknown ugeplan subcommand: ${sub ?? '<missing>'}\n`);
+          process.stderr.write(
+            'Try: aula ugeplan fetch --child-ids <csv> --institution-codes <csv> [--iso-weeks <csv>]\n',
+          );
           process.exit(2);
       }
       break;
