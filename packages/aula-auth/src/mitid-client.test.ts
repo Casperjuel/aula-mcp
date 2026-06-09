@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Buffer } from 'node:buffer';
 import { MitidError, parseAuxResponse } from './mitid-client.ts';
+import { normalizeAuthenticatorType } from './mitid-types.ts';
 
 describe('parseAuxResponse', () => {
   function buildAuxBody(inner: unknown): string {
@@ -60,5 +61,17 @@ describe('parseAuxResponse', () => {
   test('throws when checksum or sessionId missing', () => {
     const body = buildAuxBody({ coreClient: {}, parameters: {} });
     expect(() => parseAuxResponse(body)).toThrow(MitidError);
+  });
+});
+
+describe('normalizeAuthenticatorType', () => {
+  test('maps the server\'s "TOKEN" (hardware kodeviser) to CODE_TOKEN', () => {
+    expect(normalizeAuthenticatorType('TOKEN')).toBe('CODE_TOKEN');
+  });
+
+  test('passes APP, PASSWORD and CODE_TOKEN through unchanged', () => {
+    expect(normalizeAuthenticatorType('APP')).toBe('APP');
+    expect(normalizeAuthenticatorType('PASSWORD')).toBe('PASSWORD');
+    expect(normalizeAuthenticatorType('CODE_TOKEN')).toBe('CODE_TOKEN');
   });
 });

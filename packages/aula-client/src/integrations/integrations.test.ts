@@ -185,6 +185,22 @@ describe('MeebookClient.getWeekPlan', () => {
     expect(http.requested[0]?.headers?.sessionuuid).toBe('cj');
     expect(http.requested[0]?.headers?.['x-version']).toBe('1.0');
   });
+
+  test('childFilter[] uses the per-child unilogin, not the numeric child id', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: '[]' });
+    const client = new MeebookClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    await client.getWeekPlan(ctx({ childIds: [111293], childUserIds: ['thit0305'] }));
+    const url = http.requested[0]?.url ?? '';
+    expect(url).toContain('childFilter%5B%5D=thit0305');
+    expect(url).not.toContain('111293');
+  });
+
+  test('falls back to the numeric child id when no unilogin was resolved', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: '[]' });
+    const client = new MeebookClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    await client.getWeekPlan(ctx({ childIds: [111293], childUserIds: [''] }));
+    expect(http.requested[0]?.url ?? '').toContain('childFilter%5B%5D=111293');
+  });
 });
 
 // --------------------------------------------------------------------------

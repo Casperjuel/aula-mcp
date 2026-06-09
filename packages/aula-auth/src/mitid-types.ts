@@ -30,6 +30,25 @@ export const AUTHENTICATOR_TO_COMBINATION_ID: Readonly<Record<MitidAuthenticator
     PASSWORD: '', // reached implicitly after CODE_TOKEN
   });
 
+/**
+ * Normalize the server's raw `authenticatorType` string into our human type.
+ *
+ * The MitID backend labels the hardware code generator ("kodeviser") as
+ * `TOKEN`, while we call it `CODE_TOKEN` everywhere (matching Aula's UI and
+ * the combination-id table above). Without this, an account that logs in with
+ * a physical kodeviser gets `currentAuthenticatorType = 'TOKEN'`, and the
+ * `selectAuthenticator('CODE_TOKEN')` guard then throws because the strings
+ * don't match.
+ *
+ * `APP` and `PASSWORD` pass through unchanged. Unknown values are returned
+ * as-is (cast), so a genuinely new authenticator surfaces loudly downstream
+ * rather than being silently swallowed.
+ */
+export function normalizeAuthenticatorType(raw: string): MitidAuthenticatorType {
+  if (raw === 'TOKEN') return 'CODE_TOKEN';
+  return raw as MitidAuthenticatorType;
+}
+
 /** Returned by `GET /authentication-sessions/{id}` on construction. */
 export interface AuthenticationSessionResponse {
   brokerSecurityContext: string;

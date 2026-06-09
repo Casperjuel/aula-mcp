@@ -65,7 +65,16 @@ export class MeebookClient {
       const params = new URLSearchParams();
       params.set('currentWeekNumber', ctx.isoWeek);
       params.set('userProfile', 'guardian');
-      for (const cid of ctx.childIds) params.append('childFilter[]', String(cid));
+      // Meebook keys `childFilter[]` on the child's unilogin (e.g. "thit0305"),
+      // NOT the numeric Aula child profile id — passing the number yields a
+      // 400 "Fandt et unilogin i child filter med et ugyldigt format". Prefer
+      // the per-child opaque userId (aligned by index); fall back to the
+      // numeric id only when no userId was resolved for that child.
+      for (let i = 0; i < ctx.childIds.length; i++) {
+        const userId = ctx.childUserIds?.[i];
+        const filter = userId && userId.length > 0 ? userId : String(ctx.childIds[i]);
+        params.append('childFilter[]', filter);
+      }
       for (const code of ctx.institutionCodes) params.append('institutionFilter[]', code);
       const url = `${MEEBOOK_BASE}?${params.toString()}`;
       const res = await this.http.request(url, {

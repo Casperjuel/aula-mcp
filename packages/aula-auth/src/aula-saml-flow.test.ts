@@ -105,6 +105,27 @@ describe('parseIdentitySelectionPage', () => {
     expect(formInputs.csrf).toBe('x');
   });
 
+  test('does not duplicate identities when anchors are wrapped in list-link-box', () => {
+    // The live page wraps each anchor in a `div.list-link-box`; the selector
+    // matches both the box and its nested anchor. Each identity must appear once.
+    const wrapped = `
+      <form><input type="hidden" name="csrf" value="x" /></form>
+      <div class="list-link-box">
+        <a class="list-link" data-loginoptions='{"id":"1","name":"Child A"}'>
+          <div class="list-link-text">Child A (Forælder)</div>
+        </a>
+      </div>
+      <div class="list-link-box">
+        <a class="list-link" data-loginoptions='{"id":"2","name":"Child B"}'>
+          <div class="list-link-text">Child B (Forælder)</div>
+        </a>
+      </div>`;
+    const { options } = parseIdentitySelectionPage(wrapped);
+    expect(options).toHaveLength(2);
+    expect(options.map((o) => o.name)).toEqual(['Child A (Forælder)', 'Child B (Forælder)']);
+    expect(options.map((o) => o.index)).toEqual([1, 2]);
+  });
+
   test('throws when no identity options are present', () => {
     expect(() => parseIdentitySelectionPage('<html></html>')).toThrow(AulaSamlError);
   });
