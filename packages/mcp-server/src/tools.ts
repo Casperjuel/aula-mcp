@@ -18,8 +18,8 @@ import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
 import { buildDiscoverManifest } from './discover.ts';
-import { readFile } from 'fs/promises';
-import { createRequire } from 'module';
+import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { PDFParse } = require('pdf-parse');
