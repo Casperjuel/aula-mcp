@@ -644,11 +644,11 @@ server.registerTool(
   const profileIds = args.profileIds ?? await resolveFamilyProfileIds(client);
 
   const result: any = await client.getPosts({
-  limit: args.limit,
-  index: args.index ?? 0,
-  parent: "profile",
-  isUnread: args.onlyUnread === true ? "true" : "false",
-  profileIds,
+    limit: args.limit,
+    index: args.index ?? 0,
+    parent: 'profile',
+    isUnread: args.onlyUnread === true ? 'true' : 'false',
+    profileIds,
   });
 
     const rawPosts: any[] = Array.isArray(result)
