@@ -1145,11 +1145,11 @@ server.registerTool(
         pages: result.total,   // see note below
         info: result.info,
       });
-    } catch (error: any) {
+    } catch (error) {
       return jsonContent({
         ok: false,
         error: 'failed_to_read_pdf',
-        message: error.message ?? String(error),
+        message: error instanceof Error ? error.message : String(error),
       });
     } finally {
       // v2 holds pdf.js resources; release them
