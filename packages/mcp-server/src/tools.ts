@@ -1131,7 +1131,7 @@ server.registerTool(
       },
     },
     async (args) => {
-    let parser: any = null;
+    let parser: { getText(): Promise<{ text: string; total: number; info: unknown }>; destroy?(): Promise<void> } | null = null;
     try {
       const dataBuffer = await readFile(args.path);
 
