@@ -122,6 +122,35 @@ export const PRESENCE_STATUS = {
 
 export type PresenceStatusName = (typeof PRESENCE_STATUS)[keyof typeof PRESENCE_STATUS];
 
+/**
+ * The status numbers `presence.updateStatusByInstitutionProfileIds` accepts.
+ *
+ * ## These are NOT the numbers above
+ *
+ * Aula has two presence enums that both use 0-8, and they do not agree. The
+ * one above is what `getDailyOverview` reports; this one is what the write
+ * endpoint takes. Reusing a number from the read enum silently sets the
+ * wrong thing — `7` means SYG when read back, but PHYSICAL_PLACEMENT when
+ * written.
+ *
+ * Taken from the presence frontend bundle, where the write path is compiled
+ * as `e[e.NOT_PRESENT=0]="NOT_PRESENT",e[e.SICK=1]="SICK",…`.
+ */
+export const PRESENCE_WRITE_STATUS = {
+  NOT_PRESENT: 0,
+  SICK: 1,
+  REPORTED_ABSENT: 2,
+  PRESENT: 3,
+  FIELDTRIP: 4,
+  SLEEPING: 5,
+  SPARE_TIME_ACTIVITY: 6,
+  PHYSICAL_PLACEMENT: 7,
+  CHECKED_OUT: 8,
+} as const;
+
+export type PresenceWriteStatus =
+  (typeof PRESENCE_WRITE_STATUS)[keyof typeof PRESENCE_WRITE_STATUS];
+
 export interface DailyOverviewEntry {
   status: number;
   location?: string;

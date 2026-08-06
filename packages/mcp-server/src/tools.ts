@@ -11,6 +11,7 @@ import {
   isoDate,
   isoWeekString,
   isoWeekToMonday,
+  PRESENCE_WRITE_STATUS,
 } from '@aula-mcp/aula-client';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -269,6 +270,48 @@ export function registerTools(server: McpServer, context: AulaContext): void {
           ...(args.selfDeciderEndTime ? { selfDeciderEndTime: args.selfDeciderEndTime } : {}),
           ...(args.comment !== undefined ? { comment: args.comment } : {}),
           ...(args.repeatUntil ? { repeatUntil: args.repeatUntil } : {}),
+        });
+        return jsonContent({ ok: true, result });
+      },
+    );
+
+    // --- aula.presence.report_sick (gated, write) --------------------------
+    //
+    // Same gate, and for the same reason: telling a daycare a child is ill is
+    // not something an agent should be able to do unasked.
+    //
+    // One tool for both directions, because Aula has one endpoint for both:
+    // reporting sick and taking it back are the same call with a different
+    // status.
+
+    server.registerTool(
+      'aula.presence.report_sick',
+      {
+        title: 'Report a child sick (or well again)',
+        description:
+          'Mark a child as sick for today, or take the report back. WRITES to Aula — ' +
+          'enabled when AULA_MCP_WRITE=1. The institution is notified. Applies to today; ' +
+          'Aula has no future-dated sick report — use aula.presence.set_template or a ' +
+          'vacation registration for a planned absence. An institution can withhold this ' +
+          'from guardians, in which case Aula rejects the call.',
+        inputSchema: {
+          institutionProfileIds: z
+            .array(z.number().int().positive())
+            .min(1)
+            .describe(
+              'Child institution-profile ids — the same ids passed to aula.presence.today ' +
+                'as childIds. Several children can be reported in one call.',
+            ),
+          sick: z.boolean().describe('true reports the child sick; false takes the report back.'),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        const result = await client.updatePresenceStatus({
+          institutionProfileIds: args.institutionProfileIds,
+          // NOT the numbers presence.today reports back. See
+          // PRESENCE_WRITE_STATUS — the two enums disagree on every value.
+          status: args.sick ? PRESENCE_WRITE_STATUS.SICK : PRESENCE_WRITE_STATUS.NOT_PRESENT,
         });
         return jsonContent({ ok: true, result });
       },
