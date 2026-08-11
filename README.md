@@ -121,9 +121,25 @@ Så kan du bare spørge naturligt — børnenes navne bliver fuzzy-matched mod `
 
 Claude kalder `aula.discover` én gang, vælger den rigtige ugeplan-vendor for din skole ud fra `detectedWidgets`, og svarer på dansk med dansk-formatterede datoer.
 
+### stdio i stedet for HTTP
+
+`pnpm mcp` starter en HTTP-server på en port. Der findes også en **stdio-transport** med præcis samme værktøjer, hvor klienten selv starter processen. Ingen port, ingen daemon, intet der lytter på loopback:
+
+```sh
+claude mcp add aula -- bun /absolut/sti/til/aula-mcp/packages/mcp-server/src/server-stdio.ts
+```
+
+Fra repo-roden virker `pnpm mcp:stdio` også. Bemærk at stdout er JSON-RPC-kanalen. pnpm's `$ <kommando>`-banner går til stderr, så det forstyrrer ikke.
+
+De HTTP-specifikke variabler (`AULA_MCP_PORT`, `AULA_MCP_HOST`, `AULA_MCP_ALLOW_REMOTE`) ignoreres her. `AULA_MCP_DIR`, `AULA_MCP_KEY`, `AULA_MCP_WRITE` og `AULA_MCP_RAW` virker som normalt, plus `AULA_MCP_LOG=1` for logs på stderr.
+
+> Kører klienten på samme maskine som serveren, er stdio det simpleste valg. Skal serveren derimod køre et andet sted, fx Home Assistant, en Pi eller en VPS, er HTTP det rigtige. Se [Self-hosting](#self-hosting).
+
 ### Claude Desktop
 
 Drop snippet'et fra [`examples/claude-config/claude-desktop.json`](./examples/claude-config/claude-desktop.json) ind i `~/Library/Application Support/Claude/claude_desktop_config.json`.
+
+Claude Desktop kan også selv starte serveren over stdio, så du slipper for at have `pnpm mcp` kørende i et terminalvindue. Brug [`examples/claude-config/claude-desktop-stdio.json`](./examples/claude-config/claude-desktop-stdio.json) og ret stien til dit eget checkout.
 
 ### claude.ai (web)
 
