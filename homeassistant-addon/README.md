@@ -42,7 +42,7 @@ a setup with no browser access), the original workstation flow still works:
 ```sh
 git clone https://github.com/Casperjuel/aula-mcp.git && cd aula-mcp
 pnpm install
-pnpm login                                 # MitID QR-code flow on workstation
+pnpm aula login                            # MitID QR-code flow on workstation
 pnpm aula tokens export ./aula-bundle      # writes tokens.json + .key
 scp aula-bundle/tokens.json aula-bundle/.key homeassistant:/config/aula-mcp/
 ```
@@ -91,8 +91,8 @@ the add-on to rebuild against the latest commit.
   on a trusted LAN this is generally fine; if your network has untrusted
   peers, set `allow_remote: false` and front the add-on with HA Ingress.
 - **MitID re-login still happens on a workstation.** When your Aula refresh
-  token expires (Aula rotates aggressively), re-run `pnpm login` + `pnpm aula
-  tokens export` and recopy the bundle. There's no headless re-login flow.
+  token expires (Aula rotates aggressively), re-run `pnpm aula login` + `pnpm
+  aula tokens export` and recopy the bundle. There's no headless re-login flow.
 - **One arch image per build.** Pre-built multi-arch images aren't published;
   Supervisor builds the image locally on install. First start can take a
   minute or two on a Raspberry Pi.

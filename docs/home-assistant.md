@@ -113,7 +113,7 @@ workstation og kopiere bundle'en:
 ```sh
 git clone https://github.com/Casperjuel/aula-mcp.git && cd aula-mcp
 pnpm install
-pnpm login                              # MitID QR-flow på workstation
+pnpm aula login                         # MitID QR-flow på workstation
 pnpm aula tokens export ./aula-bundle   # → aula-bundle/tokens.json + .key
 ```
 

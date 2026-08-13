@@ -79,16 +79,18 @@ pnpm install
 pnpm typecheck && pnpm lint && pnpm test
 
 # 2. Første-gangs MitID-login (QR-kode i MitID-appen)
-pnpm login
+pnpm aula login
 
 # 3. Health-check af alle Aula-endpoints
-pnpm doctor
+pnpm aula doctor
 
 # 4. Start MCP-serveren (http://127.0.0.1:7878/mcp)
 pnpm mcp
 ```
 
-De fleste CLI-kommandoer har en kort genvej: `pnpm login`, `pnpm doctor`, `pnpm whoami`, `pnpm status`, `pnpm logout`. Til alt andet videresender `pnpm aula <kommando>` til CLI'en (fx `pnpm aula transcript list`, `pnpm aula log --last 5`).
+`pnpm aula <kommando>` videresender til CLI'en — fx `pnpm aula login`, `pnpm aula doctor`, `pnpm aula whoami`, `pnpm aula status`, `pnpm aula logout`, `pnpm aula transcript list`, `pnpm aula log --last 5`.
+
+> **Skriv `aula` med.** `pnpm login`, `pnpm logout`, `pnpm doctor` og `pnpm whoami` er pnpm's *egne* indbyggede kommandoer, og de vinder over scripts med samme navn i `package.json`. `pnpm login` starter et npmjs.com-login med sin egen QR-kode — ikke MitID. Scan aldrig den QR-kode i MitID-appen.
 
 `doctor`-kommandoen kører hvert read-endpoint igennem og rapporterer status + svartid for hvert. Det er det hurtigste "virker det her overhovedet?"-tjek:
 
@@ -415,7 +417,7 @@ pnpm test             # bun:test-suiterne (248 cases)
 pnpm test:watch       # re-run ved ændring
 ```
 
-Alle andre top-level-scripts: `pnpm aula <cmd>`, `pnpm mcp`, plus per-kommando-genvejene (`pnpm login`, `pnpm doctor`, `pnpm whoami`, `pnpm status`, `pnpm logout`).
+Alle andre top-level-scripts: `pnpm aula <cmd>`, `pnpm mcp`, `pnpm digest`.
 
 ---
 
