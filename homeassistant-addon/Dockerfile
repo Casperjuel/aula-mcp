@@ -9,7 +9,7 @@
 # can't reach up into the monorepo with `COPY ../packages`. Instead we git-
 # clone the source inside the build. The AULA_MCP_REF arg lets you pin to a
 # tag; default is `main` so a re-install always picks up the latest.
-ARG BUILD_FROM=oven/bun:1.3-debian
+ARG BUILD_FROM=node:22-bookworm-slim
 # hadolint ignore=DL3006
 FROM ${BUILD_FROM}
 
@@ -25,7 +25,8 @@ RUN apt-get update \
 # pnpm is the workspace tool of record for this monorepo. Bun's installer
 # can't honour pnpm-lock.yaml, so install pnpm via Bun's npm-compat layer
 # and let it resolve the workspace deterministically.
-RUN bun install -g pnpm@10
+RUN corepack enable \
+  && corepack prepare pnpm@10 --activate
 
 WORKDIR /app
 
