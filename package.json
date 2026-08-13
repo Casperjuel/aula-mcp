@@ -22,6 +22,7 @@
     "doctor": "bun apps/cli/src/index.ts doctor",
     "whoami": "bun apps/cli/src/index.ts whoami",
     "status": "bun apps/cli/src/index.ts status",
+    "digest": "bun apps/digest/src/index.ts",
     "logout": "bun apps/cli/src/index.ts logout",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test",
