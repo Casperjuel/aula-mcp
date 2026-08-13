@@ -14,8 +14,13 @@ FROM node:22-bookworm-slim
 ARG AULA_MCP_REF=main
 
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends git jq ca-certificates \
+  && apt-get install -y --no-install-recommends git jq ca-certificates curl unzip \
   && rm -rf /var/lib/apt/lists/*
+
+# Bun is required at runtime — the mcp-server package uses Bun.serve directly
+# and won't run under plain Node.
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
 
 RUN corepack enable \
   && corepack prepare pnpm@10 --activate
