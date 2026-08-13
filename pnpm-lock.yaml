@@ -44,6 +44,15 @@ importers:
         specifier: ^0.12.2
         version: 0.12.2
 
+  apps/digest:
+    dependencies:
+      '@aula-mcp/aula-auth':
+        specifier: workspace:*
+        version: link:../../packages/aula-auth
+      '@aula-mcp/aula-client':
+        specifier: workspace:*
+        version: link:../../packages/aula-client
+
   packages/aula-auth:
     dependencies:
       cheerio:
