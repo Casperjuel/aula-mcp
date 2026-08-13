@@ -30,7 +30,7 @@ RUN bun install -g pnpm@10
 WORKDIR /app
 
 RUN git clone --depth 1 --branch "${AULA_MCP_REF}" \
-  https://github.com/Casperjuel/aula-mcp.git .
+  https://github.com/fcavalca/aula-mcp.git .
 
 RUN pnpm install --frozen-lockfile
 
