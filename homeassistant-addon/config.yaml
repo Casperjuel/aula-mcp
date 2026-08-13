@@ -1,5 +1,5 @@
 name: aula-mcp-test
-version: "1.0.4"
+version: "1.0.5"
 slug: aula_mcp_test
 description: >-
   MCP server for the Danish school platform Aula. Exposes aula.discover,
