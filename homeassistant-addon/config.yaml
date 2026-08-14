@@ -1,5 +1,5 @@
 name: aula-mcp
-version: "1.0.1"
+version: "1.0.2"
 slug: aula_mcp
 description: >-
   MCP server for the Danish school platform Aula. Exposes aula.discover,
