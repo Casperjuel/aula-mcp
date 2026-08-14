@@ -417,7 +417,7 @@ pnpm test             # bun:test-suiterne (248 cases)
 pnpm test:watch       # re-run ved ændring
 ```
 
-Alle andre top-level-scripts: `pnpm aula <cmd>`, `pnpm mcp`, `pnpm digest`.
+Alle andre top-level-scripts: `pnpm aula <cmd>`, `pnpm mcp`, `pnpm mcp:stdio`, `pnpm status`.
 
 ---
 

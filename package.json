@@ -18,7 +18,7 @@
     "aula": "bun apps/cli/src/index.ts",
     "mcp": "bun packages/mcp-server/src/server.ts",
     "mcp:stdio": "bun packages/mcp-server/src/server-stdio.ts",
-    "digest": "bun apps/digest/src/index.ts",
+    "status": "bun apps/cli/src/index.ts status",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "bun test",
     "test:watch": "bun test --watch",
