@@ -226,6 +226,8 @@ describe('MCP server: tools/list', () => {
     expect(names).not.toContain('aula.raw_request');
     // aula.presence.set_template is gated the same way behind AULA_MCP_WRITE.
     expect(names).not.toContain('aula.presence.set_template');
+    // Same gate — reporting a child sick must never register on a read-only server.
+    expect(names).not.toContain('aula.presence.report_sick');
   });
 });
 

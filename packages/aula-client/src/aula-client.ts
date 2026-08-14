@@ -32,7 +32,7 @@ import type {
   ThreadsData,
   UpdatePresenceTemplateArgs,
 } from './aula-types.ts';
-import { PRESENCE_ACTIVITY_TYPE } from './aula-types.ts';
+import { PRESENCE_ACTIVITY_TYPE, type PresenceStatusCode } from './aula-types.ts';
 import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
 
 export interface AulaClientOptions {
@@ -176,6 +176,38 @@ export class AulaClient {
     return this.postJson<unknown>(
       'presence.updatePresenceTemplate',
       JSON.stringify(buildPresenceTemplateBody(args)),
+    );
+  }
+
+  /**
+   * `presence.updateStatusByInstitutionProfileIds` — report a child sick, or
+   * take the report back.
+   *
+   * Mirrors the presence frontend's `UPDATE_SICK` action, which posts
+   * `{ institutionProfileIds, status }` and shows either
+   * SUCCESS_TOAST_REGISTER_SICK or SUCCESS_TOAST_UNREGISTER_SICK depending on
+   * whether `status` is SICK. One method does both directions.
+   *
+   * Takes `PRESENCE_STATUS_CODE` values — the same numbering
+   * `getDailyOverview` returns. See the comment on that constant.
+   *
+   * An institution can withhold this from guardians (the presence
+   * configuration's `report_sick` flag). Aula answers with an error in that
+   * case; it is not something we can tell in advance without a second call.
+   *
+   * This is a write to the live Aula platform — the MCP server gates the
+   * tool that calls it behind `AULA_MCP_WRITE=1`.
+   */
+  async updatePresenceStatus(args: {
+    institutionProfileIds: number[];
+    status: PresenceStatusCode;
+  }): Promise<unknown> {
+    return this.postJson<unknown>(
+      'presence.updateStatusByInstitutionProfileIds',
+      JSON.stringify({
+        institutionProfileIds: args.institutionProfileIds,
+        status: args.status,
+      }),
     );
   }
 
