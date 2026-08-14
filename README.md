@@ -141,6 +141,8 @@ Drop snippet'et fra [`examples/claude-config/claude-desktop.json`](./examples/cl
 
 Claude Desktop kan også selv starte serveren over stdio, så du slipper for at have `pnpm mcp` kørende i et terminalvindue. Brug [`examples/claude-config/claude-desktop-stdio.json`](./examples/claude-config/claude-desktop-stdio.json) og ret stien til dit eget checkout.
 
+Brug den fulde sti til `bun` (`which bun`) i stedet for bare `bun`. Claude Desktop startes fra Finder og arver ikke din shell-`PATH`, så `~/.bun/bin` er typisk ikke med — serveren starter bare ikke, uden nogen tydelig fejl.
+
 ### claude.ai (web)
 
 Web-UI'et kræver en offentlig HTTPS-URL — `127.0.0.1` virker ikke, fordi forbindelsen sker server-side fra Anthropic's cloud. Til en hurtig test:

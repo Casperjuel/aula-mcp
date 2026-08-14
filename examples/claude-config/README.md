@@ -24,6 +24,12 @@ claude mcp add aula -- bun /absolute/path/to/aula-mcp/packages/mcp-server/src/se
 
 For Claude Desktop, see [`claude-desktop-stdio.json`](./claude-desktop-stdio.json) and correct the path to your own checkout.
 
+That example uses a bare `bun` as the command, which relies on `bun` being on the spawned process's `PATH`. Claude Code inherits your shell's, so it just works. Claude Desktop on macOS does not — a GUI-launched app gets a minimal `PATH` that usually excludes `~/.bun/bin`, and the server fails to start with no obvious reason. Run `which bun` and use the absolute path there instead:
+
+```json
+"command": "/Users/you/.bun/bin/bun"
+```
+
 `pnpm mcp:stdio` works too when run from the repo root. stdout carries JSON-RPC, so nothing else may write to it. pnpm's own `$ <command>` banner goes to stderr and is therefore harmless. Set `AULA_MCP_LOG=1` for server logs (also stderr). The HTTP-only variables (`AULA_MCP_PORT`, `AULA_MCP_HOST`, `AULA_MCP_ALLOW_REMOTE`) are ignored on this transport.
 
 ## Prerequisites
