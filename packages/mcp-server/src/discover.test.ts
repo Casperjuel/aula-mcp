@@ -166,7 +166,10 @@ describe('buildDiscoverManifest', () => {
       const m = await buildDiscoverManifest(fakeContext());
       expect(m.writeEnabled).toBe(true);
       expect(m.capabilities.presence?.tools).toContain('aula.presence.set_template');
-      expect(m.capabilities.presence?.notes).toBeUndefined();
+      expect(m.capabilities.presence?.tools).toContain('aula.presence.report_sick');
+      // With writes on, the note switches from "this is gated" to a caution
+      // about the one tool that notifies a school.
+      expect(m.capabilities.presence?.notes).toContain('report_sick');
     } finally {
       if (original === undefined) delete process.env.AULA_MCP_WRITE;
       else process.env.AULA_MCP_WRITE = original;

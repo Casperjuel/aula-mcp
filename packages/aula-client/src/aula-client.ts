@@ -32,7 +32,7 @@ import type {
   ThreadsData,
   UpdatePresenceTemplateArgs,
 } from './aula-types.ts';
-import { PRESENCE_ACTIVITY_TYPE, type PresenceWriteStatus } from './aula-types.ts';
+import { PRESENCE_ACTIVITY_TYPE, type PresenceStatusCode } from './aula-types.ts';
 import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
 
 export interface AulaClientOptions {
@@ -188,7 +188,7 @@ export class AulaClient {
    * SUCCESS_TOAST_REGISTER_SICK or SUCCESS_TOAST_UNREGISTER_SICK depending on
    * whether `status` is SICK. One method does both directions.
    *
-   * Takes `PRESENCE_WRITE_STATUS` values — **not** the numbers
+   * Takes `PRESENCE_STATUS_CODE` values — the same numbering
    * `getDailyOverview` returns. See the comment on that constant.
    *
    * An institution can withhold this from guardians (the presence
@@ -200,7 +200,7 @@ export class AulaClient {
    */
   async updatePresenceStatus(args: {
     institutionProfileIds: number[];
-    status: PresenceWriteStatus;
+    status: PresenceStatusCode;
   }): Promise<unknown> {
     return this.postJson<unknown>(
       'presence.updateStatusByInstitutionProfileIds',

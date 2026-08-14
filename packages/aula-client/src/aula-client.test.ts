@@ -326,4 +326,38 @@ describe('AulaClient presence templates', () => {
     expect(body.expiresAt).toBe('2026-06-30');
     expect(body.presenceActivity.sendHome).toEqual({ entryTime: null, exitTime: '16:00' });
   });
+
+  // The status number is the whole payload here, and it is not verifiable
+  // against a live institution from CI — so pin it. A later refactor that
+  // reaches for a plausible-looking constant instead of SICK=1 would
+  // otherwise silently report the wrong thing to a school.
+  test('updatePresenceStatus posts SICK=1 with CSRF', async () => {
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-9');
+    http.enqueue(
+      { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({ ok: true }) }, // post
+    );
+    const c = makeClient(http);
+    await c.updatePresenceStatus({ institutionProfileIds: [42], status: 1 });
+    const post = http.requested[1];
+    expect(post?.method).toBe('POST');
+    expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
+    expect(post?.url).toContain('method=presence.updateStatusByInstitutionProfileIds');
+    expect(JSON.parse(String(post?.body))).toEqual({
+      institutionProfileIds: [42],
+      status: 1,
+    });
+  });
+
+  test('updatePresenceStatus carries every id through for a multi-child call', async () => {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({}) }, { status: 200, body: envelope({}) });
+    const c = makeClient(http);
+    await c.updatePresenceStatus({ institutionProfileIds: [1, 2, 3], status: 0 });
+    expect(JSON.parse(String(http.requested[1]?.body))).toEqual({
+      institutionProfileIds: [1, 2, 3],
+      status: 0,
+    });
+  });
 });

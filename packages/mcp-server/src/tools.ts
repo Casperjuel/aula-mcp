@@ -11,7 +11,7 @@ import {
   isoDate,
   isoWeekString,
   isoWeekToMonday,
-  PRESENCE_WRITE_STATUS,
+  PRESENCE_STATUS_CODE,
 } from '@aula-mcp/aula-client';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
@@ -132,8 +132,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       title: 'Daily presence overview',
       description:
         'Returns presence/check-in/check-out info for the given child IDs. Status codes: ' +
-        '0=IKKE_KOMMET, 1=KOMMET, 2=PAA_TUR, 3=SOVER, 4=HENTET, 5=FRI, 6=FERIE, 7=SYG, ' +
-        '8=KOMMET_SELV.',
+        '0=IKKE_KOMMET (not arrived), 1=SYG (reported sick), 2=FERIE_FRI (holiday/not ' +
+        'enrolled), 3=KOMMET (arrived/present), 4=PAA_TUR (on a trip), 5=SOVER (sleeping), ' +
+        '6=FRITIDSAKTIVITET, 7=FYSISK_PLACERING, 8=GAAET (picked up/left).',
       inputSchema: {
         childIds: z
           .array(z.number().int().positive())
@@ -300,18 +301,85 @@ export function registerTools(server: McpServer, context: AulaContext): void {
             .min(1)
             .describe(
               'Child institution-profile ids — the same ids passed to aula.presence.today ' +
-                'as childIds. Several children can be reported in one call.',
+                'as childIds, i.e. aula.discover children[].id. Must belong to the ' +
+                'logged-in guardian; anything else is rejected. Confirm the child with ' +
+                'the user before calling.',
             ),
-          sick: z.boolean().describe('true reports the child sick; false takes the report back.'),
+          sick: z
+            .boolean()
+            .describe(
+              'true reports the child sick. false takes the report back, which sets the ' +
+                'child to "ikke kommet" (not arrived) — so it is rejected unless Aula ' +
+                'currently reports that child as sick.',
+            ),
         },
       },
       async (args) => {
         const client = await context.getClient();
+
+        // Scope the write to this login's own children.
+        //
+        // Aula happily accepts any institution-profile id the caller has rights
+        // to, and the schema takes an array, so a single hallucinated number is
+        // enough to tell the wrong institution that someone else's child is
+        // ill. Resolve the guardian's actual children first and refuse anything
+        // that isn't one of them — a local error beats a phone call from a
+        // daycare.
+        const profilesData = await client.getProfilesByLogin();
+        const ownChildren = new Map<number, string>();
+        for (const profile of profilesData.profiles ?? []) {
+          for (const child of profile.children ?? []) {
+            ownChildren.set(child.id, child.name);
+          }
+        }
+        const unknownIds = args.institutionProfileIds.filter((id) => !ownChildren.has(id));
+        if (unknownIds.length > 0) {
+          return jsonContent({
+            error: 'unknown_child',
+            message:
+              'Refusing to write: these institution-profile ids are not children of the ' +
+              'logged-in guardian. Call aula.discover and use children[].id.',
+            unknownIds,
+            knownChildren: [...ownChildren].map(([id, name]) => ({ id, name })),
+          });
+        }
+
+        // Un-reporting is not a free action.
+        //
+        // Aula's own UI only offers "take the sick report back" from a sick
+        // state, so status 0 is safe there. Here nothing constrains it: calling
+        // sick:false on a child who is currently checked in would silently flip
+        // them to "ikke kommet" and still report ok. Only allow it for a child
+        // Aula currently reports as sick.
+        if (!args.sick) {
+          const overview = await client.getDailyOverview(args.institutionProfileIds);
+          const statusById = new Map<number, number>();
+          for (const entry of overview) {
+            const id = entry.institutionProfile?.id;
+            if (id !== undefined) statusById.set(id, entry.status);
+          }
+          const notSick = args.institutionProfileIds.filter(
+            (id) => statusById.get(id) !== PRESENCE_STATUS_CODE.SICK,
+          );
+          if (notSick.length > 0) {
+            return jsonContent({
+              error: 'not_reported_sick',
+              message:
+                'Refusing to write: taking a sick report back sets the child to ' +
+                '"ikke kommet" (0), so it is only safe for a child Aula currently reports ' +
+                'as sick. These are not. Use aula.presence.today to see the current status.',
+              children: notSick.map((id) => ({
+                id,
+                name: ownChildren.get(id),
+                currentStatus: statusById.get(id) ?? null,
+              })),
+            });
+          }
+        }
+
         const result = await client.updatePresenceStatus({
           institutionProfileIds: args.institutionProfileIds,
-          // NOT the numbers presence.today reports back. See
-          // PRESENCE_WRITE_STATUS — the two enums disagree on every value.
-          status: args.sick ? PRESENCE_WRITE_STATUS.SICK : PRESENCE_WRITE_STATUS.NOT_PRESENT,
+          status: args.sick ? PRESENCE_STATUS_CODE.SICK : PRESENCE_STATUS_CODE.NOT_PRESENT,
         });
         return jsonContent({ ok: true, result });
       },

@@ -105,38 +105,25 @@ export interface ProfileContextData {
 // --------------------------------------------------------------------------
 
 /**
- * Aula's presence status enum. Numbers come from the API; meanings are from
- * `binary_sensor.py` in the Python reference.
+ * Aula's presence status codes — one enum, used by both `getDailyOverview`
+ * (read) and `presence.updateStatusByInstitutionProfileIds` (write).
+ *
+ * Two independent sources agree on this numbering:
+ *
+ *  - The Python reference reads `daily_info["status"]` and indexes it into
+ *    `["Ikke kommet", "Syg", "Ferie/Fri", "Kommet/Til stede", "På tur",
+ *    "Sover", …, "Gået"]`, with a docstring spelling out 0/1/2/3/4/5/8
+ *    (`custom_components/aula/sensor.py`).
+ *  - The presence frontend bundle compiles the write path as
+ *    `e[e.NOT_PRESENT=0]="NOT_PRESENT",e[e.SICK=1]="SICK",…`.
+ *
+ * An earlier version of this file carried a second, conflicting table that
+ * claimed 1=KOMMET and 7=SYG, sourced to `binary_sensor.py` — which contains
+ * no such mapping. It was wrong: a child reported sick comes back as status
+ * 1, and the old table named that "arrived". Do not reintroduce a separate
+ * read enum without evidence from the live API.
  */
-export const PRESENCE_STATUS = {
-  0: 'IKKE_KOMMET', // not yet at school/daycare
-  1: 'KOMMET', // arrived
-  2: 'PAA_TUR', // on a trip
-  3: 'SOVER', // sleeping
-  4: 'HENTET', // picked up
-  5: 'FRI', // not enrolled today
-  6: 'FERIE', // holiday
-  7: 'SYG', // sick
-  8: 'KOMMET_SELV', // arrived independently
-} as const;
-
-export type PresenceStatusName = (typeof PRESENCE_STATUS)[keyof typeof PRESENCE_STATUS];
-
-/**
- * The status numbers `presence.updateStatusByInstitutionProfileIds` accepts.
- *
- * ## These are NOT the numbers above
- *
- * Aula has two presence enums that both use 0-8, and they do not agree. The
- * one above is what `getDailyOverview` reports; this one is what the write
- * endpoint takes. Reusing a number from the read enum silently sets the
- * wrong thing — `7` means SYG when read back, but PHYSICAL_PLACEMENT when
- * written.
- *
- * Taken from the presence frontend bundle, where the write path is compiled
- * as `e[e.NOT_PRESENT=0]="NOT_PRESENT",e[e.SICK=1]="SICK",…`.
- */
-export const PRESENCE_WRITE_STATUS = {
+export const PRESENCE_STATUS_CODE = {
   NOT_PRESENT: 0,
   SICK: 1,
   REPORTED_ABSENT: 2,
@@ -148,8 +135,26 @@ export const PRESENCE_WRITE_STATUS = {
   CHECKED_OUT: 8,
 } as const;
 
-export type PresenceWriteStatus =
-  (typeof PRESENCE_WRITE_STATUS)[keyof typeof PRESENCE_WRITE_STATUS];
+export type PresenceStatusCode = (typeof PRESENCE_STATUS_CODE)[keyof typeof PRESENCE_STATUS_CODE];
+
+/**
+ * Danish-facing names for the codes above, in the wording the Python
+ * reference uses. 6 and 7 are the two the reference never resolved (it
+ * renders them as the bare numbers), so they carry the frontend's names.
+ */
+export const PRESENCE_STATUS = {
+  0: 'IKKE_KOMMET', // not yet at school/daycare
+  1: 'SYG', // reported sick
+  2: 'FERIE_FRI', // holiday / not enrolled today
+  3: 'KOMMET', // arrived / present
+  4: 'PAA_TUR', // on a trip
+  5: 'SOVER', // sleeping
+  6: 'FRITIDSAKTIVITET', // spare-time activity
+  7: 'FYSISK_PLACERING', // physical placement
+  8: 'GAAET', // picked up / left
+} as const;
+
+export type PresenceStatusName = (typeof PRESENCE_STATUS)[keyof typeof PRESENCE_STATUS];
 
 export interface DailyOverviewEntry {
   status: number;
