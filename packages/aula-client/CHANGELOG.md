@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/Casperjuel/aula-mcp/compare/v1.2.0...v1.2.1) (2026-06-09)
+
+
+### Bug Fixes
+
+* **auth,meebook:** support MitID hardware kodeviser + fix dup identities & Meebook unilogin ([#42](https://github.com/Casperjuel/aula-mcp/issues/42)) ([1c37582](https://github.com/Casperjuel/aula-mcp/commit/1c3758220839dee0a9da259c115859d0b1e2a52f))
+
 ## [1.2.0](https://github.com/Casperjuel/aula-mcp/compare/v1.1.0...v1.2.0) (2026-05-22)
 
 
