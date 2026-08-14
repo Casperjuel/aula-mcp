@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.4.0](https://github.com/Casperjuel/aula-mcp/compare/v1.3.0...v1.4.0) (2026-08-14)
+
+
+### Features
+
+* **presence:** report a child sick, or take it back ([#59](https://github.com/Casperjuel/aula-mcp/issues/59)) ([f7e5ebf](https://github.com/Casperjuel/aula-mcp/commit/f7e5ebf267d08926c9860e5f085d3f20bf67848d))
+
+
+### Bug Fixes
+
+* **mcp-server:** set idleTimeout on the setup UI server ([#61](https://github.com/Casperjuel/aula-mcp/issues/61)) ([8be78ac](https://github.com/Casperjuel/aula-mcp/commit/8be78aca80e30e9a842eca326f918caf9a7dc8be))
+* pnpm login/logout/doctor/whoami collide with pnpm builtins ([#63](https://github.com/Casperjuel/aula-mcp/issues/63)) ([a0dd3aa](https://github.com/Casperjuel/aula-mcp/commit/a0dd3aa5e8813dbae3199a6f5037b7e956c0f31a))
+
 ## [1.3.0](https://github.com/Casperjuel/aula-mcp/compare/v1.2.0...v1.3.0) (2026-06-09)
 
 
