@@ -128,6 +128,17 @@ export function parseAuxResponse(rawBody: string | { Aux?: string }): MitidAuxDa
 }
 
 export interface AppAuthCallbacks {
+  /**
+   * Fired once, as soon as the app-auth session is armed and before the
+   * first poll.
+   *
+   * Nothing happens in this phase until the user opens the MitID app, so a
+   * caller with no output here looks like a hung process. It must fire
+   * before polling starts, not on the first `waiting` result: the first
+   * poll is a long-poll that blocks for ~25 s, which is long past the point
+   * where the user has already concluded the process is stuck.
+   */
+  onWaiting?: () => void | Promise<void>;
   onOtp?: (otp: string) => void | Promise<void>;
   /** Called every time a new pair of QR JSON payloads is received. */
   onQr?: (qr: { qr1Json: string; qr2Json: string; updateCount: number }) => void | Promise<void>;
@@ -409,6 +420,7 @@ export class MitidClient {
     const deadline = Date.now() + maxPollMs;
 
     await this.startAppAuth();
+    await callbacks.onWaiting?.();
 
     while (true) {
       if (opts.signal?.aborted) throw new MitidError('APP poll aborted by caller');

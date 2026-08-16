@@ -92,6 +92,9 @@ export async function runLogin(args: LoginCommandArgs): Promise<void> {
         return choice;
       },
       appCallbacks: {
+        onWaiting() {
+          info('Open your MitID app to continue. QR codes appear once it connects.');
+        },
         onOtp(otp) {
           info(`Enter this OTP in your MitID app: ${fmt.bold(otp)}`);
         },
