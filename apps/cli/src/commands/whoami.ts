@@ -70,7 +70,7 @@ export async function runWhoami(args: WhoamiCommandArgs = {}): Promise<void> {
       info(`Guardian user-id (used by integrations): ${guardianUserId}`);
     }
     for (const profile of profilesData.profiles ?? []) {
-      info(`Profile: ${fmt.bold(profile.name)} (id ${profile.id})`);
+      info(`Profile: ${fmt.bold(profile.displayName)} (id ${profile.profileId})`);
       for (const child of profile.children ?? []) {
         const inst = child.institutionProfile?.institutionName ?? '?';
         const code = child.institutionProfile?.institutionCode ?? '?';

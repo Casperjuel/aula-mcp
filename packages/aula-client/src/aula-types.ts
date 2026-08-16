@@ -40,8 +40,11 @@ export interface AulaInstitutionProfile {
 }
 
 export interface AulaProfile {
-  id: number;
-  name: string;
+  /** Aula names this `profileId`, not `id`. */
+  profileId: number;
+  /** Aula names this `displayName`, not `name`. */
+  displayName: string;
+  portalRole?: string;
   children?: AulaProfileChild[];
   institutionProfiles?: AulaInstitutionProfile[];
 }

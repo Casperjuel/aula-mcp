@@ -88,11 +88,16 @@ describe('AulaClient API method wrappers', () => {
     // wrapper makes its own call — two requests in total.
     http.enqueue(
       { status: 200, body: envelope({ profiles: [] }) }, // probe
-      { status: 200, body: envelope({ profiles: [{ id: 1, name: 'Casper' }] }) }, // actual call
+      // Field names match what Aula actually returns: profileId/displayName.
+      {
+        status: 200,
+        body: envelope({ profiles: [{ profileId: 1, displayName: 'Casper' }] }),
+      }, // actual call
     );
     const c = makeClient(http);
     const data = await c.getProfilesByLogin();
-    expect(data.profiles?.[0]?.name).toBe('Casper');
+    expect(data.profiles?.[0]?.displayName).toBe('Casper');
+    expect(data.profiles?.[0]?.profileId).toBe(1);
     expect(http.requested[1]?.url).toMatch(/method=profiles\.getProfilesByLogin/);
     expect(http.requested[1]?.url).toMatch(/access_token=TEST_AT/);
   });
