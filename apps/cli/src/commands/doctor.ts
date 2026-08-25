@@ -68,14 +68,15 @@ export async function runDoctor(args: DoctorCommandArgs = {}): Promise<void> {
 
   let guardianUserId: string | null = null;
   let childIds: number[] = [];
+  let detectedWidgets: string[] = [];
 
   await runCheck(checks, 'profiles.getProfileContext', async () => {
     const data = await client.getProfileContext('guardian');
     guardianUserId = data.userId == null ? null : String(data.userId);
-    const widgetIds = (data.pageConfiguration?.widgetConfigurations ?? [])
+    detectedWidgets = (data.pageConfiguration?.widgetConfigurations ?? [])
       .map((w) => w.widget?.widgetId ?? w.widgetId)
       .filter((id): id is string => typeof id === 'string' && id.length > 0);
-    return `userId=${guardianUserId ?? 'missing'}, widgets=[${widgetIds.join(',') || 'none'}]`;
+    return `userId=${guardianUserId ?? 'missing'}, widgets=[${detectedWidgets.join(',') || 'none'}]`;
   });
 
   await runCheck(checks, 'collect child IDs', async () => {
@@ -121,9 +122,15 @@ export async function runDoctor(args: DoctorCommandArgs = {}): Promise<void> {
     return `received (${typeof data}; ${JSON.stringify(data).length} chars)`;
   });
 
-  await runCheck(checks, 'aulaToken.getAulaToken (widget 0001 / EasyIQ)', async () => {
-    const t = await client.getWidgetToken('0001');
-    return `widget token issued (${t.length} chars)`;
+  // Ask for a token for a widget this profile actually has. Hardcoding
+  // 0001 (EasyIQ) made doctor report a failure on every school that uses a
+  // different vendor: Aula answers 400 for a widget you were never granted,
+  // which is correct behaviour, not a fault worth flagging.
+  await runCheck(checks, 'aulaToken.getAulaToken', async () => {
+    const widgetId = detectedWidgets[0];
+    if (!widgetId) return 'skipped — no widgets on this profile';
+    const t = await client.getWidgetToken(widgetId);
+    return `widget ${widgetId}: token issued (${t.length} chars)`;
   });
 
   // ---- output -----------------------------------------------------------------

@@ -144,7 +144,7 @@ export async function buildDiscoverManifest(context: AulaContext): Promise<Disco
   const now = Math.floor(Date.now() / 1000);
   const manifest: DiscoverManifest = {
     user: {
-      name: profilesData.profiles?.[0]?.name ?? record.username,
+      name: profilesData.profiles?.[0]?.displayName ?? record.username,
       username: record.username,
       ...(record.identityName ? { identityName: record.identityName } : {}),
     },
