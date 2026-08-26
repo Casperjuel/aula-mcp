@@ -51,29 +51,140 @@ const logger = process.env.AULA_MCP_LOG === '1' ? consoleLogger('aula-mcp') : si
 
 assertSafeBindAddress(HOST);
 
-const { mcp } = createMcpApp({ logger });
+// Streamable HTTP transport.
+//
+// One transport instance represents one MCP session. A client starts a new
+// session by POSTing an `initialize` request without an Mcp-Session-Id header.
+// The transport then generates a session ID and returns it to the client.
+//
+// Subsequent requests from that client include Mcp-Session-Id, which we use to
+// route the request back to the transport that owns that session.
+//
+// Previously aula-mcp created one global transport and reused it for every
+// client. That meant the first client could initialize successfully, but a
+// later client/reconnect would hit the same initialized transport and receive:
+//
+//   Invalid Request: Server already initialized
+//
+// Keep each session's McpApp as well as its transport because McpServer.connect()
+// binds a server instance to a single transport.
 
-// Streamable HTTP transport. Stateful mode — the SDK explicitly forbids
-// reusing a *stateless* transport across requests
-// ("Stateless transport cannot be reused across requests"), so we provide a
-// session-id generator and let the transport track per-session state. For
-// single-user use this is a single session that gets created on the first
-// request and reused thereafter.
-const transport = new WebStandardStreamableHTTPServerTransport({
-  enableJsonResponse: true,
-  sessionIdGenerator: () => crypto.randomUUID(),
-});
+interface StreamableHttpSession {
+  transport: WebStandardStreamableHTTPServerTransport;
+  app: McpApp;
+}
 
-await mcp.connect(transport);
+const streamableHttpSessions = new Map<string, StreamableHttpSession>();
 
 const app = new Hono();
 
 app.get('/healthz', (c) => c.json({ ok: true, name: 'aula-mcp' }));
 
-const handleMcp = async (request: Request): Promise<Response> => transport.handleRequest(request);
+async function handleMcp(request: Request): Promise<Response> {
+  const sessionId = request.headers.get('mcp-session-id');
+
+  // Existing MCP session: route back to the transport that owns it.
+  if (sessionId) {
+    const session = streamableHttpSessions.get(sessionId);
+
+    if (!session) {
+      return Response.json(
+        {
+          jsonrpc: '2.0',
+          error: {
+            code: -32001,
+            message: 'Session not found',
+          },
+          id: null,
+        },
+        { status: 404 },
+      );
+    }
+
+    return session.transport.handleRequest(request);
+  }
+
+  // A request without a session ID can only start a new session.
+  //
+  // We create a fresh McpApp + transport here. The transport itself validates
+  // that the request is a valid MCP initialization request.
+  let createdSessionId: string | undefined;
+
+  const sessionApp = createMcpApp({ logger });
+
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    enableJsonResponse: true,
+    sessionIdGenerator: () => crypto.randomUUID(),
+
+    onsessioninitialized: (newSessionId) => {
+      createdSessionId = newSessionId;
+
+      streamableHttpSessions.set(newSessionId, {
+        transport,
+        app: sessionApp,
+      });
+
+      logger.info('aula-mcp.http.session_initialized', {
+        sessionId: newSessionId,
+      });
+    },
+
+    onsessionclosed: (closedSessionId) => {
+      streamableHttpSessions.delete(closedSessionId);
+
+      logger.info('aula-mcp.http.session_closed', {
+        sessionId: closedSessionId,
+      });
+    },
+  });
+
+  await sessionApp.mcp.connect(transport);
+
+  try {
+    const response = await transport.handleRequest(request);
+
+    // If initialization failed before a session ID was created, this transport
+    // is not stored anywhere and should be cleaned up immediately.
+    if (!createdSessionId) {
+      try {
+        await transport.close();
+      } catch {
+        // Best-effort cleanup only.
+      }
+
+      try {
+        await sessionApp.mcp.close();
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+
+    return response;
+  } catch (err) {
+    // Initialization failed: make sure the temporary server/transport does not
+    // leak resources.
+    if (!createdSessionId) {
+      try {
+        await transport.close();
+      } catch {
+        // Best-effort cleanup only.
+      }
+
+      try {
+        await sessionApp.mcp.close();
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+
+    throw err;
+  }
+}
+
 app.post('/mcp', (c) => handleMcp(c.req.raw));
 app.get('/mcp', (c) => handleMcp(c.req.raw));
 app.delete('/mcp', (c) => handleMcp(c.req.raw));
+
 
 // Legacy MCP SSE transport — for clients that haven't moved to Streamable HTTP
 // yet, notably Home Assistant's official `mcp` (client) integration. Each
@@ -277,7 +388,43 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     );
     await server.stop();
     if (setupServer) await setupServer.stop();
-    await mcp.close();
+    try {
+  await Promise.all(
+    Array.from(sseSessions.keys()).map((sid) => closeSseSession(sid, 'shutdown')),
+  );
+
+  await server.stop();
+
+  if (setupServer) await setupServer.stop();
+
+  await Promise.all(
+    Array.from(streamableHttpSessions.entries()).map(async ([sessionId, session]) => {
+      streamableHttpSessions.delete(sessionId);
+
+      try {
+        await session.transport.close();
+      } catch (err) {
+        logger.error('aula-mcp.http.transport_close_error', {
+          sessionId,
+          error: (err as Error).message,
+        });
+      }
+
+      try {
+        await session.app.mcp.close();
+      } catch (err) {
+        logger.error('aula-mcp.http.mcp_close_error', {
+          sessionId,
+          error: (err as Error).message,
+        });
+      }
+    }),
+  );
+} catch (err) {
+  logger.error('aula-mcp.shutdown_error', {
+    error: (err as Error).message,
+  });
+}
   } catch (err) {
     logger.error('aula-mcp.shutdown_error', { error: (err as Error).message });
   }
