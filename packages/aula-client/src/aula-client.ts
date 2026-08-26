@@ -320,6 +320,28 @@ export class AulaClient {
    * @param params     Extra query-string params (access_token + method are added)
    * @param body       JSON body for POST requests; pass undefined for GET
    */
+  /**
+   * Mark a thread as read, up to and including `messageId`.
+   *
+   * Aula has no "mark as read" verb — it moves a per-thread read *marker*,
+   * which is why the thread object carries `lastReadMessageId` rather than a
+   * boolean. Passing the thread's newest message id is what the web client
+   * does when you open a thread, and it clears the unread badge.
+   *
+   * `messageId` is Aula's opaque string id (e.g. "6a3d2467304484.24549709"),
+   * not a number — it comes from `thread.latestMessage.id` on getThreads or
+   * from a message in getMessagesForThread.
+   *
+   * `commonInboxId` / `otpInboxId` select a shared or OTP mailbox; null means
+   * the guardian's personal inbox, which is the only one this client reads.
+   */
+  async setLastReadMessage(threadId: number, messageId: string): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.setLastReadMessage',
+      JSON.stringify({ threadId, messageId, commonInboxId: null, otpInboxId: null }),
+    );
+  }
+
   async rawRequest(
     method: string,
     params: Record<string, string> = {},
