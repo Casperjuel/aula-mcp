@@ -172,6 +172,37 @@ describe('AulaClient API method wrappers', () => {
     );
     expect(contextCalls.length).toBe(1);
   });
+
+  test('concurrent POSTs share a single profile-context bootstrap', async () => {
+    // Two tools fired at once (an agent asking for both children's calendars)
+    // must not each race past the in-flight bootstrap — that left one of them
+    // POSTing before the context existed, and Aula 403'd it.
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope([]) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope([]) }, // post A
+      { status: 200, body: envelope([]) }, // post B
+    );
+    const c = makeClient(http);
+    await Promise.all([
+      c.getCalendarEvents({ profileIds: [1], start: 'a', end: 'b' }),
+      c.getCalendarEvents({ profileIds: [2], start: 'a', end: 'b' }),
+    ]);
+    const contextCalls = http.requested.filter((r) =>
+      r.url.includes('method=profiles.getProfileContext'),
+    );
+    expect(contextCalls.length).toBe(1);
+    const posts = http.requested.filter((r) => r.method === 'POST');
+    expect(posts.length).toBe(2);
+    // Both POSTs must come after the single bootstrap GET.
+    const bootstrapIdx = http.requested.findIndex((r) =>
+      r.url.includes('method=profiles.getProfileContext'),
+    );
+    for (const post of posts) {
+      expect(http.requested.indexOf(post)).toBeGreaterThan(bootstrapIdx);
+    }
+  });
 });
 
 describe('AulaClient envelope handling', () => {
