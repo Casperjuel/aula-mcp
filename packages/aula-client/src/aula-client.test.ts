@@ -127,13 +127,50 @@ describe('AulaClient API method wrappers', () => {
     http.setCookie('Csrfp-Token', 'CSRF-XYZ');
     http.enqueue(
       { status: 200, body: envelope([]) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
       { status: 200, body: envelope([]) }, // post
     );
     const c = makeClient(http);
     await c.getCalendarEvents({ profileIds: [1], start: 'a', end: 'b' });
-    const post = http.requested[1];
+    const post = http.requested[2];
     expect(post?.method).toBe('POST');
     expect(post?.headers?.['csrfp-token']).toBe('CSRF-XYZ');
+  });
+
+  test('postJson establishes the profile context before the first POST', async () => {
+    // Aula answers 403 (envelope code 10 / subCode 23) on any POST until
+    // profiles.getProfileContext has run on the session. A server that
+    // restores tokens from the store has never called it, so postJson must
+    // do it itself — the Csrfp-Token cookie alone is not enough.
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-XYZ');
+    http.enqueue(
+      { status: 200, body: envelope([]) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope([]) }, // post
+    );
+    const c = makeClient(http);
+    await c.getCalendarEvents({ profileIds: [1], start: 'a', end: 'b' });
+    expect(http.requested[1]?.method).toBe('GET');
+    expect(http.requested[1]?.url).toContain('method=profiles.getProfileContext');
+    expect(http.requested[2]?.method).toBe('POST');
+  });
+
+  test('profile context is established only once per client', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope([]) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope([]) }, // first post
+      { status: 200, body: envelope([]) }, // second post — no re-bootstrap
+    );
+    const c = makeClient(http);
+    await c.getCalendarEvents({ profileIds: [1], start: 'a', end: 'b' });
+    await c.getCalendarEvents({ profileIds: [2], start: 'a', end: 'b' });
+    const contextCalls = http.requested.filter((r) =>
+      r.url.includes('method=profiles.getProfileContext'),
+    );
+    expect(contextCalls.length).toBe(1);
   });
 });
 
@@ -265,6 +302,7 @@ describe('AulaClient presence templates', () => {
     http.setCookie('Csrfp-Token', 'CSRF-1');
     http.enqueue(
       { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
       { status: 200, body: envelope({ id: 555 }) }, // post
     );
     const c = makeClient(http);
@@ -276,7 +314,7 @@ describe('AulaClient presence templates', () => {
       exitTime: '15:30',
       pickedUpBy: 'Mormor',
     });
-    const post = http.requested[1];
+    const post = http.requested[2];
     expect(post?.method).toBe('POST');
     expect(post?.headers?.['csrfp-token']).toBe('CSRF-1');
     expect(post?.url).toContain('method=presence.updatePresenceTemplate');
@@ -295,7 +333,11 @@ describe('AulaClient presence templates', () => {
 
   test('updatePresenceTemplate (self_decider) posts the selfDecider window', async () => {
     const http = new FakeHttp();
-    http.enqueue({ status: 200, body: envelope({}) }, { status: 200, body: envelope({}) });
+    http.enqueue(
+      { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) }, // post
+    );
     const c = makeClient(http);
     await c.updatePresenceTemplate({
       institutionProfileId: 7,
@@ -304,7 +346,7 @@ describe('AulaClient presence templates', () => {
       selfDeciderStartTime: '14:00',
       selfDeciderEndTime: '16:00',
     });
-    const body = JSON.parse(String(http.requested[1]?.body)) as PostedTemplate;
+    const body = JSON.parse(String(http.requested[2]?.body)) as PostedTemplate;
     expect(body.presenceActivity.activityType).toBe(1);
     // entryTime defaults to null when the drop-off time is left unset.
     expect(body.presenceActivity.selfDecider).toEqual({
@@ -316,7 +358,11 @@ describe('AulaClient presence templates', () => {
 
   test('updatePresenceTemplate carries expiresAt only for a repeating template', async () => {
     const http = new FakeHttp();
-    http.enqueue({ status: 200, body: envelope({}) }, { status: 200, body: envelope({}) });
+    http.enqueue(
+      { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) }, // post
+    );
     const c = makeClient(http);
     await c.updatePresenceTemplate({
       institutionProfileId: 7,
@@ -326,7 +372,7 @@ describe('AulaClient presence templates', () => {
       repeatPattern: 'weekly',
       repeatUntil: '2026-06-30',
     });
-    const body = JSON.parse(String(http.requested[1]?.body)) as PostedTemplate;
+    const body = JSON.parse(String(http.requested[2]?.body)) as PostedTemplate;
     expect(body.repeatPattern).toBe('weekly');
     expect(body.expiresAt).toBe('2026-06-30');
     expect(body.presenceActivity.sendHome).toEqual({ entryTime: null, exitTime: '16:00' });
@@ -341,11 +387,12 @@ describe('AulaClient presence templates', () => {
     http.setCookie('Csrfp-Token', 'CSRF-9');
     http.enqueue(
       { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
       { status: 200, body: envelope({ ok: true }) }, // post
     );
     const c = makeClient(http);
     await c.updatePresenceStatus({ institutionProfileIds: [42], status: 1 });
-    const post = http.requested[1];
+    const post = http.requested[2];
     expect(post?.method).toBe('POST');
     expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
     expect(post?.url).toContain('method=presence.updateStatusByInstitutionProfileIds');
@@ -357,10 +404,14 @@ describe('AulaClient presence templates', () => {
 
   test('updatePresenceStatus carries every id through for a multi-child call', async () => {
     const http = new FakeHttp();
-    http.enqueue({ status: 200, body: envelope({}) }, { status: 200, body: envelope({}) });
+    http.enqueue(
+      { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) }, // post
+    );
     const c = makeClient(http);
     await c.updatePresenceStatus({ institutionProfileIds: [1, 2, 3], status: 0 });
-    expect(JSON.parse(String(http.requested[1]?.body))).toEqual({
+    expect(JSON.parse(String(http.requested[2]?.body))).toEqual({
       institutionProfileIds: [1, 2, 3],
       status: 0,
     });
