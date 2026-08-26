@@ -314,6 +314,26 @@ export interface MessageThread {
 
 export interface ThreadsData {
   threads: MessageThread[];
+  /** Echo of the requested page. */
+  page?: number;
+  /** True when further pages exist. Aula's own name for it — see ThreadsPage
+   *  for the shape callers should prefer. */
+  moreMessagesExist?: boolean;
+}
+
+/**
+ * One page of threads, with the pagination signal kept.
+ *
+ * Aula serves threads 20 at a time and **ignores `pageSize` entirely** — ask
+ * for 50 and you still get 20. A caller that reads page 0 and stops therefore
+ * sees a fraction of the mailbox while believing it has seen all of it, which
+ * is a silent wrong answer rather than an error. Keep requesting pages while
+ * `hasMorePages` is true.
+ */
+export interface ThreadsPage {
+  threads: MessageThread[];
+  page: number;
+  hasMorePages: boolean;
 }
 
 /** One file attached to a thread message. Aula wraps each entry in a `file`

@@ -60,14 +60,22 @@ describe('aula.messages.mark_read', () => {
     content: Array<{ type: 'text'; text: string }>;
   }>;
 
-  function register(threads: unknown[]): {
+  /** `pages` models Aula's 20-per-page paging: one array per page. */
+  function register(pages: unknown[][]): {
     markRead: (args: { threadId: number; messageId?: string }) => Promise<Record<string, unknown>>;
     calls: Array<[number, string]>;
+    pagesRequested: number[];
   } {
     const calls: Array<[number, string]> = [];
+    const pagesRequested: number[] = [];
     const fakeClient = {
-      async getThreads() {
-        return threads;
+      async getThreadsPage({ page = 0 }: { page?: number } = {}) {
+        pagesRequested.push(page);
+        return {
+          threads: pages[page] ?? [],
+          page,
+          hasMorePages: page + 1 < pages.length,
+        };
       },
       async setLastReadMessage(threadId: number, messageId: string) {
         calls.push([threadId, messageId]);
@@ -107,28 +115,56 @@ describe('aula.messages.mark_read', () => {
         return JSON.parse(first.text) as Record<string, unknown>;
       },
       calls,
+      pagesRequested,
     };
   }
 
   test('passes an explicit messageId straight through', async () => {
-    const { markRead, calls } = register([]);
+    const { markRead, calls, pagesRequested } = register([]);
     const out = await markRead({ threadId: 42, messageId: '6a3d24.99' });
     expect(calls).toEqual([[42, '6a3d24.99']]);
     expect(out.ok).toBe(true);
+    // An explicit id means no reason to go looking for the thread.
+    expect(pagesRequested).toEqual([]);
   });
 
   test('resolves messageId from the thread list when omitted', async () => {
     const { markRead, calls } = register([
-      { id: 7, latestMessage: { id: 'aaa.1' } },
-      { id: 42, latestMessage: { id: 'bbb.2' } },
+      [
+        { id: 7, latestMessage: { id: 'aaa.1' } },
+        { id: 42, latestMessage: { id: 'bbb.2' } },
+      ],
     ]);
     const out = await markRead({ threadId: 42 });
     expect(calls).toEqual([[42, 'bbb.2']]);
     expect(out.messageId).toBe('bbb.2');
   });
 
+  test('pages past the first 20 to find an older thread', async () => {
+    const { markRead, calls, pagesRequested } = register([
+      [{ id: 7, latestMessage: { id: 'aaa.1' } }],
+      [{ id: 8, latestMessage: { id: 'bbb.2' } }],
+      [{ id: 42, latestMessage: { id: 'ccc.3' } }],
+    ]);
+    const out = await markRead({ threadId: 42 });
+    expect(pagesRequested).toEqual([0, 1, 2]);
+    expect(calls).toEqual([[42, 'ccc.3']]);
+    expect(out.messageId).toBe('ccc.3');
+  });
+
+  test('stops paging when Aula says there are no more pages', async () => {
+    const { markRead, calls, pagesRequested } = register([
+      [{ id: 7, latestMessage: { id: 'aaa.1' } }],
+      [{ id: 8, latestMessage: { id: 'bbb.2' } }],
+    ]);
+    const out = await markRead({ threadId: 42 });
+    expect(pagesRequested).toEqual([0, 1]);
+    expect(calls).toEqual([]);
+    expect(out.error).toBe('message_id_unresolved');
+  });
+
   test('reports message_id_unresolved rather than writing a bogus marker', async () => {
-    const { markRead, calls } = register([{ id: 7, latestMessage: { id: 'aaa.1' } }]);
+    const { markRead, calls } = register([[{ id: 7, latestMessage: { id: 'aaa.1' } }]]);
     const out = await markRead({ threadId: 42 });
     expect(calls).toEqual([]);
     expect(out.error).toBe('message_id_unresolved');

@@ -426,19 +426,34 @@ export function registerTools(server: McpServer, context: AulaContext): void {
 
         let messageId = args.messageId;
         if (!messageId) {
-          const thread = (await client.getThreads({ pageSize: 100 })).find(
-            (t) => t.id === args.threadId,
-          );
-          const latest = thread?.latestMessage?.id;
-          if (latest == null) {
+          // Aula pages threads 20 at a time and ignores pageSize, so a single
+          // getThreads call only ever sees the newest 20 — walk pages until the
+          // thread turns up. Bounded: a caller that already has the thread in
+          // hand should pass messageId rather than make us search for it.
+          const MAX_PAGES = 10;
+          let latest: string | undefined;
+          let pagesRead = 0;
+          for (let page = 0; page < MAX_PAGES; page++) {
+            const { threads, hasMorePages } = await client.getThreadsPage({ page });
+            pagesRead = page + 1;
+            const found = threads.find((t) => t.id === args.threadId);
+            if (found?.latestMessage?.id != null) {
+              latest = String(found.latestMessage.id);
+              break;
+            }
+            if (!hasMorePages) break;
+          }
+          if (latest === undefined) {
             return jsonContent({
               error: 'message_id_unresolved',
               message:
-                `Thread ${args.threadId} was not found in the first 100 threads, or carries ` +
-                'no latestMessage.id. Pass messageId explicitly.',
+                `Thread ${args.threadId} was not found in the first ${pagesRead} pages ` +
+                `(~${pagesRead * 20} threads), or carries no latestMessage.id. Pass ` +
+                'messageId explicitly — aula.messages.list_threads returns it as ' +
+                'thread.latestMessage.id.',
             });
           }
-          messageId = String(latest);
+          messageId = latest;
         }
 
         const result = await client.setLastReadMessage(args.threadId, messageId);
@@ -562,10 +577,22 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     'aula.messages.list_threads',
     {
       title: 'List Aula message threads',
-      description: 'Most recent first. Use `page` for pagination (0-indexed).',
+      description:
+        'One page of threads, most recent first. Aula serves 20 per page and IGNORES ' +
+        '`pageSize` — asking for 50 still returns 20. Returns `{ threads, page, ' +
+        'hasMorePages }`: when `hasMorePages` is true there are older threads you have ' +
+        'not seen, so keep calling with `page` + 1 before concluding anything about the ' +
+        'mailbox as a whole (e.g. "no unread messages"). A single call answers "what ' +
+        'arrived recently", never "what does the mailbox contain".',
       inputSchema: {
         page: z.number().int().min(0).default(0).optional(),
-        pageSize: z.number().int().min(1).max(100).optional(),
+        pageSize: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe('Sent through to Aula, which ignores it. Kept in case that changes.'),
       },
     },
     async (args) => {
@@ -573,11 +600,11 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       // See aula.messages.get_thread below — messaging endpoints 403
       // until the guardian profile is activated server-side.
       await context.getGuardianUserId();
-      const threads = await client.getThreads({
+      const page = await client.getThreadsPage({
         ...(args.page !== undefined ? { page: args.page } : {}),
         ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
       });
-      return jsonContent(threads);
+      return jsonContent(page);
     },
   );
 

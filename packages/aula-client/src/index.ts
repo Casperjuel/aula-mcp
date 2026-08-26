@@ -31,6 +31,7 @@ export {
   type ThreadMessageAttachment,
   type ThreadMessagesData,
   type ThreadsData,
+  type ThreadsPage,
   type UpdatePresenceTemplateArgs,
 } from './aula-types.ts';
 export {

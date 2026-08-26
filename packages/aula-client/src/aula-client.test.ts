@@ -207,6 +207,48 @@ describe('AulaClient.getMessagesForThread step-up', () => {
   });
 });
 
+describe('AulaClient.getThreadsPage', () => {
+  test("surfaces Aula's moreMessagesExist as hasMorePages", async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      // version probe: profiles.getProfilesByLogin at v22 OK
+      { status: 200, body: envelope({ profiles: [] }) },
+      {
+        status: 200,
+        body: envelope({ threads: [{ id: 1, read: false }], page: 0, moreMessagesExist: true }),
+      },
+    );
+    const c = makeClient(http);
+    const out = await c.getThreadsPage();
+    expect(out.threads).toHaveLength(1);
+    expect(out.page).toBe(0);
+    expect(out.hasMorePages).toBe(true);
+  });
+
+  test('treats a missing moreMessagesExist as the last page', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({ threads: [] }) },
+    );
+    const c = makeClient(http);
+    const out = await c.getThreadsPage({ page: 4 });
+    expect(out.hasMorePages).toBe(false);
+    // Aula echoes the page back; fall back to what we asked for when it does not.
+    expect(out.page).toBe(4);
+  });
+
+  test('getThreads still returns a bare array', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({ threads: [{ id: 1 }, { id: 2 }], moreMessagesExist: true }) },
+    );
+    const c = makeClient(http);
+    expect(await c.getThreads()).toHaveLength(2);
+  });
+});
+
 interface PostedTemplate {
   institutionProfileId: number;
   byDate: string;
