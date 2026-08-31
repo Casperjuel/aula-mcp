@@ -105,6 +105,7 @@ const SECRET_BODY_FIELDS = [
   'authorization_code',
   'access_token',
   'refresh_token',
+  'id_token',
   'code',
   'code_verifier',
   'samlresponse',
@@ -122,13 +123,15 @@ const SECRET_BODY_FIELDS = [
 const SECRET_BODY_FIELDS_SET = new Set(SECRET_BODY_FIELDS.map((s) => s.toLowerCase()));
 
 /**
- * Query-string keys to redact in URLs before they hit a tracer. Aula's API
- * passes `access_token` as a query param (not a header), so without this the
- * --debug transcript would leak the JWT in every URL.
+ * Query-string keys to redact in URLs before they hit a tracer or a log sink.
+ * Aula's API passes `access_token` as a query param (not a header), so without
+ * this a transcript — or a single `logger.debug('http.request', { url })` —
+ * would leak the JWT in every URL.
  */
 const SECRET_URL_PARAMS = new Set([
   'access_token',
   'refresh_token',
+  'id_token',
   'code',
   'code_verifier',
   'state',
@@ -137,6 +140,20 @@ const SECRET_URL_PARAMS = new Set([
   'ticket',
   'session_code',
 ]);
+
+/**
+ * Every `*_token` field we know about must be redacted in BOTH places — the
+ * body denylist and the query-string denylist — because Aula and the broker
+ * disagree on where a token travels. Exported for the parity test that keeps
+ * the two lists from drifting when a new field shows up.
+ */
+export const SECRET_BODY_FIELD_NAMES: readonly string[] = SECRET_BODY_FIELDS;
+export const SECRET_URL_PARAM_NAMES: readonly string[] = Array.from(SECRET_URL_PARAMS);
+
+/** True for a value we already replaced — keeps sanitising idempotent. */
+function isRedacted(value: string): boolean {
+  return value.startsWith('<redacted');
+}
 
 /** Sanitise a URL by redacting known-secret query-string values. */
 export function sanitizeUrl(url: string): string {
@@ -150,11 +167,40 @@ export function sanitizeUrl(url: string): string {
   for (const key of Array.from(parsed.searchParams.keys())) {
     if (SECRET_URL_PARAMS.has(key.toLowerCase())) {
       const v = parsed.searchParams.get(key) ?? '';
+      if (isRedacted(v)) continue;
       parsed.searchParams.set(key, `<redacted ${v.length}>`);
       mutated = true;
     }
   }
   return mutated ? parsed.toString() : url;
+}
+
+/**
+ * Sanitise a logger `meta` object before it reaches a console/stderr sink.
+ * Uses the same denylists as the wire tracer: secret-named keys are replaced
+ * wholesale, and every string is run through `sanitizeUrl`, so a bare
+ * `{ url }` in a debug log is no more exposed than a token in a traced body.
+ */
+export function sanitizeLogMeta(
+  meta: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!meta) return meta;
+  return redactLogValue(meta) as Record<string, unknown>;
+}
+
+function redactLogValue(value: unknown): unknown {
+  if (typeof value === 'string') return sanitizeUrl(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(redactLogValue);
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (SECRET_BODY_FIELDS_SET.has(k.toLowerCase())) {
+      out[k] = typeof v === 'string' ? `<redacted ${v.length} chars>` : `<redacted>`;
+    } else {
+      out[k] = redactLogValue(v);
+    }
+  }
+  return out;
 }
 
 /** Truncation cap for response bodies (bytes). */

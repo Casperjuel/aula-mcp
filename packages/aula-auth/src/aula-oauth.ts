@@ -10,6 +10,7 @@ import { AulaAuthError } from './errors.ts';
 import type { AulaHttpClient } from './http.ts';
 import type { Logger } from './logger.ts';
 import { silentLogger } from './logger.ts';
+import { sanitizeUrl } from './wire-tracer.ts';
 
 export interface AulaOAuthConfig {
   /** Aula's mobile-app OAuth client ID. */
@@ -205,8 +206,10 @@ export function parseAuthorizationCallback(url: string): { code: string; state: 
   const u = new URL(url);
   const code = u.searchParams.get('code');
   const state = u.searchParams.get('state');
-  if (!code) throw new OAuthError(`Authorization callback missing code: ${url}`);
-  if (!state) throw new OAuthError(`Authorization callback missing state: ${url}`);
+  // Sanitised: whichever of code/state IS present is a credential, and this
+  // message reaches the login log and any bug report pasted from it.
+  if (!code) throw new OAuthError(`Authorization callback missing code: ${sanitizeUrl(url)}`);
+  if (!state) throw new OAuthError(`Authorization callback missing state: ${sanitizeUrl(url)}`);
   return { code, state };
 }
 
