@@ -24,7 +24,7 @@
 import { createHash } from 'node:crypto';
 import { AulaHttpClient, withFreshTokens } from '@aula-mcp/aula-auth';
 import { AulaClient } from '@aula-mcp/aula-client';
-import { fail, fmt, printJson } from '../io.ts';
+import { fmt, printJson } from '../io.ts';
 import { defaultStore } from '../store.ts';
 
 /** Find the notifications array regardless of where Aula nests it. */
@@ -96,7 +96,11 @@ export async function runNotificationsListIds(): Promise<void> {
       error: 'api',
       message: (e as Error).message,
     });
-    fail((e as Error).message);
+    // Deliberately no `fail()` here. This command's entire contract is one
+    // JSON document on stdout, and `fail` writes to stdout too — a trailing
+    // `✗ message` line makes the output unparseable for the very pollers
+    // this command exists to serve. The payload above already carries the
+    // message, and the non-zero exit code signals the failure.
     process.exit(1);
   }
 }
