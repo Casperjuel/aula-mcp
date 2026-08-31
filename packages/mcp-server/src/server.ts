@@ -27,10 +27,14 @@
  *   AULA_MCP_ALLOW_REMOTE=1   — allow binding to non-loopback addresses (refuses
  *                               by default; the server is single-user and any
  *                               peer with /mcp access can drive your tokens)
- *   AULA_MCP_SSE_MAX_SESSIONS — max concurrent legacy /sse sessions before new
- *                               GET /sse requests get 503'd (default 16)
- *   AULA_MCP_SSE_IDLE_MS      — evict /sse sessions idle for >this many ms
- *                               (default 300_000 = 5 min)
+ *   AULA_MCP_SSE_MAX_SESSIONS  — max concurrent legacy /sse sessions before new
+ *                                GET /sse requests get 503'd (default 16)
+ *   AULA_MCP_SSE_IDLE_MS       — evict /sse sessions idle for >this many ms
+ *                                (default 300_000 = 5 min)
+ *   AULA_MCP_HTTP_MAX_SESSIONS — max concurrent /mcp sessions before new
+ *                                initialize requests get 503'd (default 16)
+ *   AULA_MCP_HTTP_IDLE_MS      — evict /mcp sessions idle for >this many ms
+ *                                (default 300_000 = 5 min)
  *   AULA_MCP_INGRESS_PORT     — if set, also boots the in-addon setup/login UI
  *                               on this port (bound to 0.0.0.0 for HA Ingress).
  *                               Default unset; the HA addon sets it to 8099.
@@ -69,12 +73,61 @@ assertSafeBindAddress(HOST);
 // Keep each session's McpApp as well as its transport because McpServer.connect()
 // binds a server instance to a single transport.
 
+//
+// The session map is capped + idle-evicted, for the same reason the legacy
+// /sse map is: a client that goes away without sending DELETE /mcp (crash,
+// dropped network, a browser tab closed mid-session) leaves its McpApp and
+// transport behind forever. onsessionclosed only fires on an orderly close.
 interface StreamableHttpSession {
   transport: WebStandardStreamableHTTPServerTransport;
   app: McpApp;
+  lastActivityAt: number;
 }
 
+const HTTP_MAX_SESSIONS = Math.max(1, Number(process.env.AULA_MCP_HTTP_MAX_SESSIONS ?? 16));
+const HTTP_IDLE_MS = Math.max(1_000, Number(process.env.AULA_MCP_HTTP_IDLE_MS ?? 300_000));
+const HTTP_SWEEP_INTERVAL_MS = Math.max(1_000, Math.floor(HTTP_IDLE_MS / 4));
 const streamableHttpSessions = new Map<string, StreamableHttpSession>();
+
+async function closeHttpSession(sessionId: string, reason: string): Promise<void> {
+  const session = streamableHttpSessions.get(sessionId);
+  if (!session) return;
+  streamableHttpSessions.delete(sessionId);
+  try {
+    await session.transport.close();
+  } catch (err) {
+    logger.error('aula-mcp.http.transport_close_error', {
+      sessionId,
+      reason,
+      error: (err as Error).message,
+    });
+  }
+  try {
+    await session.app.mcp.close();
+  } catch (err) {
+    logger.error('aula-mcp.http.mcp_close_error', {
+      sessionId,
+      reason,
+      error: (err as Error).message,
+    });
+  }
+}
+
+// Single sweeper, started once at boot. `unref()` so the interval doesn't keep
+// the process alive on its own — shutdown clears it explicitly anyway.
+const httpSweeper: ReturnType<typeof setInterval> = setInterval(() => {
+  const now = Date.now();
+  for (const [sessionId, session] of streamableHttpSessions) {
+    if (now - session.lastActivityAt > HTTP_IDLE_MS) {
+      logger.info('aula-mcp.http.session_evicted_idle', {
+        sessionId,
+        idleMs: now - session.lastActivityAt,
+      });
+      void closeHttpSession(sessionId, 'idle');
+    }
+  }
+}, HTTP_SWEEP_INTERVAL_MS);
+httpSweeper.unref?.();
 
 const app = new Hono();
 
@@ -101,6 +154,7 @@ async function handleMcp(request: Request): Promise<Response> {
       );
     }
 
+    session.lastActivityAt = Date.now();
     return session.transport.handleRequest(request);
   }
 
@@ -108,6 +162,24 @@ async function handleMcp(request: Request): Promise<Response> {
   //
   // We create a fresh McpApp + transport here. The transport itself validates
   // that the request is a valid MCP initialization request.
+  if (streamableHttpSessions.size >= HTTP_MAX_SESSIONS) {
+    logger.warn('aula-mcp.http.session_rejected_cap', {
+      active: streamableHttpSessions.size,
+      cap: HTTP_MAX_SESSIONS,
+    });
+    return Response.json(
+      {
+        jsonrpc: '2.0',
+        error: {
+          code: -32000,
+          message: `Too many active MCP sessions (cap ${HTTP_MAX_SESSIONS}). Retry shortly.`,
+        },
+        id: null,
+      },
+      { status: 503 },
+    );
+  }
+
   let createdSessionId: string | undefined;
 
   const sessionApp = createMcpApp({ logger });
@@ -122,6 +194,7 @@ async function handleMcp(request: Request): Promise<Response> {
       streamableHttpSessions.set(newSessionId, {
         transport,
         app: sessionApp,
+        lastActivityAt: Date.now(),
       });
 
       logger.info('aula-mcp.http.session_initialized', {
@@ -184,7 +257,6 @@ async function handleMcp(request: Request): Promise<Response> {
 app.post('/mcp', (c) => handleMcp(c.req.raw));
 app.get('/mcp', (c) => handleMcp(c.req.raw));
 app.delete('/mcp', (c) => handleMcp(c.req.raw));
-
 
 // Legacy MCP SSE transport — for clients that haven't moved to Streamable HTTP
 // yet, notably Home Assistant's official `mcp` (client) integration. Each
@@ -378,53 +450,18 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   process.stdout.write(`\n${signal} received — shutting down gracefully…\n`);
-  // Stop the idle sweeper first so it can't fire mid-shutdown and race with
+  // Stop the idle sweepers first so they can't fire mid-shutdown and race with
   // session cleanup; this also lets the event loop drain if anything still
-  // refs the interval.
+  // refs an interval.
   clearInterval(sseSweeper);
+  clearInterval(httpSweeper);
   try {
-    await Promise.all(
-      Array.from(sseSessions.keys()).map((sid) => closeSseSession(sid, 'shutdown')),
-    );
+    await Promise.all([
+      ...Array.from(sseSessions.keys()).map((sid) => closeSseSession(sid, 'shutdown')),
+      ...Array.from(streamableHttpSessions.keys()).map((sid) => closeHttpSession(sid, 'shutdown')),
+    ]);
     await server.stop();
     if (setupServer) await setupServer.stop();
-    try {
-  await Promise.all(
-    Array.from(sseSessions.keys()).map((sid) => closeSseSession(sid, 'shutdown')),
-  );
-
-  await server.stop();
-
-  if (setupServer) await setupServer.stop();
-
-  await Promise.all(
-    Array.from(streamableHttpSessions.entries()).map(async ([sessionId, session]) => {
-      streamableHttpSessions.delete(sessionId);
-
-      try {
-        await session.transport.close();
-      } catch (err) {
-        logger.error('aula-mcp.http.transport_close_error', {
-          sessionId,
-          error: (err as Error).message,
-        });
-      }
-
-      try {
-        await session.app.mcp.close();
-      } catch (err) {
-        logger.error('aula-mcp.http.mcp_close_error', {
-          sessionId,
-          error: (err as Error).message,
-        });
-      }
-    }),
-  );
-} catch (err) {
-  logger.error('aula-mcp.shutdown_error', {
-    error: (err as Error).message,
-  });
-}
   } catch (err) {
     logger.error('aula-mcp.shutdown_error', { error: (err as Error).message });
   }
