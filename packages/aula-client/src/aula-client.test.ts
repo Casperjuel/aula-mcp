@@ -490,3 +490,38 @@ describe('AulaClient presence templates', () => {
     });
   });
 });
+
+describe('AulaClient.getPosts', () => {
+  test('scopes the feed to parent=profile and institutionProfileIds[]', async () => {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({ profiles: [] }) }); // version probe
+    http.enqueue({ status: 200, body: envelope({ posts: [], moreMessagesExist: false }) });
+    const c = makeClient(http);
+
+    await c.getPosts({ institutionProfileIds: [3288873, 3288893], limit: 5 });
+
+    const url = http.requested.at(-1)?.url ?? '';
+    // Without these two the endpoint answers 200 with an empty posts array
+    // rather than an error, which is what made #75 so hard to spot.
+    expect(url).toContain('parent=profile');
+    expect(url).toContain('institutionProfileIds%5B%5D=3288873');
+    expect(url).toContain('institutionProfileIds%5B%5D=3288893');
+    expect(url).toContain('limit=5');
+    // index defaults to 0 rather than being omitted.
+    expect(url).toContain('index=0');
+  });
+
+  test('isUnread defaults to false and follows onlyUnread when set', async () => {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({ profiles: [] }) });
+    http.enqueue({ status: 200, body: envelope({ posts: [] }) });
+    http.enqueue({ status: 200, body: envelope({ posts: [] }) });
+    const c = makeClient(http);
+
+    await c.getPosts({ institutionProfileIds: [1] });
+    expect(http.requested.at(-1)?.url).toContain('isUnread=false');
+
+    await c.getPosts({ institutionProfileIds: [1], onlyUnread: true });
+    expect(http.requested.at(-1)?.url).toContain('isUnread=true');
+  });
+});

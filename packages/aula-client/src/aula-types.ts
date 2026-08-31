@@ -296,6 +296,52 @@ export interface GetCalendarEventsArgs {
 }
 
 // --------------------------------------------------------------------------
+// posts.*
+// --------------------------------------------------------------------------
+
+export interface PostAttachmentFile {
+  name?: string;
+  url?: string;
+  mediaType?: string;
+}
+
+export interface PostAttachment {
+  name?: string;
+  url?: string;
+  file?: PostAttachmentFile;
+}
+
+export interface AulaPost {
+  id?: number;
+  title?: string;
+  publishAt?: string;
+  timestamp?: string;
+  isImportant?: boolean;
+  content?: { html?: string };
+  ownerProfile?: {
+    fullName?: string;
+    institution?: { institutionName?: string };
+  };
+  attachments?: PostAttachment[];
+}
+
+export interface PostsData {
+  posts?: AulaPost[];
+  moreMessagesExist?: boolean;
+  profileLastSeenPostDate?: string;
+}
+
+export interface GetPostsArgs {
+  limit?: number;
+  index?: number;
+  /** Aula's own scoping parameter; `profile` is the guardian-facing feed. */
+  parent?: string;
+  onlyUnread?: boolean;
+  /** Guardian + child institution-profile ids the feed is scoped to. */
+  institutionProfileIds?: readonly number[];
+}
+
+// --------------------------------------------------------------------------
 // messaging.*
 // --------------------------------------------------------------------------
 
