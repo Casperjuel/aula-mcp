@@ -67,7 +67,12 @@ async function downloadAttachmentToDisk(args: {
 
   const baseDir = process.env.AULA_MCP_ATTACHMENTS_DIR ?? join(tmpdir(), 'aula-attachments');
   await mkdir(baseDir, { recursive: true });
-  const safeName = args.filename.replace(/[^\w.\- ]+/gu, '_');
+  // `\w` is ASCII-only, so it mangled every Danish attachment it touched —
+  // "Bålhytten.pdf" landed on disk as "B_lhytten.pdf". Match Unicode letters
+  // and digits instead. Path separators, `..` traversal and control
+  // characters are still replaced, so this is no less strict: it stops
+  // punishing æ, ø and å for not being ASCII.
+  const safeName = args.filename.replace(/[^\p{L}\p{N}.\-_ ]+/gu, '_');
   const path = join(baseDir, `${args.prefix}-${safeName}`);
   await writeFile(path, buf, { mode: 0o600 });
 
