@@ -708,6 +708,33 @@ describe('MCP server: tools/call(aula.messages.get_attachment)', () => {
     expect(requested).toEqual(['https://cdn.test/post-attachment']);
   });
 
+  test('keeps Danish letters in the on-disk filename', async () => {
+    // Regression guard: the sanitiser used `\w`, which is ASCII-only, so
+    // every æ, ø and å in a real Aula attachment name became an underscore
+    // — "Bålhytten" landed on disk as "B_lhytten".
+    stubFetch(() => new Response('%PDF-1.7'));
+    const out = await harness.call(31, 'aula.posts.get_attachment', {
+      postId: 42,
+      url: 'https://cdn.test/dansk',
+      filename: 'Bålhytten på Ærø - lørdag.pdf',
+    });
+    expect(out.ok).toBe(true);
+    expect(out.path).toBe(join(dir, 'post-42-Bålhytten på Ærø - lørdag.pdf'));
+    expect(dirname(out.path as string)).toBe(dir);
+  });
+
+  test('still scrubs separators and control characters from non-ASCII names', async () => {
+    // Widening the class to \p{L} must not widen what escapes the directory.
+    stubFetch(() => new Response('x'));
+    const out = await harness.call(32, 'aula.posts.get_attachment', {
+      postId: 42,
+      url: 'https://cdn.test/dansk',
+      filename: '../Bålhytten/ø\u0000.pdf',
+    });
+    expect(out.path).toBe(join(dir, 'post-42-.._Bålhytten_ø_.pdf'));
+    expect(dirname(out.path as string)).toBe(dir);
+  });
+
   test('aula.posts.get_attachment surfaces download_failed the same way', async () => {
     stubFetch(() => new Response('gone', { status: 404 }));
     const out = await harness.call(30, 'aula.posts.get_attachment', {
