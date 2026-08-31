@@ -15,3 +15,9 @@ onlyBuiltDependencies:
 overrides:
   fast-uri: ^3.1.2
   ip-address: ^10.1.1
+  # cheerio pulls undici ^7.19.0 for its fromURL() helper. We only ever call
+  # cheerio.load() on strings we already fetched ourselves, so none of these
+  # advisories is reachable from this codebase — but 12 open alerts on the
+  # default branch is noise that hides the next real one. 7.29.0 is the first
+  # release clear of all of them and still satisfies cheerio's range.
+  undici: ^7.29.0
