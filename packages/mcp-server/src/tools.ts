@@ -393,12 +393,19 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     {
       title: 'Calendar events (school schedule)',
       description:
-        'Lessons + events for the given institution-profile IDs. ' +
+        'Lessons + events for the given child institution-profile IDs. ' +
+        'Call aula.discover first and pass children[].id as profileIds. ' +
         'Pass `range` for a preset window (today/tomorrow/this_week/next_week) ' +
         'OR `start`+`end` for a specific window. Timestamps are formatted as Aula ' +
         'expects: "YYYY-MM-DD HH:MM:SS.0000+ZZZZ". Aula uses Europe/Copenhagen.',
       inputSchema: {
-        profileIds: z.array(z.number().int().positive()).min(1),
+        profileIds: z
+          .array(z.number().int().positive())
+          .min(1)
+          .describe(
+            'Child institution-profile IDs from aula.discover children[].id. ' +
+              'Do not use children[].userId.',
+          ),
         range: z.enum(['today', 'tomorrow', 'this_week', 'next_week']).optional(),
         start: z.string().min(1).optional(),
         end: z.string().min(1).optional(),

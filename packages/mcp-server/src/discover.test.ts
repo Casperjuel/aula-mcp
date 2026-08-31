@@ -180,4 +180,15 @@ describe('buildDiscoverManifest', () => {
     const m = await buildDiscoverManifest(fakeContext({ identityName: null }));
     expect(m.user.identityName).toBeUndefined();
   });
+
+  test('nameResolution points calendar profileIds at child.id, not child.userId', async () => {
+    // Regression guard for #82: calendar.getEventsByProfileIdsAndResourceIds
+    // takes instProfileIds, which are children[].id. Guidance that sent the
+    // agent to children[].userId produced a 403 on every calendar call.
+    const m = await buildDiscoverManifest(fakeContext());
+    const hint = m.usage.nameResolution;
+    expect(hint).toContain('child.id for presence childIds');
+    expect(hint).toContain('aula.calendar.events profileIds');
+    expect(hint).not.toMatch(/userId[^.]*for[^.]*profileIds/);
+  });
 });
