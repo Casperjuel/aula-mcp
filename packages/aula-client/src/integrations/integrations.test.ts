@@ -269,9 +269,40 @@ describe('MinUddannelseClient.getOpgaver', () => {
     const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
     await client.getOpgaver(ctx({ childIds: [10, 20, 30] }));
     const url = http.requested[0]?.url ?? '';
-    expect(url).toContain('childFilter=10%2C20%2C30');
+    expect(url).toContain('childFilter=u10%2Cu20%2Cu30');
     expect(url).toContain('userProfile=guardian');
     expect(http.requested[0]?.headers?.authorization).toBe('Bearer TKN-1');
+  });
+
+  test('childFilter carries the unilogin userIds, not the numeric child ids', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: '{"personer":[]}' });
+    const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    await client.getUgebrev(
+      ctx({ childIds: [111293, 222384], childUserIds: ['thit0305', 'emil1102'] }),
+    );
+    const url = http.requested[0]?.url ?? '';
+    expect(url).toContain('childFilter=thit0305%2Cemil1102');
+    expect(url).not.toContain('111293');
+    expect(url).not.toContain('222384');
+  });
+
+  test('a child without a resolved unilogin is skipped with a warning', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: '{"opgaver":[]}' });
+    const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getOpgaver(
+      ctx({ childIds: [10, 20], childUserIds: ['thit0305', ''] }),
+    );
+    expect(http.requested[0]?.url ?? '').toContain('childFilter=thit0305&');
+    expect(plan.warnings?.[0]).toContain('child 20');
+  });
+
+  test('fails loudly when no unilogin userId was resolved (never falls back to numeric ids)', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: '{"opgaver":[]}' });
+    const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    await expect(
+      client.getOpgaver(ctx({ childIds: [10, 20], childUserIds: ['', ''] })),
+    ).rejects.toThrow(/childUserIds/);
+    expect(http.requested).toHaveLength(0);
   });
 });
 
