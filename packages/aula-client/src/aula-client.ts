@@ -7,7 +7,12 @@
  *     `onApiVersionChanged` callback fires when the active version changes
  *     mid-session (e.g. server returns 410 and we bump).
  *   - **CSRF token from cookie (`Csrfp-Token`)**: lifted from the cookie jar
- *     and sent as `csrfp-token` header on POSTs. Aula returns 403 otherwise.
+ *     and sent as `csrfp-token` header on POSTs.
+ *   - **Profile context before POSTs**: Aula answers 403 (envelope code 10 /
+ *     subCode 23) on every POST method until `profiles.getProfileContext` has
+ *     run on the session — that call selects the acting profile server-side.
+ *     The CSRF cookie alone does not satisfy it, so `postJson` establishes the
+ *     context once per client before its first POST.
  */
 
 import {
@@ -62,6 +67,12 @@ export class AulaClient {
   private readonly apiBaseHost: string;
   private readonly onVersionChanged?: (from: number, to: number) => void;
   private versionVerified = false;
+  /** In-flight version probe, shared so concurrent callers issue one probe. */
+  private versionPromise: Promise<number> | undefined;
+  /** Resolves once profiles.getProfileContext has run on this session. Aula
+   *  refuses POST methods with 403 (code 10 / subCode 23) before that. Held
+   *  as a promise so concurrent POSTs share one bootstrap instead of racing. */
+  private profileContextPromise: Promise<void> | undefined;
 
   constructor(options: AulaClientOptions) {
     this.tokens = options.tokens;
@@ -92,6 +103,15 @@ export class AulaClient {
    */
   async ensureApiVersion(): Promise<number> {
     if (this.versionVerified) return this.apiVersion;
+    // Concurrent callers must share one probe; otherwise each runs the whole
+    // v22..vN walk and they interleave against the same cookie jar.
+    this.versionPromise ??= this.probeApiVersion().finally(() => {
+      this.versionPromise = undefined;
+    });
+    return this.versionPromise;
+  }
+
+  private async probeApiVersion(): Promise<number> {
     const tried: number[] = [];
     for (let v = this.apiVersion; v <= this.maxApiVersion; v++) {
       tried.push(v);
@@ -132,7 +152,11 @@ export class AulaClient {
   }
 
   async getProfileContext(role: 'guardian' | 'employee' = 'guardian'): Promise<ProfileContextData> {
-    return this.getJson<ProfileContextData>('profiles.getProfileContext', { portalrole: role });
+    const data = await this.getJson<ProfileContextData>('profiles.getProfileContext', {
+      portalrole: role,
+    });
+    this.profileContextPromise ??= Promise.resolve();
+    return data;
   }
 
   async getDailyOverview(childIds: readonly number[]): Promise<DailyOverviewEntry[]> {
@@ -368,6 +392,34 @@ export class AulaClient {
     const params = new URLSearchParams({ method });
     params.set('access_token', this.tokens.access_token);
     const url = `${this.apiBaseHost}/api/v${version}/?${params.toString()}`;
+    // Aula rejects every POST method with HTTP 403 (envelope code 10 /
+    // subCode 23) until `profiles.getProfileContext` has run on the session —
+    // it is what selects the acting profile server-side. A process that
+    // restores tokens from the store has never called it, so the first POST
+    // of the process fails. The Csrfp-Token cookie is NOT sufficient on its
+    // own: `profiles.getProfilesByLogin` sets the cookie and the POST still
+    // 403s; only getProfileContext clears it. Establish it once per client.
+    // Memoised, not a bare boolean: concurrent POSTs (an agent calling two
+    // calendar tools at once) would all observe the flag as false and race
+    // ahead of the in-flight context call, so some still 403. Sharing one
+    // promise makes every caller wait for the same bootstrap.
+    if (!this.profileContextPromise) {
+      this.logger.debug('aula.api.profile_context_bootstrap', { method });
+      this.profileContextPromise = this.getProfileContext().then(
+        () => undefined,
+        (e: unknown) => {
+          // Best-effort: let the POST run and surface Aula's own error rather
+          // than this one, but clear the memo so the next POST retries instead
+          // of inheriting a bootstrap that never actually happened.
+          this.profileContextPromise = undefined;
+          this.logger.warn('aula.api.profile_context_bootstrap_failed', {
+            method,
+            error: e instanceof Error ? e.message : String(e),
+          });
+        },
+      );
+    }
+    await this.profileContextPromise;
     const csrf = await this.http.jar.getCookieValue(url, 'Csrfp-Token');
     const headers: Record<string, string> = { 'content-type': 'application/json' };
     if (csrf) headers['csrfp-token'] = csrf;
