@@ -249,8 +249,24 @@ function buildCapabilities(
       tools: ['aula.calendar.events'],
     },
     messages: {
-      summary: 'Aula messaging threads. Sensitive threads require MitID step-up.',
-      tools: ['aula.messages.list_threads', 'aula.messages.get_thread'],
+      summary: writeEnabled
+        ? 'Aula messaging threads, and marking a thread read. Sensitive threads ' +
+          'require MitID step-up.'
+        : 'Aula messaging threads. Sensitive threads require MitID step-up.',
+      tools: writeEnabled
+        ? ['aula.messages.list_threads', 'aula.messages.get_thread', 'aula.messages.mark_read']
+        : ['aula.messages.list_threads', 'aula.messages.get_thread'],
+      ...(writeEnabled
+        ? {
+            notes:
+              'aula.messages.mark_read is irreversible — Aula offers no way to set a ' +
+              'thread back to unread. Only call it for threads the user has actually seen.',
+          }
+        : {
+            notes:
+              'aula.messages.mark_read (marking a thread read) is available only when ' +
+              'the server runs with AULA_MCP_WRITE=1.',
+          }),
     },
     notifications: {
       summary: 'Unread items + activity badge counts for the active guardian.',

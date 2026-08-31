@@ -176,6 +176,26 @@ describe('buildDiscoverManifest', () => {
     }
   });
 
+  test('messages capability surfaces mark_read only when writes are enabled', async () => {
+    const original = process.env.AULA_MCP_WRITE;
+    try {
+      delete process.env.AULA_MCP_WRITE;
+      const off = await buildDiscoverManifest(fakeContext());
+      expect(off.capabilities.messages?.tools).not.toContain('aula.messages.mark_read');
+      expect(off.capabilities.messages?.notes).toContain('AULA_MCP_WRITE=1');
+
+      process.env.AULA_MCP_WRITE = '1';
+      const on = await buildDiscoverManifest(fakeContext());
+      expect(on.capabilities.messages?.tools).toContain('aula.messages.mark_read');
+      // With writes on the note stops explaining the gate and starts warning
+      // about the one thing that cannot be undone.
+      expect(on.capabilities.messages?.notes).toContain('irreversible');
+    } finally {
+      if (original === undefined) delete process.env.AULA_MCP_WRITE;
+      else process.env.AULA_MCP_WRITE = original;
+    }
+  });
+
   test('omits identityName when not set in record', async () => {
     const m = await buildDiscoverManifest(fakeContext({ identityName: null }));
     expect(m.user.identityName).toBeUndefined();

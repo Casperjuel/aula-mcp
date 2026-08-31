@@ -35,6 +35,7 @@ import type {
   ThreadMessage,
   ThreadMessagesData,
   ThreadsData,
+  ThreadsPage,
   UpdatePresenceTemplateArgs,
 } from './aula-types.ts';
 import { PRESENCE_ACTIVITY_TYPE, type PresenceStatusCode } from './aula-types.ts';
@@ -250,7 +251,15 @@ export class AulaClient {
     );
   }
 
-  async getThreads(opts: { page?: number; pageSize?: number } = {}): Promise<MessageThread[]> {
+  /**
+   * One page of threads, keeping Aula's `moreMessagesExist` flag.
+   *
+   * Aula serves 20 threads per page and ignores `pageSize` — asking for 50
+   * still returns 20. Without the flag a caller cannot tell a short page from
+   * the end of the mailbox, so `getThreads` below (which drops it) is only
+   * safe when you genuinely want the newest 20.
+   */
+  async getThreadsPage(opts: { page?: number; pageSize?: number } = {}): Promise<ThreadsPage> {
     const params: Record<string, string> = {
       sortOn: 'date',
       orderDirection: 'desc',
@@ -258,7 +267,16 @@ export class AulaClient {
     };
     if (opts.pageSize) params.pageSize = String(opts.pageSize);
     const data = await this.getJson<ThreadsData>('messaging.getThreads', params);
-    return data.threads ?? [];
+    return {
+      threads: data?.threads ?? [],
+      page: data?.page ?? opts.page ?? 0,
+      hasMorePages: data?.moreMessagesExist ?? false,
+    };
+  }
+
+  /** Threads only, discarding the pagination signal. See getThreadsPage. */
+  async getThreads(opts: { page?: number; pageSize?: number } = {}): Promise<MessageThread[]> {
+    return (await this.getThreadsPage(opts)).threads;
   }
 
   /**
@@ -344,6 +362,28 @@ export class AulaClient {
    * @param params     Extra query-string params (access_token + method are added)
    * @param body       JSON body for POST requests; pass undefined for GET
    */
+  /**
+   * Mark a thread as read, up to and including `messageId`.
+   *
+   * Aula has no "mark as read" verb — it moves a per-thread read *marker*,
+   * which is why the thread object carries `lastReadMessageId` rather than a
+   * boolean. Passing the thread's newest message id is what the web client
+   * does when you open a thread, and it clears the unread badge.
+   *
+   * `messageId` is Aula's opaque string id (e.g. "6a3d2467304484.24549709"),
+   * not a number — it comes from `thread.latestMessage.id` on getThreads or
+   * from a message in getMessagesForThread.
+   *
+   * `commonInboxId` / `otpInboxId` select a shared or OTP mailbox; null means
+   * the guardian's personal inbox, which is the only one this client reads.
+   */
+  async setLastReadMessage(threadId: number, messageId: string): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.setLastReadMessage',
+      JSON.stringify({ threadId, messageId, commonInboxId: null, otpInboxId: null }),
+    );
+  }
+
   async rawRequest(
     method: string,
     params: Record<string, string> = {},
