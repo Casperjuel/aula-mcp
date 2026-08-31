@@ -1,12 +1,15 @@
 export {
   type AulaAuthMethod,
+  AulaBotDefenseError,
   AulaLoginClient,
   type AulaLoginClientOptions,
   type AulaLoginCredentials,
   AulaLoginError,
   type AulaLoginOptions,
   AulaSilentSsoFailedError,
+  botDefenseMessage,
   type IdentitySelector,
+  isBotDefenseHost,
 } from './aula-login-client.ts';
 export {
   type AulaOAuthConfig,

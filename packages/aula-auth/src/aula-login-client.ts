@@ -89,6 +89,60 @@ export class AulaLoginError extends AulaAuthError {
 }
 
 /**
+ * Thrown when the login chain is intercepted by STIL's bot-protection
+ * gateway instead of reaching MitID. Separate from AulaLoginError so
+ * callers can tell "we were blocked" apart from "the flow broke".
+ */
+export class AulaBotDefenseError extends AulaAuthError {
+  override readonly name: string = 'AulaBotDefenseError';
+}
+
+/**
+ * STIL fronts the Unilogin broker with a bot-defense gateway they call NDBD.
+ * When it decides a request looks automated it answers with a JavaScript
+ * challenge page rather than continuing the redirect chain, and the chain
+ * walker sees a host it has no branch for.
+ *
+ * There is deliberately no attempt to solve it. The challenge computes a
+ * cookie from obfuscated JavaScript that probes browser and DOM properties,
+ * so a pure-HTTP client has nothing to follow — no Location, no
+ * meta-refresh — and this package does not drive a headless browser by
+ * design. Reported cases have come from datacenter/hosting IPs while home
+ * connections pass straight through, which points at network reputation
+ * rather than anything the client sends.
+ *
+ * So: name it, and point at the workaround that does work.
+ */
+const BOT_DEFENSE_HOSTS: ReadonlySet<string> = new Set(['security-check.stil.dk']);
+
+/** Exported for tests — pins the host list this behaviour keys on. */
+export function isBotDefenseHost(host: string): boolean {
+  return BOT_DEFENSE_HOSTS.has(host);
+}
+
+export function botDefenseMessage(host: string, hop: number): string {
+  return [
+    `Login blocked by STIL's bot protection (${host}) at hop ${hop}.`,
+    '',
+    'This is an upstream security gateway, not a bug in aula-mcp. It serves a',
+    'JavaScript challenge that a pure-HTTP client cannot solve, and it usually',
+    'triggers on requests from datacenter or hosting IPs rather than home',
+    'connections. Changing the user-agent does not help.',
+    '',
+    'Running on a VPS, cloud host or CI? Log in on a home machine and move the',
+    'tokens across:',
+    '',
+    '  aula login',
+    '  aula tokens export ./aula-bundle',
+    '  scp ./aula-bundle/tokens.json ./aula-bundle/.key user@server:/var/lib/aula-mcp/',
+    '',
+    'Token refresh talks straight to login.aula.dk and never touches the broker,',
+    'so the server keeps refreshing on its own from there. See the self-hosting',
+    'section of the README.',
+  ].join('\n');
+}
+
+/**
  * Thrown by attemptSilentReauthorize when the broker/MitID session has
  * lapsed and a fresh interactive login is required. Callers should fall
  * back to the full login() flow.
@@ -302,6 +356,9 @@ export class AulaLoginClient {
           currentUrl = new URL(metaUrl, currentUrl).toString();
           continue;
         }
+        if (isBotDefenseHost(url.host)) {
+          throw new AulaBotDefenseError(botDefenseMessage(url.host, hop));
+        }
         throw new AulaLoginError(
           `Silent SSO landed on unexpected host (${url.host}) at hop ${hop}`,
         );
@@ -381,6 +438,9 @@ export class AulaLoginClient {
           currentMethod = 'GET';
           currentBody = undefined;
           continue;
+        }
+        if (isBotDefenseHost(url.host)) {
+          throw new AulaBotDefenseError(botDefenseMessage(url.host, hop));
         }
         throw new AulaLoginError(
           `OAuth chain landed on unexpected host (${url.host}) at hop ${hop}`,

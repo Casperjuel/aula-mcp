@@ -183,6 +183,14 @@ ssh aula
 aula login
 ```
 
+> ⚠️ **Kører du på en VPS eller i skyen? Så virker A måske ikke.**
+>
+> STIL har sat en bot-beskyttelse (de kalder den NDBD) foran Unilogin-brokeren. Den svarer med en JavaScript-udfordring i stedet for at føre login-kæden videre, og `aula login` fejler med `Login blocked by STIL's bot protection`. Den udløses typisk på datacenter- og hosting-IP'er — hjemmeforbindelser går som regel lige igennem.
+>
+> Der er ikke noget at rette i `aula-mcp`: udfordringen kræver en rigtig browser, og det her projekt kører bevidst ren HTTP uden headless browser. En anden user-agent hjælper ikke.
+>
+> **Brug metode B i stedet.** Log ind hjemmefra og flyt tokens over. Fornyelse af access token går direkte til `login.aula.dk` og rører aldrig brokeren, så serveren kører videre af sig selv bagefter.
+
 B. *Eksportér tokens fra din Mac (eller fra hvor du allerede er logget ind).* macOS Keychain kan ikke flyttes mellem maskiner, så `aula tokens export` re-krypterer dem til en bærbar fil-bundle.
 
 ```sh
