@@ -354,7 +354,7 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_DIR` | `~/.config/aula-mcp` | Konfig-mappe (fil-backend + transcripts + login-log). |
 | `AULA_MCP_RAW=1` | off | Aktiverer `aula.raw_request` escape-hatch-toolet. |
 | `AULA_MCP_WRITE=1` | off | Aktiverer skrive-tools (`aula.presence.set_template` — sæt komme/gå-tider). Serveren er read-only uden den. |
-| `AULA_MCP_LOG=1` | off | Verbose console-logs fra auth/client-lagene. |
+| `AULA_MCP_LOG=1` | off | Verbose console-logs fra auth/client-lagene (samme redaktion som wire-transcripts). |
 | `AULA_MCP_ALLOW_REMOTE=1` | off | Tillader at binde til ikke-loopback adresser (fx bag en reverse proxy). |
 
 ### Wire-transcripts
@@ -362,6 +362,8 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 `--debug`-tilstand tee'r en JSONL-transcript af hvert HTTP-request/response til `~/.config/aula-mcp/transcripts/login-<timestamp>.jsonl`. Cookies, OAuth/SAML-payloads, MitID-auth-koder, adgangskoder, M1, flowValueProof, `access_token`-query-parameter og andre hemmelige felter bliver alle redaktet (`<redacted N chars>`). Transcripten kan trygt vedhæftes en GitHub-issue.
 
 `aula transcript view <file>` pretty-printer en af dem.
+
+Den samme redaktion gælder console-logs fra `AULA_MCP_LOG=1` og `aula login --debug` — request-URL'er bliver renset, før de skrives, så `access_token`-query-parameteren aldrig lander i en terminal-log.
 
 ---
 

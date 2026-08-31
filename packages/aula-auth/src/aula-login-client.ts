@@ -46,6 +46,7 @@ import type { AvailableAuthenticators } from './mitid-types.ts';
 import { mitidUrls } from './mitid-urls.ts';
 import { generatePkce } from './pkce.ts';
 import { generateState } from './state.ts';
+import { sanitizeUrl } from './wire-tracer.ts';
 
 export type AulaAuthMethod = 'APP' | 'CODE_TOKEN';
 
@@ -131,7 +132,7 @@ export class AulaLoginClient {
       codeChallenge: pkce.challenge,
     });
     this.logger.info('aula.login.start', { method, username: opts.username });
-    this.logger.debug('oauth.authorize_url', { authorizeUrl });
+    this.logger.debug('oauth.authorize_url', { authorizeUrl: sanitizeUrl(authorizeUrl) });
 
     // 2. Walk OAuth redirect chain → broker page or MitID page.
     const reachedMitid = await this.walkOauthChain(authorizeUrl);
@@ -239,12 +240,16 @@ export class AulaLoginClient {
       codeChallenge: pkce.challenge,
     });
     this.logger.info('aula.silent_reauthorize.start');
-    this.logger.debug('oauth.silent.authorize_url', { authorizeUrl });
+    this.logger.debug('oauth.silent.authorize_url', { authorizeUrl: sanitizeUrl(authorizeUrl) });
 
     let currentUrl = authorizeUrl;
     for (let hop = 0; hop < 15; hop++) {
       const res = await this.http.request(currentUrl, { method: 'GET' });
-      this.logger.debug('oauth.silent.hop', { hop, status: res.status, url: currentUrl });
+      this.logger.debug('oauth.silent.hop', {
+        hop,
+        status: res.status,
+        url: sanitizeUrl(currentUrl),
+      });
 
       if (res.status >= 300 && res.status < 400) {
         const loc = res.headers.get('location');
@@ -263,7 +268,7 @@ export class AulaLoginClient {
           }
           if (!code) {
             throw new AulaSilentSsoFailedError(
-              `Silent SSO terminus had no code in URL: ${next.slice(0, 200)}`,
+              `Silent SSO terminus had no code in URL: ${sanitizeUrl(next).slice(0, 200)}`,
             );
           }
           this.logger.info('aula.silent_reauthorize.code_received');
@@ -332,7 +337,11 @@ export class AulaLoginClient {
         method: currentMethod,
         ...(currentBody ? { body: currentBody } : {}),
       });
-      this.logger.debug('oauth.chain.hop', { hop, status: res.status, url: currentUrl });
+      this.logger.debug('oauth.chain.hop', {
+        hop,
+        status: res.status,
+        url: sanitizeUrl(currentUrl),
+      });
 
       // 3xx — follow Location.
       if (res.status >= 300 && res.status < 400) {
@@ -367,7 +376,7 @@ export class AulaLoginClient {
         // "unexpected host" on perfectly valid pages.
         const metaUrl = extractMetaRefreshUrl(res.body);
         if (metaUrl) {
-          this.logger.debug('oauth.chain.meta_refresh', { metaUrl });
+          this.logger.debug('oauth.chain.meta_refresh', { metaUrl: sanitizeUrl(metaUrl) });
           currentUrl = new URL(metaUrl, currentUrl).toString();
           currentMethod = 'GET';
           currentBody = undefined;
@@ -612,7 +621,9 @@ export class AulaLoginClient {
       if (res.url.startsWith(this.oauth.redirectUri) && res.url.includes('code=')) {
         return res.url;
       }
-      throw new AulaLoginError(`Aula ACS chain stopped at status ${res.status} on ${res.url}`);
+      throw new AulaLoginError(
+        `Aula ACS chain stopped at status ${res.status} on ${sanitizeUrl(res.url)}`,
+      );
     }
     throw new AulaLoginError('Aula ACS chain exceeded 10 hops');
   }

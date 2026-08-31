@@ -2,12 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import {
   formatTraceText,
   InMemoryTracer,
+  SECRET_BODY_FIELD_NAMES,
+  SECRET_URL_PARAM_NAMES,
   sanitizeHeaders,
+  sanitizeLogMeta,
   sanitizeRequestBody,
   sanitizeResponseBody,
   sanitizeUrl,
   type WireEntry,
 } from './wire-tracer.ts';
+
+/** Stand-in for a real bearer JWT. No test may let this string survive. */
+const JWT = 'eyJhbGciOiJSUzI1NiJ9.PAYLOAD.SIGNATURE';
 
 describe('sanitizeUrl', () => {
   test('redacts access_token in query string', () => {
@@ -36,6 +42,74 @@ describe('sanitizeUrl', () => {
 
   test('returns the input unchanged when not a valid URL', () => {
     expect(sanitizeUrl('not a url')).toBe('not a url');
+  });
+
+  test('redacts refresh_token and id_token too', () => {
+    const out = sanitizeUrl(`https://example.com/cb?refresh_token=${JWT}&id_token=${JWT}`);
+    expect(out).not.toContain('SIGNATURE');
+    expect(out).toContain('refresh_token=%3Credacted');
+    expect(out).toContain('id_token=%3Credacted');
+  });
+
+  test('is idempotent — a second pass keeps the first redaction verbatim', () => {
+    const once = sanitizeUrl(`https://www.aula.dk/api/v22/?access_token=${JWT}`);
+    expect(sanitizeUrl(once)).toBe(once);
+  });
+});
+
+describe('redaction denylist parity', () => {
+  // The lists are the thing that silently falls behind when Aula adds a field.
+  // Tokens travel in the query string on the API and in the body on the OAuth
+  // endpoints, so anything token-shaped has to appear in both.
+  test('every *_token field is redacted in both bodies and query strings', () => {
+    const bodyFields = new Set(SECRET_BODY_FIELD_NAMES);
+    const urlParams = new Set(SECRET_URL_PARAM_NAMES);
+    for (const name of ['access_token', 'refresh_token', 'id_token']) {
+      expect(bodyFields.has(name)).toBe(true);
+      expect(urlParams.has(name)).toBe(true);
+    }
+    for (const name of [...bodyFields, ...urlParams]) {
+      if (!name.endsWith('_token')) continue;
+      expect(bodyFields.has(name)).toBe(true);
+      expect(urlParams.has(name)).toBe(true);
+    }
+  });
+});
+
+describe('sanitizeLogMeta', () => {
+  test('scrubs the access_token out of a logged request URL', () => {
+    const meta = sanitizeLogMeta({
+      method: 'GET',
+      url: `https://www.aula.dk/api/v22/?method=messaging.getThreads&access_token=${JWT}`,
+    });
+    const serialised = JSON.stringify(meta);
+    expect(serialised).not.toContain(JWT);
+    expect(serialised).not.toContain('SIGNATURE');
+    expect(serialised).toContain('messaging.getThreads');
+    expect(meta?.method).toBe('GET');
+  });
+
+  test('redacts secret-named keys whatever the value looks like', () => {
+    const meta = sanitizeLogMeta({ access_token: JWT, refresh_token: JWT, id_token: JWT });
+    expect(JSON.stringify(meta)).not.toContain('SIGNATURE');
+    expect(meta?.access_token).toMatch(/^<redacted/);
+    expect(meta?.refresh_token).toMatch(/^<redacted/);
+    expect(meta?.id_token).toMatch(/^<redacted/);
+  });
+
+  test('recurses into nested objects and arrays', () => {
+    const meta = sanitizeLogMeta({
+      hops: [{ url: `https://broker.unilogin.dk/cb?code=AUTHCODE&access_token=${JWT}` }],
+      tokens: { access_token: JWT },
+    });
+    const serialised = JSON.stringify(meta);
+    expect(serialised).not.toContain(JWT);
+    expect(serialised).not.toContain('AUTHCODE');
+  });
+
+  test('leaves harmless meta alone and passes undefined through', () => {
+    expect(sanitizeLogMeta({ hop: 3, status: 302 })).toEqual({ hop: 3, status: 302 });
+    expect(sanitizeLogMeta(undefined)).toBeUndefined();
   });
 });
 
@@ -124,6 +198,19 @@ describe('sanitizeResponseBody', () => {
     expect(parsed.access_token).toContain('redacted');
     expect(parsed.refresh_token).toContain('redacted');
     expect(parsed.expires_in).toBe(60);
+  });
+
+  test('redacts a full OIDC token response, id_token included', () => {
+    const body = JSON.stringify({
+      access_token: JWT,
+      refresh_token: JWT,
+      id_token: JWT,
+      token_type: 'Bearer',
+      expires_in: 3600,
+    });
+    const out = sanitizeResponseBody(body);
+    expect(out.text).not.toContain('SIGNATURE');
+    expect(out.text).toContain('Bearer');
   });
 });
 

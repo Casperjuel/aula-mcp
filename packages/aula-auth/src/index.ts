@@ -151,9 +151,13 @@ export {
   InMemoryTracer,
   JsonlFileTracer,
   noopTracer,
+  SECRET_BODY_FIELD_NAMES,
+  SECRET_URL_PARAM_NAMES,
   sanitizeHeaders,
+  sanitizeLogMeta,
   sanitizeRequestBody,
   sanitizeResponseBody,
+  sanitizeUrl,
   type WireEntry,
   type WireTracer,
 } from './wire-tracer.ts';

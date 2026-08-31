@@ -114,7 +114,9 @@ export class AulaHttpClient {
       }
     }
 
-    this.logger.debug('http.request', { method: init.method, url });
+    // sanitizeUrl, not the raw URL: Aula's API carries `access_token` in the
+    // query string, and a caller-supplied logger won't necessarily redact it.
+    this.logger.debug('http.request', { method: init.method, url: sanitizeUrl(url) });
     const start = Date.now();
     const seq = ++this.seq;
     let response: Response;
@@ -141,7 +143,7 @@ export class AulaHttpClient {
           durationMs,
         });
       }
-      this.logger.error('http.network_error', { url, error: message });
+      this.logger.error('http.network_error', { url: sanitizeUrl(url), error: message });
       throw e;
     }
     await this.jar.storeFromResponse(response.headers, url);

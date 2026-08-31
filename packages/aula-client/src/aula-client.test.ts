@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { AulaTokens } from '@aula-mcp/aula-auth';
 import { AulaClient } from './aula-client.ts';
-import { AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
+import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
 import { FakeHttp } from './test-helpers.ts';
 
 const TOKENS: AulaTokens = {
@@ -229,6 +229,40 @@ describe('AulaClient envelope handling', () => {
     );
     const c = makeClient(http);
     await expect(c.getDailyOverview([1])).rejects.toThrow(/broke/);
+  });
+});
+
+describe('AulaClient credential leakage', () => {
+  // Aula takes the access token as a query parameter, so every API URL is a
+  // credential. AulaApiError is surfaced to MCP clients and printed by the
+  // CLI, so it must never carry the raw URL (#86).
+  test('AulaApiError never carries the raw access_token', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope([]) }, // probe
+      { status: 500, body: 'upstream exploded' },
+    );
+    const c = makeClient(http);
+    const err = (await c.getDailyOverview([1]).then(
+      () => undefined,
+      (e: unknown) => e,
+    )) as AulaApiError;
+    expect(err).toBeInstanceOf(AulaApiError);
+    expect(JSON.stringify({ message: err.message, url: err.url })).not.toContain(
+      TOKENS.access_token,
+    );
+    expect(err.url).toContain('access_token=%3Credacted');
+  });
+
+  test('a probe failure keeps the token out of the error as well', async () => {
+    const http = new FakeHttp();
+    http.enqueue({ status: 503, body: 'maintenance' });
+    const c = makeClient(http);
+    const err = (await c.ensureApiVersion().then(
+      () => undefined,
+      (e: unknown) => e,
+    )) as AulaApiError;
+    expect(err.url).not.toContain(TOKENS.access_token);
   });
 });
 
