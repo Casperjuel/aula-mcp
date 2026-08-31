@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.4.0](https://github.com/Casperjuel/aula-mcp/compare/v1.3.0...v1.4.0) (2026-08-31)
+
+
+### Features
+
+* **cli:** add `aula notifications list-ids` for no-LLM Overblik pre-check ([#78](https://github.com/Casperjuel/aula-mcp/issues/78)) ([5fbfbc7](https://github.com/Casperjuel/aula-mcp/commit/5fbfbc7b31244a5c6c445fe71bfc6df714bd007d))
+
+
+### Bug Fixes
+
+* **cli:** keep JSON-only command output parseable on failure ([#85](https://github.com/Casperjuel/aula-mcp/issues/85)) ([e1dca9b](https://github.com/Casperjuel/aula-mcp/commit/e1dca9b04315f73eae5dfcc10083b6bebce4f9c1))
+* **cli:** tell the user to open the MitID app while waiting ([#67](https://github.com/Casperjuel/aula-mcp/issues/67)) ([5a22968](https://github.com/Casperjuel/aula-mcp/commit/5a22968e7864f7d4dcd499a74701059d9ec14acf))
+* correct AulaProfile field names, and probe a widget the profile has ([#68](https://github.com/Casperjuel/aula-mcp/issues/68)) ([d7a006b](https://github.com/Casperjuel/aula-mcp/commit/d7a006be333af2255be78c7aab2f88cd599e05ea))
+
 ## [1.3.0](https://github.com/Casperjuel/aula-mcp/compare/v1.2.0...v1.3.0) (2026-06-09)
 
 

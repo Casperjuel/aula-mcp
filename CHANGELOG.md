@@ -1,5 +1,28 @@
 # Changelog
 
+## [1.5.0](https://github.com/Casperjuel/aula-mcp/compare/v1.4.0...v1.5.0) (2026-08-31)
+
+
+### Features
+
+* **cli:** add `aula notifications list-ids` for no-LLM Overblik pre-check ([#78](https://github.com/Casperjuel/aula-mcp/issues/78)) ([5fbfbc7](https://github.com/Casperjuel/aula-mcp/commit/5fbfbc7b31244a5c6c445fe71bfc6df714bd007d))
+* **mcp:** add aula.messages.mark_read and surface thread pagination ([#81](https://github.com/Casperjuel/aula-mcp/issues/81)) ([c2e5ee5](https://github.com/Casperjuel/aula-mcp/commit/c2e5ee583d912cafa55b1f4da9958e15702f3b13))
+* **mcp:** family-wide posts feed, attachment download and PDF text extraction ([#39](https://github.com/Casperjuel/aula-mcp/issues/39)) ([1013d27](https://github.com/Casperjuel/aula-mcp/commit/1013d273db6465d55d2701655ec301427cb780bf)), closes [#75](https://github.com/Casperjuel/aula-mcp/issues/75)
+
+
+### Bug Fixes
+
+* **auth:** name STIL's bot-defense block instead of "unexpected host" ([#88](https://github.com/Casperjuel/aula-mcp/issues/88)) ([835960b](https://github.com/Casperjuel/aula-mcp/commit/835960b4cfb372e7836719b52dc89b8ca1f25ae2)), closes [#83](https://github.com/Casperjuel/aula-mcp/issues/83)
+* **auth:** redact access_token and OAuth codes from logs and errors ([#90](https://github.com/Casperjuel/aula-mcp/issues/90)) ([93bcd16](https://github.com/Casperjuel/aula-mcp/commit/93bcd161a62e6f146863adcf708cb972dcee430a)), closes [#86](https://github.com/Casperjuel/aula-mcp/issues/86)
+* **client:** establish profile context before the first POST ([#80](https://github.com/Casperjuel/aula-mcp/issues/80)) ([24f9dec](https://github.com/Casperjuel/aula-mcp/commit/24f9dec36fb92523c6cb2026ea8b564bbf14c4f0))
+* **cli:** keep JSON-only command output parseable on failure ([#85](https://github.com/Casperjuel/aula-mcp/issues/85)) ([e1dca9b](https://github.com/Casperjuel/aula-mcp/commit/e1dca9b04315f73eae5dfcc10083b6bebce4f9c1))
+* **cli:** tell the user to open the MitID app while waiting ([#67](https://github.com/Casperjuel/aula-mcp/issues/67)) ([5a22968](https://github.com/Casperjuel/aula-mcp/commit/5a22968e7864f7d4dcd499a74701059d9ec14acf))
+* correct AulaProfile field names, and probe a widget the profile has ([#68](https://github.com/Casperjuel/aula-mcp/issues/68)) ([d7a006b](https://github.com/Casperjuel/aula-mcp/commit/d7a006be333af2255be78c7aab2f88cd599e05ea))
+* **mcp-server:** stop mangling Danish letters in attachment filenames ([#91](https://github.com/Casperjuel/aula-mcp/issues/91)) ([f359252](https://github.com/Casperjuel/aula-mcp/commit/f359252d82916e12a725e93ad47b4bfbf44d0349))
+* **mcp-server:** support multiple streamable HTTP MCP sessions ([#79](https://github.com/Casperjuel/aula-mcp/issues/79)) ([32a40bd](https://github.com/Casperjuel/aula-mcp/commit/32a40bd75f982f4ec981ce96a19fce080a2c8f54))
+* **mcp-server:** use institution profile IDs for calendar events ([#82](https://github.com/Casperjuel/aula-mcp/issues/82)) ([21a23fd](https://github.com/Casperjuel/aula-mcp/commit/21a23fd1548a464c79cbb4806ccc8a0ee1d9be20))
+* **minuddannelse:** key childFilter on unilogin userIds, not numeric profile ids ([#87](https://github.com/Casperjuel/aula-mcp/issues/87)) ([6a9f91a](https://github.com/Casperjuel/aula-mcp/commit/6a9f91a516dc0340c671c3f63ac36f84db0e8fd7)), closes [#74](https://github.com/Casperjuel/aula-mcp/issues/74)
+
 ## [1.4.0](https://github.com/Casperjuel/aula-mcp/compare/v1.3.0...v1.4.0) (2026-08-14)
 
 

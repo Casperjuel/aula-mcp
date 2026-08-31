@@ -1,7 +1,7 @@
 {
-  ".": "1.4.0",
-  "apps/cli": "1.3.0",
-  "packages/aula-auth": "1.1.0",
-  "packages/aula-client": "1.3.0",
-  "packages/mcp-server": "1.3.0"
+  ".": "1.5.0",
+  "apps/cli": "1.4.0",
+  "packages/aula-auth": "1.1.1",
+  "packages/aula-client": "1.4.0",
+  "packages/mcp-server": "1.4.0"
 }
