@@ -27,8 +27,10 @@ import type {
   CalendarEvent,
   DailyOverviewEntry,
   GetCalendarEventsArgs,
+  GetPostsArgs,
   GetPresenceTemplatesArgs,
   MessageThread,
+  PostsData,
   PresenceTemplatesData,
   ProfileContextData,
   ProfilesByLoginData,
@@ -347,23 +349,21 @@ export class AulaClient {
    * `posts.getAllPosts` — class-level news feed (teacher posts, etc.).
    * Returns the raw `data` field. Pagination via `limit` + `index` (both 0-based).
    */
-  async getPosts(opts: Record<string, any> = {}): Promise<unknown> {
-    const params: Record<string, any> = {};
-    
-    if (opts.limit !== undefined) params.limit = opts.limit;
-    if (opts.index !== undefined) params.index = opts.index;
-    if (opts.parent !== undefined) params.parent = opts.parent;
-    if (opts.isUnread !== undefined) params.isUnread = opts.isUnread;
-
-    // Manually serialize the array into separate, numbered keys!
-    // This produces: institutionProfileIds[0]=3288873&institutionProfileIds[1]=3288893
-    if (opts.profileIds && Array.isArray(opts.profileIds)) {
-      opts.profileIds.forEach((id: number, index: number) => {
-        params[`institutionProfileIds[${index}]`] = id;
-      });
+  async getPosts(opts: GetPostsArgs = {}): Promise<PostsData | undefined> {
+    const params = new URLSearchParams();
+    params.set('method', 'posts.getAllPosts');
+    // Without `parent=profile` + the institution-profile filter Aula answers
+    // 200 with an empty `posts` array rather than an error, so an unscoped
+    // call looks like an empty feed instead of a malformed one (#75).
+    params.set('parent', opts.parent ?? 'profile');
+    params.set('index', String(opts.index ?? 0));
+    if (opts.limit !== undefined) params.set('limit', String(opts.limit));
+    params.set('isUnread', opts.onlyUnread ? 'true' : 'false');
+    // Array params take the `[]` suffix, same as childIds[] above.
+    for (const id of opts.institutionProfileIds ?? []) {
+      params.append('institutionProfileIds[]', String(id));
     }
-
-    return this.getJson<unknown>('posts.getAllPosts', params);
+    return this.getJsonRaw<PostsData>(params);
   }
 
   /**

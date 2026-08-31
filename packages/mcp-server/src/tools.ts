@@ -3,9 +3,10 @@
  * Inputs are validated by Zod 4 schemas registered with McpServer.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { AulaPost } from '@aula-mcp/aula-client';
 import {
   AulaStepUpRequiredError,
   isoDate,
@@ -18,11 +19,66 @@ import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
 import { buildDiscoverManifest } from './discover.ts';
-import { readFile } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 
-const require = createRequire(import.meta.url);
-const { PDFParse } = require('pdf-parse');
+const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Download a CloudFront presigned attachment to a local file and return a
+ * result payload. Shared by aula.messages.get_attachment and
+ * aula.posts.get_attachment — the two differ only in how they arrive at a
+ * URL, not in what they do with it.
+ *
+ * Deliberately plain `fetch`, not AulaHttpClient: the signature in the URL
+ * IS the auth, and Aula cookies / Authorization headers can interfere.
+ */
+async function downloadAttachmentToDisk(args: {
+  url: string;
+  filename: string;
+  /** Prefixed onto the on-disk name to keep sources from colliding. */
+  prefix: string;
+  mediaType?: string;
+}): Promise<Record<string, unknown>> {
+  const res = await fetch(args.url);
+  if (!res.ok) {
+    const body = (await res.text()).slice(0, 300);
+    return { error: 'download_failed', httpStatus: res.status, filename: args.filename, body };
+  }
+
+  const declared = Number(res.headers.get('content-length') ?? '0');
+  if (declared > ATTACHMENT_MAX_BYTES) {
+    return {
+      error: 'attachment_too_large',
+      filename: args.filename,
+      bytes: declared,
+      maxBytes: ATTACHMENT_MAX_BYTES,
+    };
+  }
+
+  // content-length is advisory — re-check against what actually arrived.
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.byteLength > ATTACHMENT_MAX_BYTES) {
+    return {
+      error: 'attachment_too_large',
+      filename: args.filename,
+      bytes: buf.byteLength,
+      maxBytes: ATTACHMENT_MAX_BYTES,
+    };
+  }
+
+  const baseDir = process.env.AULA_MCP_ATTACHMENTS_DIR ?? join(tmpdir(), 'aula-attachments');
+  await mkdir(baseDir, { recursive: true });
+  const safeName = args.filename.replace(/[^\w.\- ]+/gu, '_');
+  const path = join(baseDir, `${args.prefix}-${safeName}`);
+  await writeFile(path, buf, { mode: 0o600 });
+
+  return {
+    ok: true,
+    path,
+    filename: args.filename,
+    bytes: buf.length,
+    ...(args.mediaType ? { mediaType: args.mediaType } : {}),
+  };
+}
 
 function jsonContent(data: unknown): { content: Array<{ type: 'text'; text: string }> } {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
@@ -79,8 +135,8 @@ async function resolveFamilyProfileIds(
   return [...new Set([...guardianIds, ...childIds])];
 }
 
-/** Strip Aula post HTML down to readable text (keeps line breaks). */
-function htmlToText(html: string): string {
+/** Strip Aula post HTML down to readable text (keeps line breaks). Exported for tests. */
+export function htmlToText(html: string): string {
   return html
     .replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
     .replace(/<br\s*\/?>/gi, '\n')
@@ -93,15 +149,21 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-/** Keep only what a reader (and the attachment-download tool) needs. */
-function slimPost(post: any) {
+interface PdfTextResult {
+  text: string;
+  total: number;
+  info: unknown;
+}
+
+/** Keep only what a reader (and the attachment-download tool) needs. Exported for tests. */
+export function slimPost(post: AulaPost) {
   const attachments = (post.attachments ?? [])
-    .map((a: any) => ({
+    .map((a) => ({
       name: a.file?.name ?? a.name,
       url: a.file?.url ?? a.url, // get_attachment needs the exact URL
       ...(a.file?.mediaType ? { mediaType: a.file.mediaType } : {}),
     }))
-    .filter((a: any) => a.url);
+    .filter((a) => a.url);
 
   return {
     id: post.id, // needed for aula.posts.get_attachment's postId
@@ -614,56 +676,57 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
   );
 
-// --- aula.posts.list -----------------------------------------------------
+  // --- aula.posts.list -----------------------------------------------------
 
-
-// ---- Tool ----
-server.registerTool(
-  'aula.posts.list',
-  {
-    title: 'Aula posts (class news feed)',
-    description: 'Teacher posts and class-level updates.',
-    inputSchema: {
-      limit: z.number().int().min(1).max(50).optional(),
-      index: z.number().int().min(0).optional(),
-      profileIds: z.array(z.number()).min(1).optional().describe(
-        "Optional. Omit to include the whole family across all institutions " +
-        "(school + club) automatically — recommended, and the only way to " +
-        "guarantee club posts appear. Only set this to deliberately restrict " +
-        "the feed to specific institution profiles.",
-      ),
-      onlyUnread: z.boolean().optional().describe(
-        "Set to true if you ONLY want to see unread posts. Defaults to false (shows all historical posts).",
-      ),
+  server.registerTool(
+    'aula.posts.list',
+    {
+      title: 'Aula posts (class news feed)',
+      description:
+        'Teacher posts and class-level updates, across every institution the ' +
+        'family belongs to (school and club).',
+      inputSchema: {
+        limit: z.number().int().min(1).max(50).optional(),
+        index: z.number().int().min(0).optional(),
+        profileIds: z
+          .array(z.number())
+          .min(1)
+          .optional()
+          .describe(
+            'Optional. Omit to cover the whole family across all institutions ' +
+              'automatically — recommended, and the only way to guarantee club ' +
+              'posts appear. Set this only to deliberately narrow the feed.',
+          ),
+        onlyUnread: z
+          .boolean()
+          .optional()
+          .describe('Only return unread posts. Defaults to false (all posts).'),
+      },
     },
-  },
-  async (args) => {
-  const client = await context.getClient();
-  await context.getGuardianUserId();
+    async (args) => {
+      const client = await context.getClient();
+      // Profile-scoped feed needs the guardian profile activated, or Aula 403s.
+      await context.getGuardianUserId();
 
-  const profileIds = args.profileIds ?? await resolveFamilyProfileIds(client);
+      const institutionProfileIds = args.profileIds ?? (await resolveFamilyProfileIds(client));
 
-  const result: any = await client.getPosts({
-    limit: args.limit,
-    index: args.index ?? 0,
-    parent: 'profile',
-    isUnread: args.onlyUnread === true ? 'true' : 'false',
-    profileIds,
-  });
+      const result = await client.getPosts({
+        ...(args.limit !== undefined ? { limit: args.limit } : {}),
+        index: args.index ?? 0,
+        onlyUnread: args.onlyUnread === true,
+        institutionProfileIds,
+      });
 
-    const rawPosts: any[] = Array.isArray(result)
-      ? result
-      : (result?.posts ?? result?.data?.posts ?? []);
-
-    return jsonContent({
-      count: rawPosts.length,
-      ...(typeof result?.moreMessagesExist === 'boolean'
-        ? { moreMessagesExist: result.moreMessagesExist }
-        : {}),
-      posts: rawPosts.map(slimPost),
-    });
-  },
-);
+      const rawPosts = result?.posts ?? [];
+      return jsonContent({
+        count: rawPosts.length,
+        ...(typeof result?.moreMessagesExist === 'boolean'
+          ? { moreMessagesExist: result.moreMessagesExist }
+          : {}),
+        posts: rawPosts.map(slimPost),
+      });
+    },
+  );
 
   // --- aula.raw_request (gated) --------------------------------------------
 
@@ -987,174 +1050,97 @@ server.registerTool(
           totalAttachments: flat.length,
         });
       }
-      const url = att.file.url;
-      const filename = att.file.name ?? `attachment-${args.attachmentIndex}.bin`;
-      // CloudFront presigned URLs don't want Aula cookies / Auth headers
-      // — the signature IS the auth, and extra headers can interfere.
-      // Use plain fetch (not AulaHttpClient, which adds defaults).
-      const res = await fetch(url);
-      if (!res.ok) {
-        const body = (await res.text()).slice(0, 300);
-        return jsonContent({
-          error: 'download_failed',
-          httpStatus: res.status,
-          filename,
-          body,
-        });
-      }
-      const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
-      const declared = Number(res.headers.get('content-length') ?? '0');
-      if (declared > ATTACHMENT_MAX_BYTES) {
-        return jsonContent({
-          error: 'attachment_too_large',
-          filename,
-          bytes: declared,
-          maxBytes: ATTACHMENT_MAX_BYTES,
-        });
-      }
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.byteLength > ATTACHMENT_MAX_BYTES) {
-        return jsonContent({
-          error: 'attachment_too_large',
-          filename,
-          bytes: buf.byteLength,
-          maxBytes: ATTACHMENT_MAX_BYTES,
-        });
-      }
-      const baseDir = process.env.AULA_MCP_ATTACHMENTS_DIR ?? join(tmpdir(), 'aula-attachments');
-      await mkdir(baseDir, { recursive: true });
-      const safeName = filename.replace(/[^\w.\- ]+/gu, '_');
-      const path = join(baseDir, `${args.threadId}-${args.attachmentIndex}-${safeName}`);
-      await writeFile(path, buf, { mode: 0o600 });
-      return jsonContent({
-        ok: true,
-        path,
-        filename,
-        bytes: buf.length,
+      const result = await downloadAttachmentToDisk({
+        url: att.file.url,
+        filename: att.file.name ?? `attachment-${args.attachmentIndex}.bin`,
+        prefix: `${args.threadId}-${args.attachmentIndex}`,
         ...(att.file.mediaType ? { mediaType: att.file.mediaType } : {}),
       });
+      return jsonContent(result);
     },
   );
 
-  // --- aula.posts.get_attachment ----------------------------------------
+  // --- aula.posts.get_attachment -------------------------------------------
   //
-  // Download an attachment from a news feed post using its raw URL.
+  // Same rationale as aula.messages.get_attachment above: keep the presigned
+  // URL out of the model's emit path. Posts differ only in that the caller
+  // already holds the URL, from the attachments array in aula.posts.list.
 
   server.registerTool(
     'aula.posts.get_attachment',
     {
       title: 'Download a post attachment to local disk',
       description:
-        'Download an attachment from a news feed post and write it to a local temporary file. ' +
-        'Extract the exact `url` and `name` from the post\'s attachments array and pass them here. ' +
-        'CRITICAL: You must pass the URL exactly as it appears in the JSON without altering any characters.',
+        'Download an attachment from a news feed post and write it to a local ' +
+        'temporary file, returning the path. Pass `url` and `name` exactly as ' +
+        'they appear in the attachments array from `aula.posts.list` — the ' +
+        'CloudFront signature is part of the URL, so altering a single ' +
+        'character produces a MalformedSignature 403.',
       inputSchema: {
-        postId: z.number().int().describe("The ID of the post (used for safely naming the file)"),
-        url: z.string().url().describe("The exact CloudFront presigned URL of the attachment from the posts feed"),
-        filename: z.string().describe("The name of the file (e.g., 'Kostplan_juni_2026.pdf')"),
+        postId: z.number().int().describe('The post the attachment belongs to (names the file).'),
+        url: z.string().url().describe('The exact presigned URL from the posts feed.'),
+        filename: z.string().describe("e.g. 'Kostplan_juni_2026.pdf'"),
       },
     },
     async (args) => {
-      // CloudFront presigned URLs don't want Aula cookies or Auth headers.
-      // The signature in the URL IS the auth. We use plain fetch here.
-      const res = await fetch(args.url);
-      
-      if (!res.ok) {
-        const body = (await res.text()).slice(0, 300);
-        return jsonContent({
-          error: 'download_failed',
-          httpStatus: res.status,
+      return jsonContent(
+        await downloadAttachmentToDisk({
+          url: args.url,
           filename: args.filename,
-          body,
-        });
-      }
-
-      const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024; // 50 MB limit
-      const declared = Number(res.headers.get('content-length') ?? '0');
-      
-      if (declared > ATTACHMENT_MAX_BYTES) {
-        return jsonContent({
-          error: 'attachment_too_large',
-          filename: args.filename,
-          bytes: declared,
-          maxBytes: ATTACHMENT_MAX_BYTES,
-        });
-      }
-
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.byteLength > ATTACHMENT_MAX_BYTES) {
-        return jsonContent({
-          error: 'attachment_too_large',
-          filename: args.filename,
-          bytes: buf.byteLength,
-          maxBytes: ATTACHMENT_MAX_BYTES,
-        });
-      }
-
-      // Use the exact same safe temporary directory as the messages tool
-      const baseDir = process.env.AULA_MCP_ATTACHMENTS_DIR ?? join(tmpdir(), 'aula-attachments');
-      await mkdir(baseDir, { recursive: true });
-      
-      // Sanitize the filename so it doesn't break Windows/Mac file systems
-      const safeName = args.filename.replace(/[^\w.\- ]+/gu, '_');
-      const path = join(baseDir, `post-${args.postId}-${safeName}`);
-      
-      await writeFile(path, buf, { mode: 0o600 });
-      
-      return jsonContent({
-        ok: true,
-        path,
-        filename: args.filename,
-        bytes: buf.length,
-      });
+          prefix: `post-${args.postId}`,
+        }),
+      );
     },
   );
 
-
-
-
-// ... scroll down to the bottom of the file ...
-
-  // --- aula.utils.extract_pdf_text ----------------------------------------
+  // --- aula.utils.extract_pdf_text ------------------------------------------
   //
-  // Reads a locally downloaded PDF file and returns its plain text content.
+  // Aula sends a lot of what parents actually need as PDF attachments —
+  // menus, packing lists, trip letters — so downloading one is only half the
+  // job. pdf-parse is imported lazily: it pulls in pdf.js, and a server whose
+  // user never opens a PDF should not pay for that at boot.
 
   server.registerTool(
     'aula.utils.extract_pdf_text',
     {
       title: 'Extract text from a local PDF file',
       description:
-        'Read a PDF file from a local absolute path (like those returned by attachment download tools) ' +
-        'and extract its text content so you can read, summarize, or analyze it.',
+        'Read a PDF from a local absolute path — typically one returned by ' +
+        'aula.posts.get_attachment or aula.messages.get_attachment — and ' +
+        'return its text so it can be read or summarised.',
       inputSchema: {
-        path: z.string().describe('The absolute local file path to the PDF file on disk'),
+        path: z.string().describe('Absolute local path to the PDF.'),
       },
     },
     async (args) => {
-    let parser: { getText(): Promise<{ text: string; total: number; info: unknown }>; destroy?(): Promise<void> } | null = null;
-    try {
-      const dataBuffer = await readFile(args.path);
-
-      // v2 API: instantiate the class, then call getText()
-      parser = new PDFParse({ data: dataBuffer });
-      const result = await parser.getText();
-
-      return jsonContent({
-        ok: true,
-        text: result.text,
-        pages: result.total,   // see note below
-        info: result.info,
-      });
-    } catch (error) {
-      return jsonContent({
-        ok: false,
-        error: 'failed_to_read_pdf',
-        message: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      // v2 holds pdf.js resources; release them
-      if (parser?.destroy) await parser.destroy();
-    }
-  },
+      let parser: { getText(): Promise<PdfTextResult>; destroy?(): Promise<void> } | undefined;
+      try {
+        const { PDFParse } = (await import('pdf-parse')) as unknown as {
+          PDFParse: new (opts: {
+            data: Buffer;
+          }) => {
+            getText(): Promise<PdfTextResult>;
+            destroy?(): Promise<void>;
+          };
+        };
+        parser = new PDFParse({ data: await readFile(args.path) });
+        const result = await parser.getText();
+        return jsonContent({
+          ok: true,
+          text: result.text,
+          pages: result.total,
+          info: result.info,
+        });
+      } catch (error) {
+        return jsonContent({
+          ok: false,
+          error: 'failed_to_read_pdf',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        // v2 holds pdf.js resources open; release them even on the error path.
+        if (parser?.destroy) await parser.destroy();
+      }
+    },
   );
 }

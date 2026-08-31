@@ -273,8 +273,13 @@ function buildCapabilities(
       tools: ['aula.notifications.list'],
     },
     posts: {
-      summary: 'Class-level news / posts feed (teacher updates).',
-      tools: ['aula.posts.list'],
+      summary:
+        'Class-level news / posts feed (teacher updates), across school and club. ' +
+        'Attachments can be downloaded, and PDFs read as text.',
+      tools: ['aula.posts.list', 'aula.posts.get_attachment', 'aula.utils.extract_pdf_text'],
+      notes:
+        'Omit profileIds on aula.posts.list — the default covers every institution ' +
+        'the family belongs to, and is the only way club posts appear.',
     },
     ugeplan: {
       summary:

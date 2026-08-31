@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { registerTools, validateSetTemplateArgs } from './tools.ts';
+import { htmlToText, registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
 
 describe('validateSetTemplateArgs', () => {
   test('picked_up_by needs pickedUpBy', () => {
@@ -186,5 +186,75 @@ describe('aula.messages.mark_read', () => {
       if (previous !== undefined) process.env.AULA_MCP_WRITE = previous;
     }
     expect(seen).toBe(false);
+  });
+});
+
+describe('htmlToText', () => {
+  test('block-level tags become line breaks, inline markup is dropped', () => {
+    expect(htmlToText('<p>Husk badetøj</p><p>og håndklæde</p>')).toBe('Husk badetøj\nog håndklæde');
+    expect(htmlToText('Line one<br/>Line two')).toBe('Line one\nLine two');
+    expect(htmlToText('<div><strong>Fed</strong> tekst</div>')).toBe('Fed tekst');
+  });
+
+  test('decodes the entities Aula actually emits', () => {
+    expect(htmlToText('Mor &amp; far')).toBe('Mor & far');
+    expect(htmlToText('a&nbsp;b')).toBe('a b');
+    expect(htmlToText('&lt;ikke en tag&gt;')).toBe('<ikke en tag>');
+  });
+
+  test('collapses runs of blank lines and trims', () => {
+    expect(htmlToText('<p>a</p><p></p><p></p><p>b</p>')).toBe('a\n\nb');
+  });
+
+  test('empty content is empty, not "undefined"', () => {
+    expect(htmlToText('')).toBe('');
+  });
+});
+
+describe('slimPost', () => {
+  test('keeps the fields a reader and get_attachment need', () => {
+    const slim = slimPost({
+      id: 42,
+      title: 'Sommerfest',
+      publishAt: '2026-06-01T10:00:00+02:00',
+      isImportant: true,
+      content: { html: '<p>Kom glad</p>' },
+      ownerProfile: {
+        fullName: 'Lærer Hansen',
+        institution: { institutionName: 'Klub Solsikken' },
+      },
+      attachments: [
+        { file: { name: 'plan.pdf', url: 'https://cdn/plan.pdf', mediaType: 'application/pdf' } },
+      ],
+    });
+
+    expect(slim.id).toBe(42);
+    expect(slim.title).toBe('Sommerfest');
+    expect(slim.date).toBe('2026-06-01T10:00:00+02:00');
+    expect(slim.author).toBe('Lærer Hansen');
+    // institutionName is what tells school and club apart at a glance.
+    expect(slim.institution).toBe('Klub Solsikken');
+    expect(slim.isImportant).toBe(true);
+    expect(slim.content).toBe('Kom glad');
+    expect(slim.attachments?.[0]?.url).toBe('https://cdn/plan.pdf');
+  });
+
+  test('falls back to timestamp when publishAt is absent', () => {
+    expect(slimPost({ timestamp: '2026-05-05T08:00:00Z' }).date).toBe('2026-05-05T08:00:00Z');
+  });
+
+  test('omits isImportant and attachments rather than emitting empty values', () => {
+    const slim = slimPost({ id: 1, content: { html: '<p>hej</p>' } });
+    expect('isImportant' in slim).toBe(false);
+    expect('attachments' in slim).toBe(false);
+  });
+
+  test('drops attachments with no usable URL', () => {
+    const slim = slimPost({
+      id: 1,
+      attachments: [{ name: 'ingen-url.pdf' }, { file: { name: 'ok.pdf', url: 'https://cdn/ok' } }],
+    });
+    expect(slim.attachments).toHaveLength(1);
+    expect(slim.attachments?.[0]?.name).toBe('ok.pdf');
   });
 });
