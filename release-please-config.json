@@ -5,24 +5,10 @@
   "separate-pull-requests": false,
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": false,
-  "plugins": [
-    {
-      "type": "linked-versions",
-      "groupName": "aula-mcp",
-      "components": [
-        "aula-mcp",
-        "@aula-mcp/cli",
-        "@aula-mcp/aula-auth",
-        "@aula-mcp/aula-client",
-        "@aula-mcp/mcp-server"
-      ]
-    }
-  ],
   "packages": {
-    ".": { "package-name": "aula-mcp" },
-    "apps/cli": { "package-name": "@aula-mcp/cli" },
-    "packages/aula-auth": { "package-name": "@aula-mcp/aula-auth" },
-    "packages/aula-client": { "package-name": "@aula-mcp/aula-client" },
-    "packages/mcp-server": { "package-name": "@aula-mcp/mcp-server" }
+    ".": {
+      "package-name": "aula-mcp",
+      "extra-files": ["packages/mcp-server/src/version.ts"]
+    }
   }
 }
