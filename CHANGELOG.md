@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/Casperjuel/aula-mcp/compare/v1.5.0...v1.5.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* **ci:** release one version, and report it in the MCP handshake ([#94](https://github.com/Casperjuel/aula-mcp/issues/94)) ([71a124a](https://github.com/Casperjuel/aula-mcp/commit/71a124a79319fd3fd51c3a54f59d64b3a7f04843))
+
 ## [1.5.0](https://github.com/Casperjuel/aula-mcp/compare/v1.4.0...v1.5.0) (2026-08-31)
 
 

@@ -6,4 +6,4 @@
  * the code. release-please rewrites the annotated line on every release —
  * do not edit it by hand.
  */
-export const VERSION = '1.5.0'; // x-release-please-version
+export const VERSION = '1.5.1'; // x-release-please-version
