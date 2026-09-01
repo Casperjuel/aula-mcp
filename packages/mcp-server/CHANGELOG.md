@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.4.0](https://github.com/Casperjuel/aula-mcp/compare/v1.3.0...v1.4.0) (2026-08-31)
+
+
+### Features
+
+* **mcp:** add aula.messages.mark_read and surface thread pagination ([#81](https://github.com/Casperjuel/aula-mcp/issues/81)) ([c2e5ee5](https://github.com/Casperjuel/aula-mcp/commit/c2e5ee583d912cafa55b1f4da9958e15702f3b13))
+* **mcp:** family-wide posts feed, attachment download and PDF text extraction ([#39](https://github.com/Casperjuel/aula-mcp/issues/39)) ([1013d27](https://github.com/Casperjuel/aula-mcp/commit/1013d273db6465d55d2701655ec301427cb780bf)), closes [#75](https://github.com/Casperjuel/aula-mcp/issues/75)
+* **presence:** komme/gå template read + write tools ([#31](https://github.com/Casperjuel/aula-mcp/issues/31)) ([3a7c3da](https://github.com/Casperjuel/aula-mcp/commit/3a7c3da531d29aa55d62d6919088da848bdf7da7))
+* **presence:** report a child sick, or take it back ([#59](https://github.com/Casperjuel/aula-mcp/issues/59)) ([f7e5ebf](https://github.com/Casperjuel/aula-mcp/commit/f7e5ebf267d08926c9860e5f085d3f20bf67848d))
+
+
+### Bug Fixes
+
+* correct AulaProfile field names, and probe a widget the profile has ([#68](https://github.com/Casperjuel/aula-mcp/issues/68)) ([d7a006b](https://github.com/Casperjuel/aula-mcp/commit/d7a006be333af2255be78c7aab2f88cd599e05ea))
+* **mcp-server:** set idleTimeout on the setup UI server ([#61](https://github.com/Casperjuel/aula-mcp/issues/61)) ([8be78ac](https://github.com/Casperjuel/aula-mcp/commit/8be78aca80e30e9a842eca326f918caf9a7dc8be))
+* **mcp-server:** stop mangling Danish letters in attachment filenames ([#91](https://github.com/Casperjuel/aula-mcp/issues/91)) ([f359252](https://github.com/Casperjuel/aula-mcp/commit/f359252d82916e12a725e93ad47b4bfbf44d0349))
+* **mcp-server:** support multiple streamable HTTP MCP sessions ([#79](https://github.com/Casperjuel/aula-mcp/issues/79)) ([32a40bd](https://github.com/Casperjuel/aula-mcp/commit/32a40bd75f982f4ec981ce96a19fce080a2c8f54))
+* **mcp-server:** use institution profile IDs for calendar events ([#82](https://github.com/Casperjuel/aula-mcp/issues/82)) ([21a23fd](https://github.com/Casperjuel/aula-mcp/commit/21a23fd1548a464c79cbb4806ccc8a0ee1d9be20))
+
 ## [1.3.0](https://github.com/Casperjuel/aula-mcp/compare/v1.2.0...v1.3.0) (2026-08-14)
 
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.4.0](https://github.com/Casperjuel/aula-mcp/compare/v1.3.0...v1.4.0) (2026-08-31)
+
+
+### Features
+
+* **mcp:** add aula.messages.mark_read and surface thread pagination ([#81](https://github.com/Casperjuel/aula-mcp/issues/81)) ([c2e5ee5](https://github.com/Casperjuel/aula-mcp/commit/c2e5ee583d912cafa55b1f4da9958e15702f3b13))
+* **mcp:** family-wide posts feed, attachment download and PDF text extraction ([#39](https://github.com/Casperjuel/aula-mcp/issues/39)) ([1013d27](https://github.com/Casperjuel/aula-mcp/commit/1013d273db6465d55d2701655ec301427cb780bf)), closes [#75](https://github.com/Casperjuel/aula-mcp/issues/75)
+* **presence:** report a child sick, or take it back ([#59](https://github.com/Casperjuel/aula-mcp/issues/59)) ([f7e5ebf](https://github.com/Casperjuel/aula-mcp/commit/f7e5ebf267d08926c9860e5f085d3f20bf67848d))
+
+
+### Bug Fixes
+
+* **auth:** redact access_token and OAuth codes from logs and errors ([#90](https://github.com/Casperjuel/aula-mcp/issues/90)) ([93bcd16](https://github.com/Casperjuel/aula-mcp/commit/93bcd161a62e6f146863adcf708cb972dcee430a)), closes [#86](https://github.com/Casperjuel/aula-mcp/issues/86)
+* **client:** establish profile context before the first POST ([#80](https://github.com/Casperjuel/aula-mcp/issues/80)) ([24f9dec](https://github.com/Casperjuel/aula-mcp/commit/24f9dec36fb92523c6cb2026ea8b564bbf14c4f0))
+* correct AulaProfile field names, and probe a widget the profile has ([#68](https://github.com/Casperjuel/aula-mcp/issues/68)) ([d7a006b](https://github.com/Casperjuel/aula-mcp/commit/d7a006be333af2255be78c7aab2f88cd599e05ea))
+* **minuddannelse:** key childFilter on unilogin userIds, not numeric profile ids ([#87](https://github.com/Casperjuel/aula-mcp/issues/87)) ([6a9f91a](https://github.com/Casperjuel/aula-mcp/commit/6a9f91a516dc0340c671c3f63ac36f84db0e8fd7)), closes [#74](https://github.com/Casperjuel/aula-mcp/issues/74)
+
 ## [1.3.0](https://github.com/Casperjuel/aula-mcp/compare/v1.2.1...v1.3.0) (2026-08-14)
 
 

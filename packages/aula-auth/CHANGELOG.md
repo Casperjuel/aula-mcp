@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.1](https://github.com/Casperjuel/aula-mcp/compare/v1.1.0...v1.1.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* **auth,meebook:** support MitID hardware kodeviser + fix dup identities & Meebook unilogin ([#42](https://github.com/Casperjuel/aula-mcp/issues/42)) ([1c37582](https://github.com/Casperjuel/aula-mcp/commit/1c3758220839dee0a9da259c115859d0b1e2a52f))
+* **auth:** name STIL's bot-defense block instead of "unexpected host" ([#88](https://github.com/Casperjuel/aula-mcp/issues/88)) ([835960b](https://github.com/Casperjuel/aula-mcp/commit/835960b4cfb372e7836719b52dc89b8ca1f25ae2)), closes [#83](https://github.com/Casperjuel/aula-mcp/issues/83)
+* **auth:** redact access_token and OAuth codes from logs and errors ([#90](https://github.com/Casperjuel/aula-mcp/issues/90)) ([93bcd16](https://github.com/Casperjuel/aula-mcp/commit/93bcd161a62e6f146863adcf708cb972dcee430a)), closes [#86](https://github.com/Casperjuel/aula-mcp/issues/86)
+* **cli:** tell the user to open the MitID app while waiting ([#67](https://github.com/Casperjuel/aula-mcp/issues/67)) ([5a22968](https://github.com/Casperjuel/aula-mcp/commit/5a22968e7864f7d4dcd499a74701059d9ec14acf))
+
 ## [1.1.0](https://github.com/Casperjuel/aula-mcp/compare/v1.0.1...v1.1.0) (2026-08-14)
 
 
