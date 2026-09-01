@@ -9,6 +9,7 @@ import type { Logger } from '@aula-mcp/aula-auth';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AulaContext } from './aula-context.ts';
 import { registerTools } from './tools.ts';
+import { VERSION } from './version.ts';
 
 const INSTRUCTIONS = [
   'This server exposes the Danish school platform Aula to AI agents.',
@@ -51,7 +52,7 @@ export function createMcpApp({ logger }: McpAppOptions): McpApp {
   const mcp = new McpServer(
     {
       name: 'aula-mcp',
-      version: '0.0.0',
+      version: VERSION,
     },
     {
       capabilities: { tools: {} },
