@@ -72,8 +72,8 @@ importers:
         specifier: ^1.30.0
         version: 1.30.0(zod@4.5.4)
       hono:
-        specifier: ^4.13.5
-        version: 4.13.5
+        specifier: ^4.13.7
+        version: 4.13.7
       pdf-parse:
         specifier: ^2.4.5
         version: 2.4.5
@@ -616,12 +616,8 @@ packages:
     resolution: {integrity: sha512-T2UbfbBEF32wiepXIsMlTW9+dDYC6wMh/t/vYA4tuOMKqWz/n3vr1NFSxQiyP+zk2mXsoMA/i/7qV6LKut1t1A==}
     engines: {node: '>= 0.4'}
 
-  hono@4.13.3:
-    resolution: {integrity: sha512-r8AO2mYHoLxSHkgafNeC/BXyb2vWRxD3jem4Ts+ptav8oTG5FIRifAjuJEmZI4bSvvc2ns0GxmIYiZnHqN3mMw==}
-    engines: {node: '>=16.9.0'}
-
-  hono@4.13.5:
-    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
+  hono@4.13.7:
+    resolution: {integrity: sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==}
     engines: {node: '>=16.9.0'}
 
   htmlparser2@10.1.0:
@@ -983,13 +979,13 @@ snapshots:
   '@biomejs/cli-win32-x64@2.5.11':
     optional: true
 
-  '@hono/node-server@2.1.1(hono@4.13.3)':
+  '@hono/node-server@2.1.1(hono@4.13.7)':
     dependencies:
-      hono: 4.13.3
+      hono: 4.13.7
 
   '@modelcontextprotocol/sdk@1.30.0(zod@4.5.4)':
     dependencies:
-      '@hono/node-server': 2.1.1(hono@4.13.3)
+      '@hono/node-server': 2.1.1(hono@4.13.7)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -999,7 +995,7 @@ snapshots:
       eventsource-parser: 3.1.1
       express: 5.2.1
       express-rate-limit: 8.6.2(express@5.2.1)
-      hono: 4.13.3
+      hono: 4.13.7
       jose: 6.2.8
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -1416,9 +1412,7 @@ snapshots:
     dependencies:
       function-bind: 1.1.2
 
-  hono@4.13.3: {}
-
-  hono@4.13.5: {}
+  hono@4.13.7: {}
 
   htmlparser2@10.1.0:
     dependencies:
