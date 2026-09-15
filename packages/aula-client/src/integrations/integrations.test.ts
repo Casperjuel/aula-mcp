@@ -247,7 +247,11 @@ describe('MinUddannelseClient.getOpgaver', () => {
             institutioner: [
               {
                 ugebreve: [
-                  { indhold: '<p>Hej forældre, denne uge har vi…</p>' },
+                  {
+                    indhold: '<p>Hej forældre, denne uge har vi…</p>',
+                    tilknytningNavn: '4A',
+                    uge: '2026-W37',
+                  },
                   { indhold: '<p>Anden ugebrev fra samme institution</p>' },
                 ],
               },
@@ -262,6 +266,11 @@ describe('MinUddannelseClient.getOpgaver', () => {
     expect(plan.items[0]?.kind).toBe('ugebrev');
     expect(plan.items[0]?.childName).toBe('Emilie');
     expect(plan.items[0]?.content).toContain('Hej forældre');
+    // The class the note belongs to — two children at one school otherwise
+    // produce two notes that only differ in prose.
+    expect(plan.items[0]?.subject).toBe('4A');
+    expect(plan.items[0]?.date).toBe('2026-W37');
+    expect(plan.items[1]?.subject).toBeUndefined();
   });
 
   test('sends Authorization Bearer + childFilter csv', async () => {

@@ -36,7 +36,7 @@ interface MuUgebrevResponse {
   personer?: Array<{
     navn?: string;
     institutioner?: Array<{
-      ugebreve?: Array<{ indhold?: string }>;
+      ugebreve?: Array<{ indhold?: string; tilknytningNavn?: string; uge?: string }>;
     }>;
   }>;
 }
@@ -125,6 +125,11 @@ export class MinUddannelseClient {
           if (!letter.indhold) continue;
           const item: NormalisedWeekPlanItem = { kind: 'ugebrev', content: letter.indhold };
           if (childName) item.childName = childName;
+          // Which class the note belongs to ("4A", "2.B"). A guardian with two
+          // children at the same school gets one note per class, and without
+          // this they are distinguishable only by reading the prose.
+          if (letter.tilknytningNavn) item.subject = letter.tilknytningNavn;
+          if (letter.uge) item.date = letter.uge;
           items.push(item);
         }
       }
