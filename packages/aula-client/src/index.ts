@@ -11,6 +11,8 @@ export {
   type AulaTokenResponse,
   type AulaWidgetConfiguration,
   type CalendarEvent,
+  type CalendarEventAttachment,
+  type CalendarEventDetail,
   type CalendarLessonParticipant,
   type DailyOverviewEntry,
   type GetCalendarEventsArgs,

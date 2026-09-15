@@ -6,7 +6,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AulaPost } from '@aula-mcp/aula-client';
+import type { AulaPost, CalendarEventAttachment, CalendarEventDetail } from '@aula-mcp/aula-client';
 import {
   AulaStepUpRequiredError,
   isoDate,
@@ -17,7 +17,7 @@ import {
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
-import { resolveCalendarRange } from './calendar-range.ts';
+import { addLocalTimes, resolveCalendarRange } from './calendar-range.ts';
 import { buildDiscoverManifest } from './discover.ts';
 
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
@@ -184,6 +184,46 @@ export function slimPost(post: AulaPost) {
   };
 }
 
+/** Title heuristics for "the weekly plan lives in the Aula calendar". */
+const UGEPLAN_TITLE = /(ugeplan|ugebrev|børneskema|boerneskema|ugens plan|ugeskema|weekly plan)/i;
+
+/** True for non-lesson events whose title reads like a weekly plan. */
+export function isUgeplanEvent(e: { type?: string; title?: string }): boolean {
+  return e.type !== 'lesson' && UGEPLAN_TITLE.test(e.title ?? '');
+}
+
+function slimEventAttachments(atts: readonly CalendarEventAttachment[]) {
+  const out: Array<{ name: string; url: string; mediaType?: string }> = [];
+  for (const a of atts) {
+    const url = a.file?.url ?? a.document?.url;
+    if (!url) continue;
+    out.push({
+      name: a.file?.name ?? a.document?.name ?? a.name ?? 'attachment',
+      url, // get_attachment re-fetches; the URL is here for reference only
+      ...(a.file?.mediaType ? { mediaType: a.file.mediaType } : {}),
+    });
+  }
+  return out;
+}
+
+/** Event detail trimmed to what a parent reads; description as plain text. */
+export function slimEventDetail(e: CalendarEventDetail) {
+  const html = typeof e.description === 'string' ? e.description : (e.description?.html ?? '');
+  return {
+    id: e.id,
+    title: e.title,
+    type: e.type,
+    startDateTime: e.startDateTime,
+    endDateTime: e.endDateTime,
+    ...(e.allDay !== undefined ? { allDay: e.allDay } : {}),
+    creator: e.creator?.fullName ?? e.creator?.name ?? e.creatorName ?? undefined,
+    ...(e.institutionName ? { institution: e.institutionName } : {}),
+    groups: (e.invitedGroups ?? []).map((g) => g.name).filter((n): n is string => !!n),
+    description: htmlToText(html),
+    attachments: slimEventAttachments(e.attachments ?? []),
+  };
+}
+
 /** `YYYY-MM-DD`. */
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /** 24-hour `HH:mm`. */
@@ -297,7 +337,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const client = await context.getClient();
-      return jsonContent(await client.getDailyOverview(args.childIds));
+      return jsonContent(addLocalTimes(await client.getDailyOverview(args.childIds)));
     },
   );
 
@@ -625,8 +665,13 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         'Lessons + events for the given child institution-profile IDs. ' +
         'Call aula.discover first and pass children[].id as profileIds. ' +
         'Pass `range` for a preset window (today/tomorrow/this_week/next_week) ' +
-        'OR `start`+`end` for a specific window. Timestamps are formatted as Aula ' +
-        'expects: "YYYY-MM-DD HH:MM:SS.0000+ZZZZ". Aula uses Europe/Copenhagen.',
+        'OR `start`+`end` for a specific window. Input timestamps are formatted as Aula ' +
+        'expects: "YYYY-MM-DD HH:MM:SS.0000+ZZZZ". Output: startDateTime/endDateTime are ' +
+        'UTC (+00:00) as Aula sends them; startDateTimeLocal/endDateTimeLocal are ' +
+        'Europe/Copenhagen wall-clock — report THOSE. type:"event" items with ' +
+        'hasAttachments are usually the weekly plan; read them with aula.calendar.get_event. ' +
+        'Group events (weekly plan, parent meetings) sit on the PARENT profile: to see them, ' +
+        'prefer aula.ugeplan.aula_calendar, which queries the whole family automatically.',
       inputSchema: {
         profileIds: z
           .array(z.number().int().positive())
@@ -659,7 +704,156 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         end,
         ...(args.resourceIds ? { resourceIds: args.resourceIds } : {}),
       });
-      return jsonContent(events);
+      return jsonContent(addLocalTimes(events));
+    },
+  );
+
+  // --- aula.calendar.get_event ---------------------------------------------
+  //
+  // calendar.getEventsByProfileIdsAndResourceIds omits the two fields parents
+  // actually read — description and attachments. Schools that do not use a
+  // vendor ugeplan widget publish the weekly plan as a recurring calendar
+  // *event* whose description is the plan and whose attachment is the
+  // timetable PDF. This is the follow-up call for one such event.
+
+  server.registerTool(
+    'aula.calendar.get_event',
+    {
+      title: 'Read one calendar event in full',
+      description:
+        'Full detail for one event id from aula.calendar.events: description as plain ' +
+        'text, attachments (name + url), invited groups, creator. Use it for type:"event" ' +
+        'items — lessons rarely carry a description. Times: report the *Local fields.',
+      inputSchema: {
+        eventId: z.number().int().positive().describe('`id` from aula.calendar.events'),
+      },
+    },
+    async (args) => {
+      const client = await context.getClient();
+      await context.getGuardianUserId();
+      const event = await client.getEventById(args.eventId);
+      if (!event) return jsonContent({ error: 'event_not_found', eventId: args.eventId });
+      return jsonContent(addLocalTimes(slimEventDetail(event)));
+    },
+  );
+
+  // --- aula.calendar.get_attachment ----------------------------------------
+
+  server.registerTool(
+    'aula.calendar.get_attachment',
+    {
+      title: 'Download a calendar event attachment to local disk',
+      description:
+        'Download attachment number `attachmentIndex` (zero-based, in the order ' +
+        'aula.calendar.get_event lists them) of a calendar event and return the local ' +
+        'path. Same rationale as aula.messages.get_attachment: keeps the presigned URL ' +
+        'out of the model. Feed PDFs to aula.utils.extract_pdf_text.',
+      inputSchema: {
+        eventId: z.number().int().positive(),
+        attachmentIndex: z.number().int().min(0),
+      },
+    },
+    async (args) => {
+      const client = await context.getClient();
+      await context.getGuardianUserId();
+      // Re-fetch for a fresh presigned URL; they age out within ~1h.
+      const event = await client.getEventById(args.eventId);
+      const atts = slimEventAttachments(event?.attachments ?? []);
+      const att = atts[args.attachmentIndex];
+      if (!att) {
+        return jsonContent({
+          error: 'attachment_not_found',
+          eventId: args.eventId,
+          attachmentIndex: args.attachmentIndex,
+          totalAttachments: atts.length,
+        });
+      }
+      return jsonContent(
+        await downloadAttachmentToDisk({
+          url: att.url,
+          filename: att.name,
+          prefix: `event-${args.eventId}-${args.attachmentIndex}`,
+          ...(att.mediaType ? { mediaType: att.mediaType } : {}),
+        }),
+      );
+    },
+  );
+
+  // --- aula.ugeplan.aula_calendar ------------------------------------------
+
+  server.registerTool(
+    'aula.ugeplan.aula_calendar',
+    {
+      title: 'Weekly plan published as Aula calendar events',
+      description:
+        'Finds calendar events in the requested week whose title reads like a weekly ' +
+        'plan ("Ugeplan", "Ugebrev", "Børneskema", "Ugens plan"…) and returns each with ' +
+        'its full description as text plus attachments. Use when the vendor ugeplan tool ' +
+        'returns no items, or when discover lists this tool first. Download attachments ' +
+        'with aula.calendar.get_attachment (eventId + attachmentIndex). Omit profileIds: ' +
+        'the plan is usually invited to the PARENT profile (a class group), not the child, ' +
+        'so the tool always queries the whole family (guardian + children).',
+      inputSchema: {
+        profileIds: z
+          .array(z.number().int().positive())
+          .min(1)
+          .optional()
+          .describe(
+            'Optional extra institution-profile ids. The guardian and every child are ' +
+              'always included — omit this unless a specific profile is missing.',
+          ),
+        range: z.enum(['this_week', 'next_week']).optional(),
+        isoWeek: z
+          .string()
+          .regex(/^\d{4}-W\d{2}$/)
+          .optional()
+          .describe('Overrides range, e.g. "2026-W38".'),
+      },
+    },
+    async (args) => {
+      const client = await context.getClient();
+      await context.getGuardianUserId();
+      const window = args.isoWeek
+        ? // Monday noon UTC of that ISO week is unambiguously inside the week
+          // in Copenhagen too, so this_week resolves to the requested one.
+          resolveCalendarRange(
+            'this_week',
+            new Date(isoWeekToMonday(args.isoWeek).getTime() + 12 * 3_600_000),
+          )
+        : resolveCalendarRange(args.range ?? 'this_week');
+      // The weekly-plan event is typically addressed to the class *group*, and
+      // Aula surfaces group events on the guardian's institution profile, not
+      // the child's — querying only children[].id finds nothing. Always cover
+      // the whole family (guardian first, then children, via consents).
+      const profileIds = [
+        ...new Set([...(await resolveFamilyProfileIds(client)), ...(args.profileIds ?? [])]),
+      ];
+      const events = await client.getCalendarEvents({
+        profileIds,
+        start: window.start,
+        end: window.end,
+      });
+      const plans: ReturnType<typeof slimEventDetail>[] = [];
+      for (const candidate of events.filter(isUgeplanEvent)) {
+        if (candidate.id === undefined) continue;
+        const full = await client.getEventById(candidate.id);
+        if (full) plans.push(slimEventDetail(full));
+      }
+      return jsonContent(
+        addLocalTimes({
+          window,
+          profileIds,
+          count: plans.length,
+          plans,
+          ...(plans.length === 0
+            ? {
+                hint:
+                  'No weekly-plan event in this window. Check aula.posts.list and ' +
+                  'aula.messages.list_threads — some teams post the plan there instead.',
+              }
+            : {}),
+        }),
+      );
     },
   );
 
@@ -677,7 +871,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       // See aula.messages.get_thread below — guardian profile must be
       // primed or Aula's `*ForActiveProfile` endpoints 403.
       await context.getGuardianUserId();
-      return jsonContent(await client.getNotifications());
+      return jsonContent(addLocalTimes(await client.getNotifications()));
     },
   );
 
@@ -728,7 +922,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         ...(typeof result?.moreMessagesExist === 'boolean'
           ? { moreMessagesExist: result.moreMessagesExist }
           : {}),
-        posts: rawPosts.map(slimPost),
+        posts: addLocalTimes(rawPosts.map(slimPost)),
       });
     },
   );
@@ -790,7 +984,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         ...(args.page !== undefined ? { page: args.page } : {}),
         ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
       });
-      return jsonContent(page);
+      return jsonContent(addLocalTimes(page));
     },
   );
 
@@ -994,9 +1188,11 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       await context.getGuardianUserId();
       try {
         return jsonContent(
-          await client.getMessagesForThread(args.threadId, {
-            ...(args.page !== undefined ? { page: args.page } : {}),
-          }),
+          addLocalTimes(
+            await client.getMessagesForThread(args.threadId, {
+              ...(args.page !== undefined ? { page: args.page } : {}),
+            }),
+          ),
         );
       } catch (e) {
         if (e instanceof AulaStepUpRequiredError) {

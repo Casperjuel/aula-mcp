@@ -95,6 +95,9 @@ describe('buildDiscoverManifest', () => {
   test('detectedWidgets is empty when no widget configs are reported', async () => {
     const m = await buildDiscoverManifest(fakeContext({ widgets: [] }));
     expect(m.detectedWidgets).toEqual([]);
+    expect(m.detectedWidgetDetails).toEqual([]);
+    // With no vendor widget, the Aula-calendar reader is the first ugeplan tool.
+    expect(m.capabilities.ugeplan?.tools[0]).toBe('aula.ugeplan.aula_calendar');
     // Capabilities for which no widget is detected get an inline note.
     expect(m.capabilities.ugeplan?.notes).toBeDefined();
     expect(m.capabilities.opgaver?.notes).toBeDefined();
@@ -103,10 +106,31 @@ describe('buildDiscoverManifest', () => {
   test('Meebook widget (0004) → meebook tool listed first for ugeplan', async () => {
     const m = await buildDiscoverManifest(fakeContext({ widgets: ['0004'] }));
     expect(m.detectedWidgets).toContain('0004');
-    expect(m.capabilities.ugeplan?.tools).toEqual(['aula.ugeplan.meebook']);
+    // Vendor first; the Aula-calendar reader always trails as the fallback.
+    expect(m.capabilities.ugeplan?.tools).toEqual([
+      'aula.ugeplan.meebook',
+      'aula.ugeplan.aula_calendar',
+    ]);
     expect(m.capabilities.ugeplan?.summary).toContain('meebook');
     // Meebook surfaces the one-time browser SSO prerequisite as a note.
     expect(m.capabilities.ugeplan?.notes).toContain('Meebook');
+  });
+
+  test('detectedWidgetDetails names every widget and flags the unreadable ones', async () => {
+    const m = await buildDiscoverManifest(fakeContext({ widgets: ['0128', '0014'] }));
+    expect(m.detectedWidgetDetails).toEqual([
+      { id: '0014', supported: false },
+      { id: '0128', supported: true, tool: 'aula.ugeplan.easyiq_skoleportal' },
+    ]);
+  });
+
+  test('usage tells the agent to report *Local times', () => {
+    // Timestamps are UTC on the wire; the manifest must say so, in words the
+    // agent acts on, or it reports 06:20 for an 08:20 lesson.
+    return buildDiscoverManifest(fakeContext({ widgets: [] })).then((m) => {
+      expect(m.usage.timeWindows).toContain('UTC');
+      expect(m.usage.timeWindows).toContain('*Local');
+    });
   });
 
   test('EasyIQ SkolePortal widget (0128) → easyiq_skoleportal listed first', async () => {

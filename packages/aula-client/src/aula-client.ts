@@ -25,6 +25,7 @@ import {
 import type {
   AulaEnvelope,
   CalendarEvent,
+  CalendarEventDetail,
   DailyOverviewEntry,
   GetCalendarEventsArgs,
   GetPostsArgs,
@@ -251,6 +252,18 @@ export class AulaClient {
         body,
       )) ?? []
     );
+  }
+
+  /**
+   * One event with the fields the list call leaves out: description (HTML)
+   * and attachments. Aula keys this on `eventId`, not `id` — passing `id`
+   * answers 400 with `status.code: 40` and an empty message.
+   */
+  async getEventById(eventId: number): Promise<CalendarEventDetail | undefined> {
+    const params = new URLSearchParams();
+    params.set('method', 'calendar.getEventById');
+    params.set('eventId', String(eventId));
+    return this.getJsonRaw<CalendarEventDetail>(params);
   }
 
   /**

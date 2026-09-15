@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import {
   addDays,
+  addLocalTimes,
   aulaTs,
+  copenhagenIso,
   resolveCalendarRange,
   startOfDayCopenhagen,
   startOfWeekMondayCopenhagen,
@@ -118,5 +120,61 @@ describe('resolveCalendarRange', () => {
     const r = resolveCalendarRange('this_week', sunday);
     expect(r.start).toBe('2026-05-04 00:00:00.0000+0200');
     expect(r.end).toBe('2026-05-11 00:00:00.0000+0200');
+  });
+});
+
+describe('copenhagenIso', () => {
+  test('re-expresses a UTC instant as Copenhagen wall-clock in summer (+02:00)', () => {
+    expect(copenhagenIso('2026-09-15T06:20:00+00:00')).toBe('2026-09-15T08:20:00+02:00');
+  });
+
+  test('uses +01:00 in winter', () => {
+    expect(copenhagenIso('2026-01-10T14:00:00+00:00')).toBe('2026-01-10T15:00:00+01:00');
+  });
+
+  test('accepts Z and other offsets', () => {
+    expect(copenhagenIso('2026-09-15T06:20:00Z')).toBe('2026-09-15T08:20:00+02:00');
+    expect(copenhagenIso('2026-09-15T08:20:00+02:00')).toBe('2026-09-15T08:20:00+02:00');
+  });
+
+  test('rejects non-timestamps', () => {
+    expect(copenhagenIso('2026-09-15')).toBeUndefined();
+    expect(copenhagenIso('Ugeplan')).toBeUndefined();
+    expect(copenhagenIso('2026-99-99T99:99:00Z')).toBeUndefined();
+  });
+});
+
+describe('addLocalTimes', () => {
+  test('adds *Local siblings next to timestamp keys, recursively, keeping originals', () => {
+    // Loose type on purpose: the added `*Local` keys are not in the input type.
+    type Loose = {
+      events: Record<string, string>[];
+      latestMessage: Record<string, string>;
+    } & Record<string, unknown>;
+    const out = addLocalTimes<Loose>({
+      events: [{ startDateTime: '2026-09-15T06:20:00+00:00', title: 'Morgentilsyn' }],
+      latestMessage: { sendDateTime: '2026-09-11T14:34:14+00:00' },
+      date: '2026-09-06T08:00:00+00:00',
+      count: 3,
+    });
+    expect(out.events[0]).toEqual({
+      startDateTime: '2026-09-15T06:20:00+00:00',
+      startDateTimeLocal: '2026-09-15T08:20:00+02:00',
+      title: 'Morgentilsyn',
+    });
+    expect(out.latestMessage.sendDateTimeLocal).toBe('2026-09-11T16:34:14+02:00');
+    expect(out.dateLocal).toBe('2026-09-06T10:00:00+02:00');
+    expect(out.count).toBe(3);
+  });
+
+  test('leaves non-timestamp strings and non-matching keys alone', () => {
+    const out = addLocalTimes({ title: '2026-09-15T06:20:00Z', startDateTime: 'i dag' });
+    expect(out).toEqual({ title: '2026-09-15T06:20:00Z', startDateTime: 'i dag' });
+  });
+
+  test('passes primitives and null through', () => {
+    expect(addLocalTimes(null)).toBeNull();
+    expect(addLocalTimes('x')).toBe('x');
+    expect(addLocalTimes(undefined)).toBeUndefined();
   });
 });

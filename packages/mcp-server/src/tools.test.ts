@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { htmlToText, registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
+import {
+  htmlToText,
+  isUgeplanEvent,
+  registerTools,
+  slimEventDetail,
+  slimPost,
+  validateSetTemplateArgs,
+} from './tools.ts';
 
 describe('validateSetTemplateArgs', () => {
   test('picked_up_by needs pickedUpBy', () => {
@@ -256,5 +263,61 @@ describe('slimPost', () => {
     });
     expect(slim.attachments).toHaveLength(1);
     expect(slim.attachments?.[0]?.name).toBe('ok.pdf');
+  });
+});
+
+describe('isUgeplanEvent', () => {
+  test('matches weekly-plan style event titles, not lessons', () => {
+    expect(isUgeplanEvent({ type: 'event', title: 'Ugeplan og børneskema' })).toBe(true);
+    expect(isUgeplanEvent({ type: 'event', title: 'Ugebrev uge 38' })).toBe(true);
+    expect(isUgeplanEvent({ type: 'event', title: 'Forældremøde' })).toBe(false);
+    expect(isUgeplanEvent({ type: 'lesson', title: 'Ugeplan' })).toBe(false);
+    expect(isUgeplanEvent({ type: 'event' })).toBe(false);
+  });
+});
+
+describe('slimEventDetail', () => {
+  test('flattens description html, creator, groups and usable attachments', () => {
+    const out = slimEventDetail({
+      id: 891613306,
+      type: 'event',
+      title: 'Ugeplan og børneskema',
+      startDateTime: '2026-09-14T06:30:00+00:00',
+      endDateTime: '2026-09-14T07:00:00+00:00',
+      description: { html: '<p>Ugen der gik</p><p>Husk turmadpakke.</p>' },
+      creator: { fullName: 'Christine Bang Steffensen' },
+      invitedGroups: [{ id: 1, name: 'Grøn Mælkevejen' }, { id: 2 }],
+      attachments: [
+        {
+          id: 1,
+          name: 'Børneskema uge 38.pdf',
+          file: { url: 'https://x/a.pdf', mediaType: 'application/pdf' },
+        },
+        { id: 2, name: 'no-url' },
+      ],
+    });
+    expect(out.description).toContain('Ugen der gik');
+    expect(out.description).toContain('Husk turmadpakke.');
+    expect(out.description).not.toContain('<p>');
+    expect(out.creator).toBe('Christine Bang Steffensen');
+    expect(out.groups).toEqual(['Grøn Mælkevejen']);
+    expect(out.attachments).toEqual([
+      { name: 'Børneskema uge 38.pdf', url: 'https://x/a.pdf', mediaType: 'application/pdf' },
+    ]);
+  });
+
+  test('accepts a plain-string description and a null creator', () => {
+    const out = slimEventDetail({
+      id: 1,
+      type: 'event',
+      startDateTime: '2026-09-14T06:30:00+00:00',
+      endDateTime: '2026-09-14T07:00:00+00:00',
+      description: 'plain',
+      creator: null,
+      creatorName: 'Meriam Ali',
+    });
+    expect(out.description).toBe('plain');
+    expect(out.creator).toBe('Meriam Ali');
+    expect(out.attachments).toEqual([]);
   });
 });

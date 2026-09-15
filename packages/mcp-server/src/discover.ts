@@ -38,6 +38,15 @@ export interface DiscoveredCapability {
   notes?: string;
 }
 
+export interface DetectedWidget {
+  id: string;
+  name?: string;
+  supplier?: string;
+  /** True when a tool in this server reads the widget's data. */
+  supported: boolean;
+  tool?: string;
+}
+
 export interface DiscoverManifest {
   user: {
     name: string;
@@ -58,6 +67,10 @@ export interface DiscoverManifest {
   /** Widget IDs the schools surfaced in pageConfiguration. Useful when
    *  diagnosing "the agent can't find my kid's ugeplan". */
   detectedWidgets: string[];
+  /** Same widgets with Aula's own name + vendor, and whether this server can
+   *  read them. Lets the agent say "the school has X but it is not readable"
+   *  instead of guessing at a tool. */
+  detectedWidgetDetails: DetectedWidget[];
   /** True when AULA_MCP_RAW=1 — the aula.raw_request escape hatch is callable. */
   rawRequestEnabled: boolean;
   /** True when AULA_MCP_WRITE=1 — write tools (aula.presence.set_template) are
@@ -140,6 +153,20 @@ export async function buildDiscoverManifest(context: AulaContext): Promise<Disco
     ),
   ).sort();
 
+  const detectedWidgetDetails: DetectedWidget[] = detectedWidgets.map((id) => {
+    const cfg = (contextData?.pageConfiguration?.widgetConfigurations ?? []).find(
+      (w) => (w.widget?.widgetId ?? w.widgetId) === id,
+    );
+    const known = WIDGET_PROVIDER_MAP[id];
+    return {
+      id,
+      ...(cfg?.widget?.name ? { name: cfg.widget.name } : {}),
+      ...(cfg?.widget?.widgetSupplier ? { supplier: cfg.widget.widgetSupplier } : {}),
+      supported: known !== undefined,
+      ...(known ? { tool: known.tool } : {}),
+    };
+  });
+
   const writeEnabled = process.env.AULA_MCP_WRITE === '1';
   const now = Math.floor(Date.now() / 1000);
   const manifest: DiscoverManifest = {
@@ -156,6 +183,7 @@ export async function buildDiscoverManifest(context: AulaContext): Promise<Disco
     },
     capabilities: buildCapabilities(detectedWidgets, writeEnabled),
     detectedWidgets,
+    detectedWidgetDetails,
     rawRequestEnabled: process.env.AULA_MCP_RAW === '1',
     writeEnabled,
     usage: {
@@ -166,7 +194,10 @@ export async function buildDiscoverManifest(context: AulaContext): Promise<Disco
       pickOne:
         'For ugeplan/ugebrev/opgaver/huskelisten, call only capabilities[area].tools[0] — that is the provider this user actually has. Skip alternates unless the first errors.',
       timeWindows:
-        'For calendar/ugeplan: "denne uge"→range:"this_week", "næste uge"→"next_week", "i dag"→"today", "i morgen"→"tomorrow". Times are Europe/Copenhagen.',
+        'For calendar/ugeplan: "denne uge"→range:"this_week", "næste uge"→"next_week", "i dag"→"today", "i morgen"→"tomorrow". ' +
+        'Aula returns every timestamp in UTC (+00:00). Every tool adds a sibling *Local field ' +
+        '(startDateTimeLocal, sendDateTimeLocal, …) in Europe/Copenhagen wall-clock. ALWAYS ' +
+        'report the *Local value to the user; never the UTC one.',
       language:
         'Reply in the user\'s language. Format dates as "mandag 12. maj" for Danish output.',
     },
@@ -207,8 +238,13 @@ function buildCapabilities(
     'aula.ugeplan.easyiq',
     'aula.ugeplan.easyiq_skoleportal',
   ];
+  // The Aula-calendar reader is always last-resort (or first, when no vendor
+  // widget is detected): some schools skip the vendor widget entirely and
+  // publish "Ugeplan og børneskema" as a calendar event every week.
   const ugeplanTools =
-    ugeplanDetected.length > 0 ? dedupe(ugeplanDetected.map((d) => d.tool)) : ugeplanCanonical;
+    ugeplanDetected.length > 0
+      ? dedupe([...ugeplanDetected.map((d) => d.tool), 'aula.ugeplan.aula_calendar'])
+      : ['aula.ugeplan.aula_calendar', ...ugeplanCanonical];
 
   return {
     profiles: {
@@ -245,8 +281,10 @@ function buildCapabilities(
     },
     calendar: {
       summary:
-        'School-schedule lessons (skoleskema). Pass `range: "this_week"` for the simplest call.',
-      tools: ['aula.calendar.events'],
+        'School-schedule lessons (skoleskema) and events. Pass `range: "this_week"` for the ' +
+        'simplest call; aula.calendar.get_event reads one event in full (description + ' +
+        'attachments).',
+      tools: ['aula.calendar.events', 'aula.calendar.get_event', 'aula.calendar.get_attachment'],
     },
     messages: {
       summary: writeEnabled
@@ -289,7 +327,15 @@ function buildCapabilities(
               .join(', ')}.`
           : 'Weekly plans. No provider widget detected — try in order and surface the first that returns data.',
       tools: ugeplanTools,
-      notes: ugeplanProviderNotes(ugeplanDetected.map((d) => d.provider)),
+      notes: [
+        ugeplanProviderNotes(ugeplanDetected.map((d) => d.provider)),
+        'If the vendor tool returns no items, call aula.ugeplan.aula_calendar — ' +
+          'many schools publish the weekly plan as a calendar event (title like ' +
+          '"Ugeplan og børneskema") with the plan in the description and the ' +
+          'timetable as a PDF attachment.',
+      ]
+        .filter(Boolean)
+        .join(' '),
     },
     opgaver: {
       summary: 'Homework / task list from Min Uddannelse.',

@@ -67,6 +67,12 @@ export interface ProfilesByLoginData {
 export interface AulaWidgetMeta {
   widgetId: string;
   name?: string;
+  /** Vendor as Aula labels it, e.g. "EasyIQ", "IST". */
+  widgetSupplier?: string;
+  description?: string;
+  /** "secure" | "sso" | "iframe" — how Aula embeds it. */
+  type?: string;
+  url?: string;
 }
 
 export interface AulaWidgetConfiguration {
@@ -278,13 +284,39 @@ export interface CalendarLessonParticipant {
 }
 
 export interface CalendarEvent {
+  id?: number;
   type: 'lesson' | 'event' | string;
   title?: string;
+  /** UTC (`…+00:00`) on the wire, even though the school day is planned in Europe/Copenhagen. */
   startDateTime: string;
   endDateTime: string;
+  allDay?: boolean;
+  hasAttachments?: boolean;
+  creatorName?: string | null;
   belongsToProfiles?: number[];
   primaryResource?: { name?: string };
+  invitedGroups?: Array<{ id?: number; name?: string }>;
   lesson?: { participants?: CalendarLessonParticipant[] };
+}
+
+export interface CalendarEventAttachment {
+  id?: number;
+  name?: string;
+  file?: { name?: string; url?: string; mediaType?: string };
+  document?: { name?: string; url?: string };
+}
+
+/**
+ * Full event from `calendar.getEventById`. The list call
+ * (`getEventsByProfileIdsAndResourceIds`) omits the two fields parents read —
+ * description and attachments — so anything that needs them fetches by id.
+ */
+export interface CalendarEventDetail extends CalendarEvent {
+  id: number;
+  description?: { html?: string } | string | null;
+  attachments?: CalendarEventAttachment[];
+  creator?: { fullName?: string; name?: string } | null;
+  institutionName?: string;
 }
 
 export interface GetCalendarEventsArgs {

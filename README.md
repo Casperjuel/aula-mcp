@@ -287,14 +287,18 @@ Form:
   apiVersion: 23,
   tokens: { expires_at, seconds_remaining },
   detectedWidgets: ['0001', '0029', '0030'],   // fra Aula's pageConfiguration
+  detectedWidgetDetails: [                      // samme widgets med Aula's eget navn + leverandør,
+    { id: '0128', name: 'EasyIQ Ugeplan', supplier: 'EasyIQ', supported: true, tool: 'aula.ugeplan.easyiq_skoleportal' },
+    { id: '0014', name: 'EasyIQ Vigtig Information', supplier: 'EasyIQ', supported: false },  // …så agenten kan sige "skolen har X, men det kan ikke læses"
+  ],
   capabilities: {
     profiles:      { summary, tools: ['aula.profiles.list'] },
     presence:      { summary, tools: ['aula.presence.today', 'aula.presence.templates'] },
-    calendar:      { summary, tools: ['aula.calendar.events'] },
+    calendar:      { summary, tools: ['aula.calendar.events', 'aula.calendar.get_event', 'aula.calendar.get_attachment'] },
     messages:      { summary, tools: ['aula.messages.list_threads', 'aula.messages.get_thread'] },
     notifications: { summary, tools: ['aula.notifications.list'] },
     posts:         { summary, tools: ['aula.posts.list'] },
-    ugeplan:       { summary, tools: ['aula.ugeplan.easyiq'] },          // kun den detekterede vendor
+    ugeplan:       { summary, tools: ['aula.ugeplan.easyiq', 'aula.ugeplan.aula_calendar'] },  // detekteret vendor først, Aula-kalender-læseren altid som fallback
     opgaver:       { summary, tools: ['aula.opgaver.minuddannelse'] },
     ugebrev:       { summary, tools: ['aula.ugebrev.minuddannelse'] },
     huskelisten:   { summary, tools: ['aula.huskelisten.systematic'] }
@@ -308,6 +312,18 @@ Form:
 ```
 
 `capabilities[area].tools[0]` er altid det rigtige tool at kalde — når en skoles widgets detekteres, listes kun den matchende vendor, så agenten ikke famler ud over flere providers. Det inline `usage`-blok fortæller agenten hvordan den skal opføre sig (cache manifestet, fuzzy-match børnenavne, default til Europe/Copenhagen, svar på brugerens sprog).
+
+### Tidspunkter — Aula svarer i UTC
+
+Aula's API returnerer *alle* tidsstempler i UTC (`…+00:00`), selvom skoledagen er planlagt i dansk tid. En lektion kl. 08.20 står som `06:20:00+00:00` på ledningen. Hvert tool tilføjer derfor et søster-felt med suffikset `Local` (`startDateTimeLocal`, `sendDateTimeLocal`, `dateLocal` …) i Europe/Copenhagen-vægur med den rigtige offset — `+02:00` om sommeren, `+01:00` om vinteren. Manifestets `usage.timeWindows` instruerer agenten i altid at rapportere `*Local`-værdien. De originale UTC-felter bibeholdes uændret.
+
+### Ugeplanen ligger i kalenderen — ikke i en widget
+
+Nogle skoler bruger slet ikke vendor-ugeplan-widget'en (SkolePortal svarer `[]` uge efter uge), men lægger i stedet en kalender*begivenhed* hver uge — typisk med titlen »Ugeplan og børneskema« — hvor beskrivelsen er ugeplanen og vedhæftningen er børneskemaet som PDF. Begivenheden er inviteret til klassegruppen og dukker derfor op på *forælderens* institutionsprofil, ikke barnets; en forespørgsel på `children[].id` alene finder den ikke.
+
+`aula.ugeplan.aula_calendar` håndterer det: den forespørger hele familien (værge + børn), filtrerer på ugeplan-lignende titler (`Ugeplan`, `Ugebrev`, `Børneskema`, `Ugens plan` …), henter hver fundet begivenhed i fuld længde via `calendar.getEventById` og returnerer beskrivelsen som tekst plus vedhæftninger. `aula.calendar.get_attachment` (eventId + attachmentIndex) downloader en vedhæftning; PDF'er læses med `aula.utils.extract_pdf_text`. Manifestet lister værktøjet altid under `ugeplan` — først når ingen vendor-widget er detekteret, ellers som fallback efter vendor-toolet.
+
+`aula.calendar.get_event` er den generelle udgave: fuld detalje (beskrivelse, vedhæftninger, grupper, opretter) for ét event-id fra `aula.calendar.events`.
 
 ### Komme/gå — sæt afleverings- og hentetider
 

@@ -143,3 +143,60 @@ export function aulaTs(d: Date): string {
   const hh = String(Math.abs(offsetH)).padStart(2, '0');
   return `${get('year')}-${get('month')}-${get('day')} ${hourPart}:${get('minute')}:${get('second')}.0000${sign}${hh}00`;
 }
+
+/**
+ * Aula returns every timestamp as UTC (`…+00:00`) even though the school day
+ * is planned in Europe/Copenhagen. Re-express an ISO instant as Copenhagen
+ * wall-clock with its real offset (+02:00 in summer, +01:00 in winter):
+ * "2026-09-15T06:20:00+00:00" → "2026-09-15T08:20:00+02:00".
+ * Returns undefined when the input is not a parseable ISO timestamp.
+ */
+export function copenhagenIso(iso: string): string | undefined {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(iso)) return undefined;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return undefined;
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Copenhagen',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '00';
+  const hour = get('hour') === '24' ? '00' : get('hour');
+  const offsetMin = copenhagenOffsetMinutes(d);
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const oh = String(Math.floor(abs / 60)).padStart(2, '0');
+  const om = String(abs % 60).padStart(2, '0');
+  return `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}:${get('second')}${sign}${oh}:${om}`;
+}
+
+/** Keys whose ISO string values get a `<key>Local` sibling. */
+const LOCAL_TIME_KEY =
+  /(dateTime|timestamp|publishAt|editedAt|expireAt|importantFrom|importantTo|responseDeadline|lastActivity|^date)$/i;
+
+/**
+ * Walk a JSON payload and, next to every timestamp-looking key that holds an
+ * ISO string, add `<key>Local` in Copenhagen wall-clock form. Arrays and
+ * nested objects are handled. The original UTC fields are kept untouched so
+ * nothing downstream breaks; the agent is told (in discover `usage`) to
+ * report the `*Local` value.
+ */
+export function addLocalTimes<T>(value: T): T {
+  if (Array.isArray(value)) return value.map((v) => addLocalTimes(v)) as T;
+  if (value === null || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = addLocalTimes(v);
+    if (typeof v === 'string' && LOCAL_TIME_KEY.test(k) && !k.endsWith('Local')) {
+      const local = copenhagenIso(v);
+      if (local) out[`${k}Local`] = local;
+    }
+  }
+  return out as T;
+}
