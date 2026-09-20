@@ -184,6 +184,155 @@ export function slimPost(post: AulaPost) {
   };
 }
 
+// --- keeping tool results under MCP client size limits ------------------------
+//
+// An MCP client refuses a tool result above its size limit and shows nothing,
+// so data that was fetched fine can still be lost to the user. Two tools
+// routinely exceed it:
+//   - the vendor integrations echo the vendor's untouched payload as `raw`
+//     next to the normalised `items` (~94 KB for one busy EasyIQ SkolePortal
+//     week, ~12 KB without `raw`);
+//   - aula.calendar.events carries whole member lists and dozens of empty
+//     fields per event (~217 KB for one week for two children, ~35 KB slimmed).
+// `AULA_MCP_RAW=1` restores the untouched results for debugging.
+
+function compactJsonContent(data: unknown): { content: Array<{ type: 'text'; text: string }> } {
+  return { content: [{ type: 'text', text: JSON.stringify(data) }] };
+}
+
+/** Integration result without the vendor payload (`raw`) unless `keepRaw`. Exported for tests. */
+export function slimWeekPlan<T extends { raw?: unknown }>(
+  plan: T,
+  keepRaw: boolean = process.env.AULA_MCP_RAW === '1',
+): T | Omit<T, 'raw'> {
+  if (keepRaw) return plan;
+  const { raw: _raw, ...rest } = plan;
+  return rest;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Absent keys read as "none"/false, so empty values are dropped rather than sent. */
+function isEmptyValue(value: unknown): boolean {
+  return (
+    value === null ||
+    value === '' ||
+    value === false ||
+    (Array.isArray(value) && value.length === 0)
+  );
+}
+
+function names(list: unknown, preferred: 'shortName' | 'displayName'): string[] {
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const label = item[preferred] || item.name;
+    return typeof label === 'string' && label ? [label] : [];
+  });
+}
+
+/** "Anna Teacher (AT)" — the role is only spelled out when it is not the primary teacher. */
+function formatTeacher(participant: Record<string, unknown>): string | undefined {
+  const name = participant.teacherName || participant.teacherInitials;
+  if (typeof name !== 'string' || !name) return undefined;
+  const initials =
+    typeof participant.teacherInitials === 'string' && participant.teacherInitials !== name
+      ? participant.teacherInitials
+      : undefined;
+  const role =
+    typeof participant.participantRole === 'string' &&
+    participant.participantRole !== 'primaryTeacher'
+      ? participant.participantRole
+      : undefined;
+  const detail = [initials, role].filter(Boolean).join(', ');
+  return detail ? `${name} (${detail})` : name;
+}
+
+function slimLesson(lesson: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(lesson)) return undefined;
+  const out: Record<string, unknown> = {};
+  if (typeof lesson.lessonStatus === 'string' && lesson.lessonStatus) {
+    out.status = lesson.lessonStatus;
+  }
+  if (lesson.hasRelevantNote === true) out.hasNote = true;
+  const participants = Array.isArray(lesson.participants) ? lesson.participants : [];
+  const teachers = participants
+    .filter(isRecord)
+    .map(formatTeacher)
+    .filter((t): t is string => t !== undefined);
+  if (teachers.length > 0) out.teachers = teachers;
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * A school-home meeting's time slots list every family's answer. Only the
+ * requested children's chosen slot indexes are kept: other families' answers
+ * are neither needed nor ours to pass on.
+ */
+function slimTimeSlot(timeSlot: unknown, ownProfileIds: ReadonlySet<number>): unknown {
+  if (!isRecord(timeSlot) || !Array.isArray(timeSlot.timeSlots)) return timeSlot;
+  const { timeSlots, ...rest } = timeSlot;
+  return {
+    ...rest,
+    timeSlots: timeSlots.map((slot: unknown) => {
+      if (!isRecord(slot)) return slot;
+      const { answers, ...slotRest } = slot;
+      const chosen = (Array.isArray(answers) ? answers : []).flatMap((answer: unknown) =>
+        isRecord(answer) &&
+        typeof answer.concerningProfileId === 'number' &&
+        ownProfileIds.has(answer.concerningProfileId) &&
+        typeof answer.selectedTimeSlotIndex === 'number'
+          ? [answer.selectedTimeSlotIndex]
+          : [],
+      );
+      return chosen.length > 0
+        ? { ...slotRest, selectedTimeSlotIndexes: [...new Set(chosen)] }
+        : slotRest;
+    }),
+  };
+}
+
+/**
+ * Calendar events reduced to what a parent acts on: title, times, type, room,
+ * teachers (substitutes flagged), lesson status, response-required / status /
+ * deadline, creator, and meeting time slots (own children's choice only).
+ * Exported for tests.
+ */
+export function slimCalendarEvents(
+  events: readonly unknown[],
+  profileIds: readonly number[],
+): unknown[] {
+  const own = new Set(profileIds);
+  return events.map((event) => {
+    if (!isRecord(event)) return event;
+    const {
+      invitedGroups,
+      additionalResources,
+      lesson,
+      timeSlot,
+      // Bookkeeping that never helps a reader.
+      createdDateTime: _createdDateTime,
+      belongsToProfiles: _belongsToProfiles,
+      belongsToResources: _belongsToResources,
+      ...rest
+    } = event;
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(rest)) {
+      if (!isEmptyValue(value)) out[key] = value;
+    }
+    if (!isEmptyValue(timeSlot)) out.timeSlot = slimTimeSlot(timeSlot, own);
+    const groups = names(invitedGroups, 'shortName');
+    if (groups.length > 0) out.groups = groups;
+    const resources = names(additionalResources, 'displayName');
+    if (resources.length > 0) out.resources = resources;
+    const slimmedLesson = slimLesson(lesson);
+    if (slimmedLesson) out.lesson = slimmedLesson;
+    return out;
+  });
+}
+
 /** `YYYY-MM-DD`. */
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /** 24-hour `HH:mm`. */
@@ -659,7 +808,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         end,
         ...(args.resourceIds ? { resourceIds: args.resourceIds } : {}),
       });
-      return jsonContent(events);
+      if (process.env.AULA_MCP_RAW === '1') return jsonContent(events);
+      return compactJsonContent(slimCalendarEvents(events, args.profileIds));
     },
   );
 
@@ -860,7 +1010,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const easyiq = await context.getEasyIq();
-      return jsonContent(await easyiq.getWeekPlan(await buildIntegrationCtx(args)));
+      return compactJsonContent(
+        slimWeekPlan(await easyiq.getWeekPlan(await buildIntegrationCtx(args))),
+      );
     },
   );
 
@@ -874,7 +1026,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const meebook = await context.getMeebook();
-      return jsonContent(await meebook.getWeekPlan(await buildIntegrationCtx(args)));
+      return compactJsonContent(
+        slimWeekPlan(await meebook.getWeekPlan(await buildIntegrationCtx(args))),
+      );
     },
   );
 
@@ -889,7 +1043,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const sp = await context.getEasyIqSkoleportal();
-      return jsonContent(await sp.getWeekPlan(await buildIntegrationCtx(args)));
+      return compactJsonContent(
+        slimWeekPlan(await sp.getWeekPlan(await buildIntegrationCtx(args))),
+      );
     },
   );
 
@@ -905,7 +1061,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const lektier = await context.getEasyIqLektier();
-      return jsonContent(await lektier.getLektier(await buildIntegrationCtx(args)));
+      return compactJsonContent(
+        slimWeekPlan(await lektier.getLektier(await buildIntegrationCtx(args))),
+      );
     },
   );
 
@@ -918,7 +1076,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const mu = await context.getMinUddannelse();
-      return jsonContent(await mu.getOpgaver(await buildIntegrationCtx(args)));
+      return compactJsonContent(slimWeekPlan(await mu.getOpgaver(await buildIntegrationCtx(args))));
     },
   );
 
@@ -931,7 +1089,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const mu = await context.getMinUddannelse();
-      return jsonContent(await mu.getUgebrev(await buildIntegrationCtx(args)));
+      return compactJsonContent(slimWeekPlan(await mu.getUgebrev(await buildIntegrationCtx(args))));
     },
   );
 
@@ -956,12 +1114,14 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     async (args) => {
       const sys = await context.getSystematic();
       const baseCtx = await buildIntegrationCtx(args);
-      return jsonContent(
-        await sys.getReminders({
-          ...baseCtx,
-          ...(args.fromDate ? { fromDate: args.fromDate } : {}),
-          ...(args.toDate ? { toDate: args.toDate } : {}),
-        }),
+      return compactJsonContent(
+        slimWeekPlan(
+          await sys.getReminders({
+            ...baseCtx,
+            ...(args.fromDate ? { fromDate: args.fromDate } : {}),
+            ...(args.toDate ? { toDate: args.toDate } : {}),
+          }),
+        ),
       );
     },
   );

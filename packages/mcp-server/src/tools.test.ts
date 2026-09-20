@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { htmlToText, registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
+import {
+  htmlToText,
+  registerTools,
+  slimCalendarEvents,
+  slimPost,
+  slimWeekPlan,
+  validateSetTemplateArgs,
+} from './tools.ts';
 
 describe('validateSetTemplateArgs', () => {
   test('picked_up_by needs pickedUpBy', () => {
@@ -256,5 +263,325 @@ describe('slimPost', () => {
     });
     expect(slim.attachments).toHaveLength(1);
     expect(slim.attachments?.[0]?.name).toBe('ok.pdf');
+  });
+});
+
+describe('slimWeekPlan', () => {
+  const plan = {
+    items: [{ subject: 'Dansk', content: 'x' }],
+    raw: { child1: { events: Array.from({ length: 200 }, (_, i) => ({ Id: i })) } },
+    warnings: ['child 2: boom'],
+  };
+
+  test('drops the vendor payload but keeps items and warnings', () => {
+    expect(slimWeekPlan(plan, false)).toEqual({ items: plan.items, warnings: plan.warnings });
+  });
+
+  test('keeps it when asked to', () => {
+    expect(slimWeekPlan(plan, true)).toBe(plan);
+  });
+
+  test('defaults to AULA_MCP_RAW', () => {
+    const previous = process.env.AULA_MCP_RAW;
+    try {
+      process.env.AULA_MCP_RAW = '1';
+      expect(slimWeekPlan(plan)).toBe(plan);
+      delete process.env.AULA_MCP_RAW;
+      expect(slimWeekPlan(plan)).not.toHaveProperty('raw');
+    } finally {
+      if (previous === undefined) delete process.env.AULA_MCP_RAW;
+      else process.env.AULA_MCP_RAW = previous;
+    }
+  });
+});
+
+/** A lesson as Aula shapes it, padded with the empty/bookkeeping fields it really carries. */
+function lessonEvent(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    title: 'Dansk',
+    type: 'lesson',
+    startDateTime: '2026-09-21T06:00:00+00:00',
+    endDateTime: '2026-09-21T06:45:00+00:00',
+    createdDateTime: '2026-08-01T00:00:00+00:00',
+    belongsToProfiles: [1, 2],
+    belongsToResources: [],
+    allDay: false,
+    private: false,
+    hasAttachments: false,
+    responseRequired: false,
+    responseStatus: null,
+    responseDeadline: null,
+    creatorName: null,
+    oldStartDateTime: null,
+    repeating: null,
+    primaryResource: { id: 7, name: 'Lokale 12' },
+    invitedGroups: [{ id: 1, name: 'Hele klassen 8E', shortName: '8E', mainGroup: true }],
+    additionalResources: [],
+    lesson: {
+      lessonId: 'abc',
+      lessonStatus: 'normal',
+      hasRelevantNote: false,
+      participants: [
+        {
+          teacherId: 1,
+          teacherName: 'Anna Teacher',
+          teacherInitials: 'AT',
+          participantRole: 'primaryTeacher',
+        },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+describe('slimCalendarEvents', () => {
+  test('drops empty, null and false fields, bookkeeping ids and group/resource records', () => {
+    expect(slimCalendarEvents([lessonEvent()], [])).toEqual([
+      {
+        id: 1,
+        title: 'Dansk',
+        type: 'lesson',
+        startDateTime: '2026-09-21T06:00:00+00:00',
+        endDateTime: '2026-09-21T06:45:00+00:00',
+        primaryResource: { id: 7, name: 'Lokale 12' },
+        groups: ['8E'],
+        lesson: { status: 'normal', teachers: ['Anna Teacher (AT)'] },
+      },
+    ]);
+  });
+
+  test('keeps a substitute teacher and the substitute status visible', () => {
+    const [event] = slimCalendarEvents(
+      [
+        lessonEvent({
+          lesson: {
+            lessonStatus: 'substitute',
+            participants: [
+              {
+                teacherName: 'Vera Vikar',
+                teacherInitials: 'VV',
+                participantRole: 'substituteTeacher',
+              },
+            ],
+          },
+        }),
+      ],
+      [],
+    ) as Array<Record<string, unknown>>;
+    expect(event?.lesson).toEqual({
+      status: 'substitute',
+      teachers: ['Vera Vikar (VV, substituteTeacher)'],
+    });
+  });
+
+  test('keeps that a lesson has a note', () => {
+    const [event] = slimCalendarEvents(
+      [
+        lessonEvent({
+          lesson: { lessonStatus: 'normal', hasRelevantNote: true, participants: [] },
+        }),
+      ],
+      [],
+    ) as Array<Record<string, unknown>>;
+    expect(event?.lesson).toEqual({ status: 'normal', hasNote: true });
+  });
+
+  test('keeps response-required, status, deadline, creator and institution for events', () => {
+    const [event] = slimCalendarEvents(
+      [
+        lessonEvent({
+          type: 'event',
+          title: 'Skovtur',
+          lesson: null,
+          responseRequired: true,
+          responseStatus: 'waiting',
+          responseDeadline: '2026-09-20T00:00:00+00:00',
+          creatorName: 'Test Creator',
+          institutionName: 'Test School',
+          hasAttachments: true,
+        }),
+      ],
+      [],
+    ) as Array<Record<string, unknown>>;
+    expect(event).toMatchObject({
+      type: 'event',
+      responseRequired: true,
+      responseStatus: 'waiting',
+      responseDeadline: '2026-09-20T00:00:00+00:00',
+      creatorName: 'Test Creator',
+      institutionName: 'Test School',
+      hasAttachments: true,
+    });
+    expect(event).not.toHaveProperty('lesson');
+  });
+
+  test('reduces additional resources to their display names', () => {
+    const [event] = slimCalendarEvents(
+      [
+        lessonEvent({
+          additionalResources: [
+            { id: 5, name: 'ipad', displayName: 'iPad-vogn', category: { id: 1 } },
+          ],
+        }),
+      ],
+      [],
+    ) as Array<Record<string, unknown>>;
+    expect(event?.resources).toEqual(['iPad-vogn']);
+  });
+
+  test("time slots keep only the requested children's chosen slot, never other families' answers", () => {
+    const timeSlot = {
+      childRequired: false,
+      timeSlots: [
+        {
+          id: 10,
+          startDate: '2026-09-21T06:30:00+00:00',
+          endDate: '2026-09-21T07:30:00+00:00',
+          timeSlotIndexes: [{ startTime: 'a', endTime: 'b' }],
+          answers: [
+            { id: 1, instProfileId: 900, concerningProfileId: 111, selectedTimeSlotIndex: 0 },
+            { id: 2, instProfileId: 901, concerningProfileId: 222, selectedTimeSlotIndex: 3 },
+          ],
+        },
+        {
+          id: 11,
+          startDate: 'c',
+          endDate: 'd',
+          answers: [{ concerningProfileId: 333, selectedTimeSlotIndex: 0 }],
+        },
+      ],
+    };
+
+    const [event] = slimCalendarEvents([lessonEvent({ timeSlot })], [222]) as Array<
+      Record<string, unknown>
+    >;
+
+    expect(event?.timeSlot).toEqual({
+      childRequired: false,
+      timeSlots: [
+        {
+          id: 10,
+          startDate: '2026-09-21T06:30:00+00:00',
+          endDate: '2026-09-21T07:30:00+00:00',
+          timeSlotIndexes: [{ startTime: 'a', endTime: 'b' }],
+          selectedTimeSlotIndexes: [3],
+        },
+        { id: 11, startDate: 'c', endDate: 'd' },
+      ],
+    });
+    expect(JSON.stringify(event)).not.toContain('instProfileId');
+  });
+
+  test('a realistic week shrinks by an order of magnitude', () => {
+    const members = Array.from({ length: 60 }, (_, i) => ({ id: i, name: `Member ${i}` }));
+    const events = Array.from({ length: 90 }, (_, i) =>
+      lessonEvent({ id: i, invitedGroups: [{ name: 'Klasse', shortName: '8E', members }] }),
+    );
+    expect(JSON.stringify(slimCalendarEvents(events, [])).length).toBeLessThan(
+      JSON.stringify(events, null, 2).length / 10,
+    );
+  });
+
+  test('leaves entries that are not objects untouched', () => {
+    expect(slimCalendarEvents(['x', null], [])).toEqual(['x', null]);
+  });
+});
+
+describe('size-limited tool results', () => {
+  type Handler = (args: Record<string, unknown>) => Promise<{
+    content: Array<{ type: 'text'; text: string }>;
+  }>;
+
+  function captureTools(context: unknown): Map<string, Handler> {
+    const handlers = new Map<string, Handler>();
+    const server = {
+      registerTool(name: string, _config: unknown, fn: Handler) {
+        handlers.set(name, fn);
+      },
+    };
+    // biome-ignore lint/suspicious/noExplicitAny: structural stubs for McpServer/AulaContext
+    registerTools(server as any, context as any);
+    return handlers;
+  }
+
+  const rawPlan = {
+    items: [{ subject: 'Dansk', content: 'x' }],
+    raw: { child1: { events: [{ Id: 1 }] } },
+  };
+
+  const context = {
+    record: { username: 'demo' },
+    async getGuardianUserId() {
+      return '5000';
+    },
+    async getClient() {
+      return {
+        async getProfilesByLogin() {
+          return { profiles: [] };
+        },
+        async getCalendarEvents() {
+          return [lessonEvent()];
+        },
+      };
+    },
+    async getEasyIqSkoleportal() {
+      return {
+        async getWeekPlan() {
+          return rawPlan;
+        },
+      };
+    },
+  };
+
+  async function withRaw<T>(value: string | undefined, fn: () => Promise<T>): Promise<T> {
+    const previous = process.env.AULA_MCP_RAW;
+    if (value === undefined) delete process.env.AULA_MCP_RAW;
+    else process.env.AULA_MCP_RAW = value;
+    try {
+      return await fn();
+    } finally {
+      if (previous === undefined) delete process.env.AULA_MCP_RAW;
+      else process.env.AULA_MCP_RAW = previous;
+    }
+  }
+
+  async function text(name: string, args: Record<string, unknown>): Promise<string> {
+    const handler = captureTools(context).get(name);
+    if (!handler) throw new Error(`${name} was not registered`);
+    const res = await handler(args);
+    return res.content[0]?.text ?? '';
+  }
+
+  const ugeplanArgs = { childIds: [1], institutionCodes: ['D12345'] };
+
+  test('an integration tool returns its items compactly, without the vendor payload', async () => {
+    const out = await withRaw(undefined, () =>
+      text('aula.ugeplan.easyiq_skoleportal', ugeplanArgs),
+    );
+    expect(JSON.parse(out)).toEqual({ items: rawPlan.items });
+    expect(out).not.toContain('\n');
+  });
+
+  test('AULA_MCP_RAW=1 gives the integration tool its vendor payload back', async () => {
+    const out = await withRaw('1', () => text('aula.ugeplan.easyiq_skoleportal', ugeplanArgs));
+    expect(JSON.parse(out)).toEqual(rawPlan);
+  });
+
+  test('the calendar tool returns slimmed events compactly', async () => {
+    const out = await withRaw(undefined, () =>
+      text('aula.calendar.events', { profileIds: [1], range: 'this_week' }),
+    );
+    const [event] = JSON.parse(out) as Array<Record<string, unknown>>;
+    expect(event).not.toHaveProperty('invitedGroups');
+    expect(event?.groups).toEqual(['8E']);
+    expect(out).not.toContain('\n');
+  });
+
+  test('AULA_MCP_RAW=1 gives the calendar tool its events back untouched', async () => {
+    const out = await withRaw('1', () =>
+      text('aula.calendar.events', { profileIds: [1], range: 'this_week' }),
+    );
+    expect(JSON.parse(out)).toEqual([lessonEvent()]);
   });
 });
