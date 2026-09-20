@@ -1,10 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
   htmlToText,
+  localizeTimestamps,
   registerTools,
   slimCalendarEvents,
   slimPost,
   slimWeekPlan,
+  toCopenhagenTime,
   validateSetTemplateArgs,
 } from './tools.ts';
 
@@ -578,10 +580,90 @@ describe('size-limited tool results', () => {
     expect(out).not.toContain('\n');
   });
 
+  test('the calendar tool returns Copenhagen local time, not UTC', async () => {
+    const out = await withRaw(undefined, () =>
+      text('aula.calendar.events', { profileIds: [1], range: 'this_week' }),
+    );
+    const [event] = JSON.parse(out) as Array<Record<string, unknown>>;
+    // Aula sends 06:00 UTC, which is 08:00 in Copenhagen in summer.
+    expect(event?.startDateTime).toBe('2026-09-21T08:00:00+02:00');
+    expect(event?.endDateTime).toBe('2026-09-21T08:45:00+02:00');
+  });
+
   test('AULA_MCP_RAW=1 gives the calendar tool its events back untouched', async () => {
     const out = await withRaw('1', () =>
       text('aula.calendar.events', { profileIds: [1], range: 'this_week' }),
     );
     expect(JSON.parse(out)).toEqual([lessonEvent()]);
+  });
+});
+
+describe('toCopenhagenTime', () => {
+  test.each([
+    ['2026-09-21T06:00:00+00:00', '2026-09-21T08:00:00+02:00', 'summer'],
+    ['2026-01-15T07:00:00Z', '2026-01-15T08:00:00+01:00', 'winter'],
+    ['2026-03-29T00:59:59Z', '2026-03-29T01:59:59+01:00', 'last second before DST starts'],
+    ['2026-03-29T01:00:00Z', '2026-03-29T03:00:00+02:00', 'DST starts'],
+    ['2026-10-25T00:59:59Z', '2026-10-25T02:59:59+02:00', 'last second before DST ends'],
+    ['2026-10-25T01:00:00Z', '2026-10-25T02:00:00+01:00', 'DST ends'],
+    ['2026-09-21T06:30:00.000+00:00', '2026-09-21T08:30:00+02:00', 'fractional seconds'],
+    ['2026-09-21T10:00:00+02:00', '2026-09-21T10:00:00+02:00', 'already Copenhagen time'],
+    ['2026-09-21T23:30:00-05:00', '2026-09-22T06:30:00+02:00', 'another offset, date rolls over'],
+  ])('%s -> %s (%s)', (input, expected) => {
+    expect(toCopenhagenTime(input)).toBe(expected);
+  });
+
+  test.each([
+    '2026-09-21T08:00:00', // no offset: the zone is unknown, so it is not guessed
+    '2026-09-21',
+    '2026-13-45T99:00:00+00:00', // looks like a timestamp but is not one
+    'Dansk',
+    '',
+  ])('leaves %p as it is', (input) => {
+    expect(toCopenhagenTime(input)).toBe(input);
+  });
+});
+
+describe('localizeTimestamps', () => {
+  test('converts timestamps at any depth and leaves everything else alone', () => {
+    const input = {
+      title: 'Skovtur',
+      count: 3,
+      flag: true,
+      nothing: null,
+      startDateTime: '2026-09-21T06:00:00+00:00',
+      timeSlot: {
+        timeSlots: [
+          {
+            id: 10,
+            startDate: '2026-09-21T06:30:00+00:00',
+            timeSlotIndexes: [{ startTime: '2026-09-21T06:30:00.000+00:00' }],
+          },
+        ],
+      },
+    };
+
+    expect(localizeTimestamps(input)).toEqual({
+      title: 'Skovtur',
+      count: 3,
+      flag: true,
+      nothing: null,
+      startDateTime: '2026-09-21T08:00:00+02:00',
+      timeSlot: {
+        timeSlots: [
+          {
+            id: 10,
+            startDate: '2026-09-21T08:30:00+02:00',
+            timeSlotIndexes: [{ startTime: '2026-09-21T08:30:00+02:00' }],
+          },
+        ],
+      },
+    });
+  });
+
+  test('does not mutate its input', () => {
+    const input = { startDateTime: '2026-09-21T06:00:00+00:00' };
+    localizeTimestamps(input);
+    expect(input.startDateTime).toBe('2026-09-21T06:00:00+00:00');
   });
 });

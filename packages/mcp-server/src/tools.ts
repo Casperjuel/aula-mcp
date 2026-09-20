@@ -333,6 +333,53 @@ export function slimCalendarEvents(
   });
 }
 
+// --- calendar times in local time ---------------------------------------------
+//
+// Aula returns calendar timestamps in UTC (`2026-09-21T06:00:00+00:00` for an
+// 08:00 lesson in summer), while the tool descriptions and server instructions
+// say times are Europe/Copenhagen. Read at face value that puts every lesson
+// one or two hours early, so results are converted to Copenhagen local time
+// with the UTC offset spelled out. The instant is unchanged.
+
+const COPENHAGEN_TIME = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Europe/Copenhagen',
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  timeZoneName: 'longOffset',
+});
+
+/** Only timestamps that carry an offset are converted; without one the zone is unknown. */
+const OFFSET_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+
+/** `2026-09-21T06:00:00+00:00` → `2026-09-21T08:00:00+02:00`. Anything else is returned as is. Exported for tests. */
+export function toCopenhagenTime(timestamp: string): string {
+  if (!OFFSET_TIMESTAMP.test(timestamp)) return timestamp;
+  const instant = new Date(timestamp);
+  if (Number.isNaN(instant.getTime())) return timestamp;
+  const parts = Object.fromEntries(
+    COPENHAGEN_TIME.formatToParts(instant).map((part) => [part.type, part.value]),
+  );
+  const offset = /GMT([+-]\d{2}:\d{2})/.exec(parts.timeZoneName ?? '')?.[1] ?? '+00:00';
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${offset}`;
+}
+
+/** Every timestamp string anywhere in `value` in Copenhagen local time. Exported for tests. */
+export function localizeTimestamps<T>(value: T): T {
+  if (typeof value === 'string') return toCopenhagenTime(value) as T;
+  if (Array.isArray(value)) return value.map(localizeTimestamps) as T;
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, inner]) => [key, localizeTimestamps(inner)]),
+    ) as T;
+  }
+  return value;
+}
+
 /** `YYYY-MM-DD`. */
 const ISO_DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 /** 24-hour `HH:mm`. */
@@ -775,7 +822,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         'Call aula.discover first and pass children[].id as profileIds. ' +
         'Pass `range` for a preset window (today/tomorrow/this_week/next_week) ' +
         'OR `start`+`end` for a specific window. Timestamps are formatted as Aula ' +
-        'expects: "YYYY-MM-DD HH:MM:SS.0000+ZZZZ". Aula uses Europe/Copenhagen.',
+        'expects: "YYYY-MM-DD HH:MM:SS.0000+ZZZZ". Aula uses Europe/Copenhagen. Timestamps in ' +
+        'the result are Europe/Copenhagen local time with the UTC offset (e.g. ' +
+        '"2026-09-21T08:00:00+02:00"), not UTC.',
       inputSchema: {
         profileIds: z
           .array(z.number().int().positive())
@@ -809,7 +858,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         ...(args.resourceIds ? { resourceIds: args.resourceIds } : {}),
       });
       if (process.env.AULA_MCP_RAW === '1') return jsonContent(events);
-      return compactJsonContent(slimCalendarEvents(events, args.profileIds));
+      return compactJsonContent(localizeTimestamps(slimCalendarEvents(events, args.profileIds)));
     },
   );
 
