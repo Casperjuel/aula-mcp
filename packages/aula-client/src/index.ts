@@ -61,6 +61,7 @@ export {
   type MeebookOptions,
   MinUddannelseClient,
   type MinUddannelseOptions,
+  type NormalisedWeekNote,
   type NormalisedWeekPlan,
   type NormalisedWeekPlanItem,
   SystematicClient,
