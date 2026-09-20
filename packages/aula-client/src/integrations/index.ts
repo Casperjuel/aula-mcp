@@ -9,6 +9,7 @@ export { MinUddannelseClient, type MinUddannelseOptions } from './min-uddannelse
 export { SystematicClient, type SystematicOptions } from './systematic.ts';
 export {
   decodeHtmlEntities,
+  htmlToPlainText,
   type IntegrationContext,
   type IntegrationPluginInfo,
   isoDate,

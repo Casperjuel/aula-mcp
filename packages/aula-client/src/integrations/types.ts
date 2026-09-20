@@ -54,8 +54,9 @@ export interface NormalisedWeekPlanItem {
   /** Subject / class / hold name. */
   subject?: string;
   title?: string;
-  /** Plain text content; HTML entities decoded but markup kept (the agent
-   *  can format as it likes). */
+  /** Text content with HTML entities decoded. EasyIQ SkolePortal also reduces
+   *  the markup to plain text (`htmlToPlainText`); the other providers keep
+   *  their markup. */
   content?: string;
   /** Item kind (e.g. comment, task, assignment). */
   kind?: string;
@@ -73,7 +74,7 @@ export interface NormalisedWeekNote {
   className?: string;
   /** The vendor's heading for the note. */
   title?: string;
-  /** HTML entities decoded but markup kept, like `NormalisedWeekPlanItem.content`. */
+  /** Plain text: markup reduced by `htmlToPlainText`, entities decoded. */
   content: string;
 }
 
@@ -182,4 +183,38 @@ export function decodeHtmlEntities(s: string): string {
     .replace(/&[a-zA-Z]+;/g, (m) => HTML_ENTITY_MAP[m] ?? m)
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(Number.parseInt(h, 16)));
+}
+
+/**
+ * Reduce an HTML fragment to readable plain text: paragraphs, `<br>` and list
+ * items become line breaks (`- ` before an item), a link becomes
+ * `text (url)` (just the url when the text is the url), every other tag is
+ * dropped, and entities are decoded last so an escaped `&lt;b&gt;` stays
+ * literal text. Not a sanitiser and not a parser: it is for content that is
+ * shown to a reader, never re-rendered as HTML.
+ */
+export function htmlToPlainText(html: string): string {
+  const text = html
+    .replace(
+      /<a\s[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)')[^>]*>([\s\S]*?)<\/a\s*>/gi,
+      (_m, dq, sq, inner) => {
+        const url = String(dq ?? sq ?? '').trim();
+        const label = String(inner)
+          .replace(/<[^>]*>/g, '')
+          .trim();
+        if (!url || label === url) return label || url;
+        return label ? `${label} (${url})` : url;
+      },
+    )
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li(?:\s[^>]*)?>/gi, '- ')
+    .replace(/<\/(p|div|li|ul|ol|h[1-6]|tr|table)\s*>/gi, '\n')
+    .replace(/<[^>]*>/g, '');
+  return decodeHtmlEntities(text)
+    .replace(/ /g, ' ')
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+/g, ' ').trim())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }

@@ -17,7 +17,12 @@ import { EasyIqSkoleportalClient } from './easyiq-skoleportal.ts';
 import { MeebookClient } from './meebook.ts';
 import { MinUddannelseClient } from './min-uddannelse.ts';
 import { SystematicClient } from './systematic.ts';
-import { decodeHtmlEntities, type IntegrationContext, isoWeekString } from './types.ts';
+import {
+  decodeHtmlEntities,
+  htmlToPlainText,
+  type IntegrationContext,
+  isoWeekString,
+} from './types.ts';
 
 function ctx(overrides: Partial<IntegrationContext> = {}): IntegrationContext {
   // Default childUserIds mirrors the test's childIds with a `u` prefix so
@@ -447,7 +452,7 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
         childName: 'Emilie Færgemand',
         className: '4D',
         title: 'Generelt om ugen',
-        content: '<p>Kære forældre</p><p>Tur til Bakken onsdag</p>', // entities decoded, markup kept
+        content: 'Kære forældre\nTur til Bakken onsdag', // entities decoded, markup reduced to text
       },
     ]);
     expect(plan.warnings).toBeUndefined();
@@ -595,7 +600,7 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
           childName: 'Emilie',
           className: '3A',
           title: 'Generelt om ugen',
-          content: '<p>Fra toppen</p>',
+          content: 'Fra toppen',
         },
       ]);
     });
@@ -621,8 +626,8 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
       });
 
       expect(plan.notes?.map((n) => [n.className, n.content])).toEqual([
-        ['5C', '<p>A</p>'],
-        ['5D', '<p>B</p>'],
+        ['5C', 'A'],
+        ['5D', 'B'],
       ]);
     });
 
@@ -700,7 +705,7 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
         'Bearer TKN-1',
         'Bearer TKN-2',
       ]);
-      expect(plan.notes?.[0]?.content).toBe('<p>Efter fornyelse</p>');
+      expect(plan.notes?.[0]?.content).toBe('Efter fornyelse');
       expect(plan.warnings).toBeUndefined();
     });
 
@@ -739,8 +744,8 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
       );
 
       expect(plan.notes?.map((n) => [n.childName, n.content])).toEqual([
-        ['Anna', '<p>A</p>'],
-        ['Dina', '<p>D</p>'],
+        ['Anna', 'A'],
+        ['Dina', 'D'],
       ]);
       expect(plan.warnings).toHaveLength(2);
       expect(plan.warnings?.[0]).toContain('child 2');
@@ -955,5 +960,42 @@ describe('decodeHtmlEntities', () => {
 
   test('leaves unrelated text alone', () => {
     expect(decodeHtmlEntities('hello world')).toBe('hello world');
+  });
+});
+
+describe('htmlToPlainText', () => {
+  test('paragraphs and <br> become line breaks, other tags are dropped', () => {
+    expect(htmlToPlainText('<p>Første</p><p><strong>Anden</strong><br />linje</p>')).toBe(
+      'Første\nAnden\nlinje',
+    );
+  });
+
+  test('a link keeps its address: "text (url)", or just the url when the text is the url', () => {
+    expect(
+      htmlToPlainText(
+        '<a href="https://example.dk/a?x=1&amp;y=2" target="_blank"><em>Webprøver</em></a>',
+      ),
+    ).toBe('Webprøver (https://example.dk/a?x=1&y=2)');
+    expect(htmlToPlainText('<a href="https://example.dk">https://example.dk</a>')).toBe(
+      'https://example.dk',
+    );
+  });
+
+  test('list items get a dash', () => {
+    expect(htmlToPlainText('<ul><li>Mad</li><li class="x">Drikkedunk</li></ul>')).toBe(
+      '- Mad\n- Drikkedunk',
+    );
+  });
+
+  test('entities are decoded after the tags are removed, so an escaped tag stays text', () => {
+    expect(htmlToPlainText('<p>K&aelig;re &lt;b&gt;forældre&lt;/b&gt;&nbsp;!</p>')).toBe(
+      'Kære <b>forældre</b> !',
+    );
+  });
+
+  test('whitespace-only markup is empty; runs of blank lines and spaces collapse', () => {
+    expect(htmlToPlainText('<p>&nbsp;</p><p> </p>')).toBe('');
+    expect(htmlToPlainText('<p>A</p><p></p><p></p><p></p><p>B   C</p>')).toBe('A\n\nB C');
+    expect(htmlToPlainText('')).toBe('');
   });
 });

@@ -31,6 +31,7 @@ import type { WidgetTokenManager } from '../widget-token-manager.ts';
 import { isWidgetTokenExpiredResponse } from '../widget-token-manager.ts';
 import {
   decodeHtmlEntities,
+  htmlToPlainText,
   type IntegrationContext,
   isoDate,
   isoWeekToMonday,
@@ -173,7 +174,7 @@ export class EasyIqSkoleportalClient {
       if (subject || cls) item.subject = [subject, cls].filter(Boolean).join(' / ');
       const title = decodeHtmlEntities(ev.ChapterTitle ?? '');
       if (title) item.title = title;
-      const desc = decodeHtmlEntities(ev.Description ?? '');
+      const desc = htmlToPlainText(ev.Description ?? '');
       if (desc) item.content = desc;
       items.push(item);
     }
@@ -338,8 +339,8 @@ function toWeekNotes(response: SpWeekNoteResponse, childName: string): Normalise
   const seen = new Set<string>();
   return candidates.flatMap((candidate) => {
     // The widget sends whitespace-only markup (`<p>&nbsp;</p>`) for a cleared note.
-    const content = decodeHtmlEntities(candidate.Text ?? '');
-    if (!content.replace(/<[^>]*>/g, '').trim()) return [];
+    const content = htmlToPlainText(candidate.Text ?? '');
+    if (!content) return [];
     // The top-level note and a class note can carry the same text.
     if (seen.has(content)) return [];
     seen.add(content);
