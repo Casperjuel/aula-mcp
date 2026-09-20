@@ -27,6 +27,13 @@ export interface IntegrationContext {
   fromDate?: string;
   /** ISO YYYY-MM-DD upper bound (inclusive). */
   toDate?: string;
+  /**
+   * Also fetch the week's free-text note, for providers that have one
+   * (EasyIQ SkolePortal). Costs one extra request per child and adds a
+   * failure mode, so it is off unless asked for: a poller that only compares
+   * `items` neither pays for it nor gets a note warning read as a degraded plan.
+   */
+  includeNotes?: boolean;
 }
 
 export interface IntegrationPluginInfo {

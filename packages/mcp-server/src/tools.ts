@@ -892,7 +892,10 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const sp = await context.getEasyIqSkoleportal();
-      return jsonContent(await sp.getWeekPlan(await buildIntegrationCtx(args)));
+      // The MCP tool wants the week note too; the CLI poller does not (see IntegrationContext).
+      return jsonContent(
+        await sp.getWeekPlan({ ...(await buildIntegrationCtx(args)), includeNotes: true }),
+      );
     },
   );
 

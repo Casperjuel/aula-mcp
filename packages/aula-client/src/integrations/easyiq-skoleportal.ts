@@ -12,8 +12,9 @@
  *   1. Get a widget token for 0128 (via WidgetTokenManager).
  *   2. POST /Aula/AuthenticateAulaUser per-child with x-childfilter +
  *      x-institutionfilter + x-login headers; receive `{ loginId, ... }`.
- *   3. GET /Calendar/CalendarGetWeekplanEvents?loginId=…&date=YYYY-MM-DD;
- *      receive an array of events with PascalCase fields.
+ *   3. GET /Calendar/CalendarGetWeekplanEvents?loginId=…&date=YYYY-MM-DD
+ *      &courseFilter=-1&textFilter=; receive an array of events with
+ *      PascalCase fields. (courseFilter=-1 matters: see fetchEvents.)
  *   4. GET /Calendar/WeekPlan?loginId=…&date=YYYY-MM-DDT00:00:00 — the week's
  *      free-text note ("Generelt om ugen"), shown above the plan in the
  *      widget: `{ WeekPlans: [{ ActivityName, Text (HTML), IsVisible,
@@ -179,10 +180,12 @@ export class EasyIqSkoleportalClient {
 
     let weekNote: SpWeekNoteResponse | undefined;
     let noteWarning: string | undefined;
-    try {
-      weekNote = await this.fetchWeekNote(ctx, childUserId, auth.loginId, noteDateParam);
-    } catch (e) {
-      noteWarning = `week note: ${(e as Error).message}`;
+    if (ctx.includeNotes) {
+      try {
+        weekNote = await this.fetchWeekNote(ctx, childUserId, auth.loginId, noteDateParam);
+      } catch (e) {
+        noteWarning = `week note: ${(e as Error).message}`;
+      }
     }
     return {
       items,
@@ -266,7 +269,14 @@ export class EasyIqSkoleportalClient {
         ctx.institutionCodes.join(','),
         ctx.sessionId,
       );
-      const url = `${SP_WEEKPLAN_URL}?loginId=${encodeURIComponent(loginId)}&date=${encodeURIComponent(dateParam)}`;
+      // `courseFilter=-1` ("all courses") and an empty `textFilter` are what the
+      // widget itself sends. Without them the endpoint leaves out the
+      // class-level events — "Klub", "Klassens tid", a whole "green week"
+      // programme: measured on one family, 10 of 20 events for one child in one
+      // week and 2 of 10 for another, and never fewer events with the filter
+      // than without. `activityFilter` and `ownWeekPlan`, which the widget also
+      // sends, make no difference and are left out.
+      const url = `${SP_WEEKPLAN_URL}?loginId=${encodeURIComponent(loginId)}&date=${encodeURIComponent(dateParam)}&courseFilter=-1&textFilter=`;
       const res = await this.http.request(url, { method: 'GET', headers });
       if (isWidgetTokenExpiredResponse(res.body, res.status)) {
         return { _expired: true as const, status: res.status, bodySnippet: res.body.slice(0, 200) };
@@ -304,7 +314,17 @@ export class EasyIqSkoleportalClient {
           `SkolePortal WeekPlan failed (status ${res.status}): ${res.body.slice(0, 200)}`,
         );
       }
-      return JSON.parse(res.body) as SpWeekNoteResponse;
+      const parsed = JSON.parse(res.body) as unknown;
+      // A 200 that is not a note response at all (an array, a renamed field) would
+      // otherwise read as "no note this week" and hide that the vendor changed.
+      if (
+        typeof parsed !== 'object' ||
+        parsed === null ||
+        !('WeekPlans' in parsed || 'Show' in parsed)
+      ) {
+        throw new Error('unexpected response shape');
+      }
+      return parsed as SpWeekNoteResponse;
     });
   }
 }
@@ -315,10 +335,14 @@ function toWeekNotes(response: SpWeekNoteResponse, childName: string): Normalise
     ...(response.Show ? [response] : []),
     ...(response.WeekPlans ?? []).filter((note) => note.IsVisible !== false),
   ];
+  const seen = new Set<string>();
   return candidates.flatMap((candidate) => {
     // The widget sends whitespace-only markup (`<p>&nbsp;</p>`) for a cleared note.
     const content = decodeHtmlEntities(candidate.Text ?? '');
     if (!content.replace(/<[^>]*>/g, '').trim()) return [];
+    // The top-level note and a class note can carry the same text.
+    if (seen.has(content)) return [];
+    seen.add(content);
     const className = decodeHtmlEntities(candidate.ActivityName ?? response.ActivityName ?? '');
     const title = decodeHtmlEntities(candidate.Beskrivelse ?? response.Beskrivelse ?? '');
     return [

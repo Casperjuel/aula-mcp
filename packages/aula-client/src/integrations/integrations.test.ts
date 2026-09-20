@@ -431,7 +431,7 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
       http: http.asHttpClient(),
       widgets: fakeWidgets(),
     });
-    const plan = await client.getWeekPlan(ctx());
+    const plan = await client.getWeekPlan(ctx({ includeNotes: true }));
     expect(plan.items).toHaveLength(1);
     expect(plan.items[0]).toMatchObject({
       childName: 'Emilie Færgemand', // entity decoded
@@ -467,8 +467,6 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
         status: 200,
         body: JSON.stringify([{ StartTime: '2026/05/04 09:00', CoursesDisplay: 'Engelsk' }]),
       },
-      // child 2: week note (none this week)
-      { status: 200, body: JSON.stringify({ WeekPlans: [] }) },
     );
     const client = new EasyIqSkoleportalClient({
       http: http.asHttpClient(),
@@ -486,7 +484,6 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
     const http = new FakeHttp().enqueue(
       { status: 200, body: JSON.stringify({ loginId: 'LOGIN', childName: 'X' }) },
       { status: 200, body: '[]' },
-      { status: 200, body: '{}' },
     );
     const client = new EasyIqSkoleportalClient({
       http: http.asHttpClient(),
@@ -513,6 +510,38 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
     expect(events?.url).toContain('loginId=LOGIN');
   });
 
+  test('asks for all courses, so class-level events (club, green-week programme) are not left out', async () => {
+    const http = new FakeHttp().enqueue(
+      { status: 200, body: JSON.stringify({ loginId: 'LOGIN', childName: 'X' }) },
+      { status: 200, body: '[]' },
+    );
+    const client = new EasyIqSkoleportalClient({
+      http: http.asHttpClient(),
+      widgets: fakeWidgets(),
+    });
+    await client.getWeekPlan(ctx());
+    const url = http.requested[1]?.url ?? '';
+    expect(url).toContain('courseFilter=-1&textFilter=');
+    // The widget also sends these; they make no difference, so they are not sent.
+    expect(url).not.toContain('activityFilter');
+    expect(url).not.toContain('ownWeekPlan');
+  });
+
+  test('makes no note request and returns no notes unless asked for', async () => {
+    const http = new FakeHttp().enqueue(
+      { status: 200, body: JSON.stringify({ loginId: 'LOGIN', childName: 'X' }) },
+      { status: 200, body: '[]' },
+    );
+    const client = new EasyIqSkoleportalClient({
+      http: http.asHttpClient(),
+      widgets: fakeWidgets(),
+    });
+    const plan = await client.getWeekPlan(ctx());
+    expect(http.requested).toHaveLength(2);
+    expect(plan.notes).toBeUndefined();
+    expect(plan.warnings).toBeUndefined();
+  });
+
   describe('week note ("Generelt om ugen")', () => {
     /** One child: auth, empty events, then the given note response. */
     async function planWithNote(note: { status: number; body: string }) {
@@ -525,12 +554,14 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
         http: http.asHttpClient(),
         widgets: fakeWidgets(),
       });
-      const plan = await client.getWeekPlan(ctx({ childUserIds: ['abcd1234'] }));
+      const plan = await client.getWeekPlan(
+        ctx({ childUserIds: ['abcd1234'], includeNotes: true }),
+      );
       return { plan, http };
     }
 
     test('reuses the auth loginId, asks for the week by Monday, and sends the per-child headers', async () => {
-      const { http } = await planWithNote({ status: 200, body: '{}' });
+      const { http } = await planWithNote({ status: 200, body: JSON.stringify({ WeekPlans: [] }) });
 
       expect(http.requested).toHaveLength(3); // no extra authentication
       const note = http.requested[2];
@@ -612,6 +643,110 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
       const raw = plan.raw as Record<string, { weekNote?: unknown }>;
       expect(raw['1234567']?.weekNote).toEqual(note);
     });
+
+    test('a top-level note and a class note with the same text are returned once', async () => {
+      const { plan } = await planWithNote({
+        status: 200,
+        body: JSON.stringify({
+          Show: true,
+          Text: '<p>Samme tekst</p>',
+          ActivityName: '5C',
+          WeekPlans: [{ ActivityName: '5C', Text: '<p>Samme tekst</p>', IsVisible: true }],
+        }),
+      });
+
+      expect(plan.notes).toHaveLength(1);
+    });
+
+    test.each([
+      ['an array', '[]'],
+      ['an object without either known field', '{"Renamed":[]}'],
+      ['a JSON string', '"ok"'],
+    ])('a 200 with %s is a warning, not "no note this week"', async (_label, body) => {
+      const { plan } = await planWithNote({ status: 200, body });
+
+      expect(plan.notes).toBeUndefined();
+      expect(plan.warnings?.[0]).toContain('unexpected response shape');
+      expect(plan.items).toHaveLength(1);
+    });
+
+    test('a rejected widget token on the note request is retried once with a fresh token', async () => {
+      const http = new FakeHttp().enqueue(
+        { status: 200, body: JSON.stringify({ loginId: 'LOGIN', childName: 'Emilie' }) },
+        { status: 200, body: '[]' },
+        { status: 401, body: '{"message":"JWT-Token expired, please renew."}' },
+        {
+          status: 200,
+          body: JSON.stringify({
+            WeekPlans: [{ ActivityName: '5C', Text: '<p>Efter fornyelse</p>', IsVisible: true }],
+          }),
+        },
+      );
+      // Like the real WidgetTokenManager: on an expiry signal, retry once with a new token.
+      const widgets = {
+        async withRetry<T>(_id: string, fn: (t: string) => Promise<T>) {
+          const first = await fn('TKN-1');
+          const expired = (v: unknown) =>
+            typeof v === 'object' && v !== null && (v as { _expired?: boolean })._expired === true;
+          return expired(first) ? fn('TKN-2') : first;
+        },
+      } as unknown as WidgetTokenManager;
+      const client = new EasyIqSkoleportalClient({ http: http.asHttpClient(), widgets });
+
+      const plan = await client.getWeekPlan(ctx({ includeNotes: true }));
+
+      const noteRequests = http.requested.filter((r) => r.url.includes('/Calendar/WeekPlan'));
+      expect(noteRequests.map((r) => r.headers?.authorization)).toEqual([
+        'Bearer TKN-1',
+        'Bearer TKN-2',
+      ]);
+      expect(plan.notes?.[0]?.content).toBe('<p>Efter fornyelse</p>');
+      expect(plan.warnings).toBeUndefined();
+    });
+
+    test('handles any number of children: notes for those that have one, a warning for each that fails', async () => {
+      const auth = (name: string) => ({
+        status: 200,
+        body: JSON.stringify({ loginId: 'LOGIN', childName: name }),
+      });
+      const note = (text: string) => ({
+        status: 200,
+        body: JSON.stringify({ WeekPlans: [{ ActivityName: 'X', Text: text, IsVisible: true }] }),
+      });
+      const http = new FakeHttp().enqueue(
+        // child 1: auth, events, note
+        auth('Anna'),
+        { status: 200, body: '[]' },
+        note('<p>A</p>'),
+        // child 2: authentication fails, so nothing more is requested for it
+        { status: 401, body: 'Unauthorized' },
+        // child 3: auth, events, the note request fails
+        auth('Clara'),
+        { status: 200, body: '[]' },
+        { status: 500, body: 'boom' },
+        // child 4: auth, events, a note
+        auth('Dina'),
+        { status: 200, body: '[]' },
+        note('<p>D</p>'),
+      );
+      const client = new EasyIqSkoleportalClient({
+        http: http.asHttpClient(),
+        widgets: fakeWidgets(),
+      });
+
+      const plan = await client.getWeekPlan(
+        ctx({ childIds: [1, 2, 3, 4], childUserIds: ['a1', 'b2', 'c3', 'd4'], includeNotes: true }),
+      );
+
+      expect(plan.notes?.map((n) => [n.childName, n.content])).toEqual([
+        ['Anna', '<p>A</p>'],
+        ['Dina', '<p>D</p>'],
+      ]);
+      expect(plan.warnings).toHaveLength(2);
+      expect(plan.warnings?.[0]).toContain('child 2');
+      expect(plan.warnings?.[1]).toContain('child 3');
+      expect(plan.warnings?.[1]).toContain('week note');
+    });
   });
 
   test('falls back to EndTime when there is no EndTimeISO', async () => {
@@ -623,7 +758,6 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
           { StartTime: '2026-05-04T08:00:00', EndTime: '2026-05-04T08:45:00' },
         ]),
       },
-      { status: 200, body: '{}' },
     );
     const client = new EasyIqSkoleportalClient({
       http: http.asHttpClient(),
