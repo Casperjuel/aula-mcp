@@ -1,11 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
   htmlToText,
+  localizeCalendarEvents,
   localizeTimestamps,
+  omitRaw,
   registerTools,
   slimCalendarEvents,
   slimPost,
-  slimWeekPlan,
   toCopenhagenTime,
   validateSetTemplateArgs,
 } from './tools.ts';
@@ -268,7 +269,7 @@ describe('slimPost', () => {
   });
 });
 
-describe('slimWeekPlan', () => {
+describe('omitRaw', () => {
   const plan = {
     items: [{ subject: 'Dansk', content: 'x' }],
     raw: { child1: { events: Array.from({ length: 200 }, (_, i) => ({ Id: i })) } },
@@ -276,20 +277,20 @@ describe('slimWeekPlan', () => {
   };
 
   test('drops the vendor payload but keeps items and warnings', () => {
-    expect(slimWeekPlan(plan, false)).toEqual({ items: plan.items, warnings: plan.warnings });
+    expect(omitRaw(plan, false)).toEqual({ items: plan.items, warnings: plan.warnings });
   });
 
   test('keeps it when asked to', () => {
-    expect(slimWeekPlan(plan, true)).toBe(plan);
+    expect(omitRaw(plan, true)).toBe(plan);
   });
 
   test('defaults to AULA_MCP_RAW', () => {
     const previous = process.env.AULA_MCP_RAW;
     try {
       process.env.AULA_MCP_RAW = '1';
-      expect(slimWeekPlan(plan)).toBe(plan);
+      expect(omitRaw(plan)).toBe(plan);
       delete process.env.AULA_MCP_RAW;
-      expect(slimWeekPlan(plan)).not.toHaveProperty('raw');
+      expect(omitRaw(plan)).not.toHaveProperty('raw');
     } finally {
       if (previous === undefined) delete process.env.AULA_MCP_RAW;
       else process.env.AULA_MCP_RAW = previous;
@@ -346,11 +347,90 @@ describe('slimCalendarEvents', () => {
         type: 'lesson',
         startDateTime: '2026-09-21T06:00:00+00:00',
         endDateTime: '2026-09-21T06:45:00+00:00',
+        belongsToProfiles: [1, 2],
         primaryResource: { id: 7, name: 'Lokale 12' },
         groups: ['8E'],
         lesson: { status: 'normal', teachers: ['Anna Teacher (AT)'] },
       },
     ]);
+  });
+
+  test('keeps which child an event belongs to, so several children in one call stay apart', () => {
+    const events = [
+      lessonEvent({ id: 1, belongsToProfiles: [101] }),
+      lessonEvent({ id: 2, belongsToProfiles: [202] }),
+      lessonEvent({ id: 3, belongsToProfiles: [303] }),
+    ];
+
+    const slimmed = slimCalendarEvents(events, [101, 202, 303]) as Array<Record<string, unknown>>;
+
+    expect(slimmed.map((e) => e.belongsToProfiles)).toEqual([[101], [202], [303]]);
+  });
+
+  test('drops empty objects like other empty values', () => {
+    const [event] = slimCalendarEvents(
+      [lessonEvent({ repeating: {}, primaryResource: {}, note: { a: 1 } })],
+      [],
+    ) as Array<Record<string, unknown>>;
+
+    expect(event).not.toHaveProperty('repeating');
+    expect(event).not.toHaveProperty('primaryResource');
+    expect(event?.note).toEqual({ a: 1 });
+  });
+
+  describe("meeting time slots never leak other families' answers", () => {
+    const answer = (concerningProfileId: number, selectedTimeSlotIndex: number) => ({
+      instProfileId: concerningProfileId + 1000,
+      concerningProfileId,
+      selectedTimeSlotIndex,
+    });
+
+    test("with any number of requested children, each one's chosen slot is kept", () => {
+      const timeSlot = {
+        timeSlots: [
+          { id: 1, answers: [answer(101, 0), answer(999, 1)] },
+          { id: 2, answers: [answer(202, 2), answer(888, 0)] },
+          { id: 3, answers: [answer(303, 1), answer(202, 3)] },
+        ],
+      };
+
+      const [event] = slimCalendarEvents([lessonEvent({ timeSlot })], [101, 202, 303]) as Array<
+        Record<string, unknown>
+      >;
+
+      const slots =
+        (event?.timeSlot as { timeSlots?: Array<Record<string, unknown>> } | undefined)
+          ?.timeSlots ?? [];
+      expect(slots.map((s) => s.selectedTimeSlotIndexes)).toEqual([[0], [2], [1, 3]]);
+      expect(JSON.stringify(event)).not.toContain('999');
+      expect(JSON.stringify(event)).not.toContain('888');
+      expect(JSON.stringify(event)).not.toContain('instProfileId');
+    });
+
+    test.each([
+      ['answers directly on timeSlot', { answers: [answer(999, 2), answer(101, 4)] }],
+      ['answers nested deeper than expected', { slots: { list: [{ answers: [answer(999, 2)] }] } }],
+      ['answers that are not an array', { timeSlots: [{ answers: { 0: answer(999, 2) } }] }],
+      ['answers as a string', { timeSlots: [{ answers: 'other family' }] }],
+    ])('an unfamiliar shape (%s) is dropped, not passed through', (_label, timeSlot) => {
+      const [event] = slimCalendarEvents([lessonEvent({ timeSlot })], [101]) as Array<
+        Record<string, unknown>
+      >;
+
+      const text = JSON.stringify(event);
+      expect(text).not.toContain('999');
+      expect(text).not.toContain('other family');
+      expect(text).not.toContain('"answers"');
+    });
+
+    test("a shape with the requested child's answer directly on timeSlot keeps only that index", () => {
+      const [event] = slimCalendarEvents(
+        [lessonEvent({ timeSlot: { answers: [answer(999, 2), answer(101, 4)] } })],
+        [101],
+      ) as Array<Record<string, unknown>>;
+
+      expect(event?.timeSlot).toEqual({ selectedTimeSlotIndexes: [4] });
+    });
   });
 
   test('keeps a substitute teacher and the substitute status visible', () => {
@@ -617,6 +697,10 @@ describe('toCopenhagenTime', () => {
     '2026-09-21T08:00:00', // no offset: the zone is unknown, so it is not guessed
     '2026-09-21',
     '2026-13-45T99:00:00+00:00', // looks like a timestamp but is not one
+    '2026-02-30T10:00:00+00:00', // a date that does not exist must not roll into March
+    '2026-02-29T10:00:00+00:00', // 2026 is not a leap year
+    '2026-09-21T24:00:00+00:00', // hour 24 is not a wall-clock time here
+    '2026-09-21T10:60:00+00:00',
     'Dansk',
     '',
   ])('leaves %p as it is', (input) => {
@@ -665,5 +749,41 @@ describe('localizeTimestamps', () => {
     const input = { startDateTime: '2026-09-21T06:00:00+00:00' };
     localizeTimestamps(input);
     expect(input.startDateTime).toBe('2026-09-21T06:00:00+00:00');
+  });
+});
+
+describe('toCopenhagenTime — real dates only', () => {
+  test('a leap day converts', () => {
+    expect(toCopenhagenTime('2028-02-29T06:00:00+00:00')).toBe('2028-02-29T07:00:00+01:00');
+  });
+
+  test('the end of a month converts without rolling over', () => {
+    expect(toCopenhagenTime('2026-01-31T22:30:00+00:00')).toBe('2026-01-31T23:30:00+01:00');
+    expect(toCopenhagenTime('2026-01-31T23:30:00+00:00')).toBe('2026-02-01T00:30:00+01:00');
+  });
+
+  test('sub-second precision is dropped', () => {
+    expect(toCopenhagenTime('2026-09-21T06:00:00.123456+00:00')).toBe('2026-09-21T08:00:00+02:00');
+  });
+});
+
+describe('localizeCalendarEvents', () => {
+  test('converts timed events and leaves an all-day event exactly as Aula sent it', () => {
+    const timed = { id: 1, startDateTime: '2026-09-21T06:00:00+00:00' };
+    const allDay = {
+      id: 2,
+      allDay: true,
+      startDateTime: '2026-09-21T00:00:00+00:00',
+      endDateTime: '2026-09-22T00:00:00+00:00',
+    };
+
+    const [a, b] = localizeCalendarEvents([timed, allDay]);
+
+    expect(a).toEqual({ id: 1, startDateTime: '2026-09-21T08:00:00+02:00' });
+    expect(b).toEqual(allDay);
+  });
+
+  test('leaves entries that are not objects untouched', () => {
+    expect(localizeCalendarEvents(['x', null])).toEqual(['x', null]);
   });
 });

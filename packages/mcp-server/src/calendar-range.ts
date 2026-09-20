@@ -12,6 +12,9 @@
  * numeric `formatToParts` so the locale is otherwise a no-op.
  */
 
+/** The time zone Aula runs in: every institution keeps Danish school time. */
+export const AULA_TIME_ZONE = 'Europe/Copenhagen';
+
 export type CalendarRange = 'today' | 'tomorrow' | 'this_week' | 'next_week';
 
 export interface CalendarWindow {
@@ -53,7 +56,7 @@ export function addDays(d: Date, n: number): Date {
 export function startOfDayCopenhagen(d: Date): Date {
   // Step 1: identify the calendar day in Copenhagen for `d`.
   const dayFmt = new Intl.DateTimeFormat('da-DK', {
-    timeZone: 'Europe/Copenhagen',
+    timeZone: AULA_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
@@ -72,7 +75,7 @@ export function startOfDayCopenhagen(d: Date): Date {
 /** Minutes east-of-UTC that Europe/Copenhagen has at the given instant. */
 export function copenhagenOffsetMinutes(d: Date): number {
   const fmt = new Intl.DateTimeFormat('da-DK', {
-    timeZone: 'Europe/Copenhagen',
+    timeZone: AULA_TIME_ZONE,
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
@@ -102,7 +105,7 @@ export function startOfWeekMondayCopenhagen(d: Date): Date {
 /** Day-of-week as Copenhagen sees it: 0 = Sun, 1 = Mon, …, 6 = Sat. */
 export function copenhagenDayOfWeek(d: Date): number {
   const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Europe/Copenhagen',
+    timeZone: AULA_TIME_ZONE,
     weekday: 'short',
   });
   const map: Record<string, number> = {
@@ -120,7 +123,7 @@ export function copenhagenDayOfWeek(d: Date): number {
 /** Format `YYYY-MM-DD HH:MM:SS.0000+ZZZZ` in Europe/Copenhagen. */
 export function aulaTs(d: Date): string {
   const fmt = new Intl.DateTimeFormat('da-DK', {
-    timeZone: 'Europe/Copenhagen',
+    timeZone: AULA_TIME_ZONE,
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',

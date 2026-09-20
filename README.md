@@ -360,7 +360,7 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_PORT` | `7878` | Bind-port. |
 | `AULA_MCP_HOST` | `127.0.0.1` | Bind-interface. Nægter ikke-loopback medmindre `AULA_MCP_ALLOW_REMOTE=1`. |
 | `AULA_MCP_DIR` | `~/.config/aula-mcp` | Konfig-mappe (fil-backend + transcripts + login-log). |
-| `AULA_MCP_RAW=1` | off | Aktiverer `aula.raw_request` escape-hatch-toolet. |
+| `AULA_MCP_RAW=1` | off | Aktiverer `aula.raw_request` escape-hatch-toolet og giver kalender- og ugeplan-værktøjerne deres uforkortede Aula-svar tilbage (ellers slankes de, og kalendertider omregnes til dansk tid, så klienten kan vise dem). |
 | `AULA_MCP_WRITE=1` | off | Aktiverer skrive-tools (`aula.presence.set_template` — sæt komme/gå-tider). Serveren er read-only uden den. |
 | `AULA_MCP_LOG=1` | off | Verbose console-logs fra auth/client-lagene (samme redaktion som wire-transcripts). |
 | `AULA_MCP_ALLOW_REMOTE=1` | off | Tillader at binde til ikke-loopback adresser (fx bag en reverse proxy). |

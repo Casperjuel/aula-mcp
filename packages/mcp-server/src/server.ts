@@ -20,7 +20,8 @@
  *   AULA_MCP_HOST             — interface to bind (default 127.0.0.1)
  *   AULA_MCP_DIR              — config dir (default ~/.config/aula-mcp)
  *   AULA_MCP_KEY              — encryption key for the token store
- *   AULA_MCP_RAW=1            — enable the aula.raw_request escape hatch
+ *   AULA_MCP_RAW=1            — enable the aula.raw_request escape hatch and return the
+ *                               calendar / ugeplan results unslimmed and in UTC
  *   AULA_MCP_WRITE=1          — enable write tools (aula.presence.set_template);
  *                               the server is read-only without it
  *   AULA_MCP_LOG=1            — verbose console logs from auth/client layers

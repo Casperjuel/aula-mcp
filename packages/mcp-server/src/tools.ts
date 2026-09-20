@@ -17,7 +17,7 @@ import {
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
-import { resolveCalendarRange } from './calendar-range.ts';
+import { AULA_TIME_ZONE, resolveCalendarRange } from './calendar-range.ts';
 import { buildDiscoverManifest } from './discover.ts';
 
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
@@ -85,8 +85,12 @@ async function downloadAttachmentToDisk(args: {
   };
 }
 
-function jsonContent(data: unknown): { content: Array<{ type: 'text'; text: string }> } {
-  return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+function jsonContent(
+  data: unknown,
+  opts: { compact?: boolean } = {},
+): { content: Array<{ type: 'text'; text: string }> } {
+  const text = opts.compact ? JSON.stringify(data) : JSON.stringify(data, null, 2);
+  return { content: [{ type: 'text', text }] };
 }
 
 /** Monday..Sunday of the current ISO week as `YYYY-MM-DD` strings. */
@@ -193,15 +197,14 @@ export function slimPost(post: AulaPost) {
 //     next to the normalised `items` (~94 KB for one busy EasyIQ SkolePortal
 //     week, ~12 KB without `raw`);
 //   - aula.calendar.events carries whole member lists and dozens of empty
-//     fields per event (~217 KB for one week for two children, ~35 KB slimmed).
+//     fields per event (~217 KB for one week for a family with two children,
+//     ~28 KB slimmed — the size grows with the number of children).
 // `AULA_MCP_RAW=1` restores the untouched results for debugging.
 
-function compactJsonContent(data: unknown): { content: Array<{ type: 'text'; text: string }> } {
-  return { content: [{ type: 'text', text: JSON.stringify(data) }] };
-}
+const compactJsonContent = (data: unknown) => jsonContent(data, { compact: true });
 
 /** Integration result without the vendor payload (`raw`) unless `keepRaw`. Exported for tests. */
-export function slimWeekPlan<T extends { raw?: unknown }>(
+export function omitRaw<T extends { raw?: unknown }>(
   plan: T,
   keepRaw: boolean = process.env.AULA_MCP_RAW === '1',
 ): T | Omit<T, 'raw'> {
@@ -220,7 +223,8 @@ function isEmptyValue(value: unknown): boolean {
     value === null ||
     value === '' ||
     value === false ||
-    (Array.isArray(value) && value.length === 0)
+    (Array.isArray(value) && value.length === 0) ||
+    (isRecord(value) && Object.keys(value).length === 0)
   );
 }
 
@@ -267,35 +271,36 @@ function slimLesson(lesson: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * A school-home meeting's time slots list every family's answer. Only the
- * requested children's chosen slot indexes are kept: other families' answers
- * are neither needed nor ours to pass on.
+ * A school-home meeting's time slots carry every family's answers (other
+ * children's profile ids). This fails closed: `answers` is dropped wherever it
+ * appears under `timeSlot`, whatever the shape around it, and only the
+ * requested children's chosen slot indexes are put back as
+ * `selectedTimeSlotIndexes` on the object that held them. An unfamiliar shape
+ * can therefore lose information, but never leak another family's data.
  */
-function slimTimeSlot(timeSlot: unknown, ownProfileIds: ReadonlySet<number>): unknown {
-  if (!isRecord(timeSlot) || !Array.isArray(timeSlot.timeSlots)) return timeSlot;
-  const { timeSlots, ...rest } = timeSlot;
-  return {
-    ...rest,
-    timeSlots: timeSlots.map((slot: unknown) => {
-      if (!isRecord(slot)) return slot;
-      const { answers, ...slotRest } = slot;
-      const chosen = (Array.isArray(answers) ? answers : []).flatMap((answer: unknown) =>
-        isRecord(answer) &&
-        typeof answer.concerningProfileId === 'number' &&
-        ownProfileIds.has(answer.concerningProfileId) &&
-        typeof answer.selectedTimeSlotIndex === 'number'
-          ? [answer.selectedTimeSlotIndex]
-          : [],
-      );
-      return chosen.length > 0
-        ? { ...slotRest, selectedTimeSlotIndexes: [...new Set(chosen)] }
-        : slotRest;
-    }),
-  };
+function slimTimeSlot(node: unknown, ownProfileIds: ReadonlySet<number>): unknown {
+  if (Array.isArray(node)) return node.map((item) => slimTimeSlot(item, ownProfileIds));
+  if (!isRecord(node)) return node;
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(node)) {
+    if (key !== 'answers') out[key] = slimTimeSlot(value, ownProfileIds);
+  }
+  const chosen = (Array.isArray(node.answers) ? node.answers : []).flatMap((answer: unknown) =>
+    isRecord(answer) &&
+    typeof answer.concerningProfileId === 'number' &&
+    ownProfileIds.has(answer.concerningProfileId) &&
+    typeof answer.selectedTimeSlotIndex === 'number'
+      ? [answer.selectedTimeSlotIndex]
+      : [],
+  );
+  if (chosen.length > 0) out.selectedTimeSlotIndexes = [...new Set(chosen)];
+  return out;
 }
 
 /**
  * Calendar events reduced to what a parent acts on: title, times, type, room,
+ * which child(ren) it belongs to (`belongsToProfiles` — the only per-event
+ * child attribution, needed as soon as more than one child is requested),
  * teachers (substitutes flagged), lesson status, response-required / status /
  * deadline, creator, and meeting time slots (own children's choice only).
  * Exported for tests.
@@ -314,7 +319,6 @@ export function slimCalendarEvents(
       timeSlot,
       // Bookkeeping that never helps a reader.
       createdDateTime: _createdDateTime,
-      belongsToProfiles: _belongsToProfiles,
       belongsToResources: _belongsToResources,
       ...rest
     } = event;
@@ -333,16 +337,21 @@ export function slimCalendarEvents(
   });
 }
 
-// --- calendar times in local time ---------------------------------------------
+// --- calendar times in Aula's time zone ---------------------------------------
 //
 // Aula returns calendar timestamps in UTC (`2026-09-21T06:00:00+00:00` for an
 // 08:00 lesson in summer), while the tool descriptions and server instructions
 // say times are Europe/Copenhagen. Read at face value that puts every lesson
-// one or two hours early, so results are converted to Copenhagen local time
-// with the UTC offset spelled out. The instant is unchanged.
+// one or two hours early, so results are converted to Aula's time zone with
+// the UTC offset spelled out. The instant is unchanged.
+//
+// The zone is Aula's, not the server's or the reader's: every Aula institution
+// keeps Danish school time, so a server running in UTC, or a parent abroad,
+// still sees the school's wall clock. It is the same zone calendar-range.ts
+// uses to build the query window.
 
-const COPENHAGEN_TIME = new Intl.DateTimeFormat('en-GB', {
-  timeZone: 'Europe/Copenhagen',
+const AULA_LOCAL_TIME = new Intl.DateTimeFormat('en-GB', {
+  timeZone: AULA_TIME_ZONE,
   hourCycle: 'h23',
   year: 'numeric',
   month: '2-digit',
@@ -354,21 +363,37 @@ const COPENHAGEN_TIME = new Intl.DateTimeFormat('en-GB', {
 });
 
 /** Only timestamps that carry an offset are converted; without one the zone is unknown. */
-const OFFSET_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+const OFFSET_TIMESTAMP =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
 
-/** `2026-09-21T06:00:00+00:00` → `2026-09-21T08:00:00+02:00`. Anything else is returned as is. Exported for tests. */
+/**
+ * `2026-09-21T06:00:00+00:00` → `2026-09-21T08:00:00+02:00`. Anything that is
+ * not a real timestamp with an offset is returned as is — including a date
+ * that does not exist (`2026-02-30`), which `Date` would otherwise roll into
+ * March. Sub-second precision is dropped. Exported for tests.
+ */
 export function toCopenhagenTime(timestamp: string): string {
-  if (!OFFSET_TIMESTAMP.test(timestamp)) return timestamp;
+  const match = OFFSET_TIMESTAMP.exec(timestamp);
+  if (!match) return timestamp;
+  const part = (index: number) => Number(match[index]);
+  const wall = new Date(Date.UTC(part(1), part(2) - 1, part(3), part(4), part(5), part(6)));
+  const exists =
+    wall.getUTCFullYear() === part(1) &&
+    wall.getUTCMonth() === part(2) - 1 &&
+    wall.getUTCDate() === part(3) &&
+    wall.getUTCHours() === part(4) &&
+    wall.getUTCMinutes() === part(5) &&
+    wall.getUTCSeconds() === part(6);
   const instant = new Date(timestamp);
-  if (Number.isNaN(instant.getTime())) return timestamp;
+  if (!exists || Number.isNaN(instant.getTime())) return timestamp;
   const parts = Object.fromEntries(
-    COPENHAGEN_TIME.formatToParts(instant).map((part) => [part.type, part.value]),
+    AULA_LOCAL_TIME.formatToParts(instant).map((p) => [p.type, p.value]),
   );
   const offset = /GMT([+-]\d{2}:\d{2})/.exec(parts.timeZoneName ?? '')?.[1] ?? '+00:00';
   return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}${offset}`;
 }
 
-/** Every timestamp string anywhere in `value` in Copenhagen local time. Exported for tests. */
+/** Every timestamp string anywhere in `value` in Aula's time zone. Exported for tests. */
 export function localizeTimestamps<T>(value: T): T {
   if (typeof value === 'string') return toCopenhagenTime(value) as T;
   if (Array.isArray(value)) return value.map(localizeTimestamps) as T;
@@ -378,6 +403,18 @@ export function localizeTimestamps<T>(value: T): T {
     ) as T;
   }
   return value;
+}
+
+/**
+ * Calendar events with their timestamps in Aula's time zone. An all-day event
+ * is left as Aula sent it: its bounds are calendar days rather than instants,
+ * and converting a midnight would move its end into the next day.
+ * Exported for tests.
+ */
+export function localizeCalendarEvents(events: readonly unknown[]): unknown[] {
+  return events.map((event) =>
+    isRecord(event) && event.allDay === true ? event : localizeTimestamps(event),
+  );
 }
 
 /** `YYYY-MM-DD`. */
@@ -858,7 +895,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         ...(args.resourceIds ? { resourceIds: args.resourceIds } : {}),
       });
       if (process.env.AULA_MCP_RAW === '1') return jsonContent(events);
-      return compactJsonContent(localizeTimestamps(slimCalendarEvents(events, args.profileIds)));
+      return compactJsonContent(
+        localizeCalendarEvents(slimCalendarEvents(events, args.profileIds)),
+      );
     },
   );
 
@@ -1059,9 +1098,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const easyiq = await context.getEasyIq();
-      return compactJsonContent(
-        slimWeekPlan(await easyiq.getWeekPlan(await buildIntegrationCtx(args))),
-      );
+      return compactJsonContent(omitRaw(await easyiq.getWeekPlan(await buildIntegrationCtx(args))));
     },
   );
 
@@ -1076,7 +1113,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     async (args) => {
       const meebook = await context.getMeebook();
       return compactJsonContent(
-        slimWeekPlan(await meebook.getWeekPlan(await buildIntegrationCtx(args))),
+        omitRaw(await meebook.getWeekPlan(await buildIntegrationCtx(args))),
       );
     },
   );
@@ -1092,9 +1129,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const sp = await context.getEasyIqSkoleportal();
-      return compactJsonContent(
-        slimWeekPlan(await sp.getWeekPlan(await buildIntegrationCtx(args))),
-      );
+      return compactJsonContent(omitRaw(await sp.getWeekPlan(await buildIntegrationCtx(args))));
     },
   );
 
@@ -1110,9 +1145,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const lektier = await context.getEasyIqLektier();
-      return compactJsonContent(
-        slimWeekPlan(await lektier.getLektier(await buildIntegrationCtx(args))),
-      );
+      return compactJsonContent(omitRaw(await lektier.getLektier(await buildIntegrationCtx(args))));
     },
   );
 
@@ -1125,7 +1158,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const mu = await context.getMinUddannelse();
-      return compactJsonContent(slimWeekPlan(await mu.getOpgaver(await buildIntegrationCtx(args))));
+      return compactJsonContent(omitRaw(await mu.getOpgaver(await buildIntegrationCtx(args))));
     },
   );
 
@@ -1138,7 +1171,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
     async (args) => {
       const mu = await context.getMinUddannelse();
-      return compactJsonContent(slimWeekPlan(await mu.getUgebrev(await buildIntegrationCtx(args))));
+      return compactJsonContent(omitRaw(await mu.getUgebrev(await buildIntegrationCtx(args))));
     },
   );
 
@@ -1164,7 +1197,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       const sys = await context.getSystematic();
       const baseCtx = await buildIntegrationCtx(args);
       return compactJsonContent(
-        slimWeekPlan(
+        omitRaw(
           await sys.getReminders({
             ...baseCtx,
             ...(args.fromDate ? { fromDate: args.fromDate } : {}),
