@@ -8,7 +8,8 @@
  *   5.  POST /login/mitid with the MitID authorization code.
  *   6.  Optional identity selection (multi-child guardian).
  *   7.  POST broker SAML endpoint.
- *   8.  Handle post-broker-login (with #306 confirmation form fix).
+ *   8.  Follow the broker chain; drive post-broker-login (with #306
+ *       confirmation form fix) or take the SAML form directly.
  *   9.  POST Aula SAML ACS, follow to OAuth callback.
  *   10. Exchange `code` for tokens.
  *
@@ -28,6 +29,7 @@ import {
 import {
   AulaSamlError,
   buildMitidCompletionForm,
+  classifyBrokerLanding,
   detectConfirmationForm,
   extractBrokerParams,
   extractSamlForm,
@@ -558,40 +560,65 @@ export class AulaLoginClient {
   /**
    * SAML hop into the broker, post-broker-login (with #306 fallback), and
    * return the final SAML form whose POST hits Aula's ACS.
+   *
+   * The broker answers the SAML POST with a redirect chain, not a page. On the
+   * usual path it is one hop to `post-broker-login`; for an identity the realm
+   * has not linked before it is `first-broker-login` → `after-first-broker-login`
+   * → …, each a bodyless 302 (see `classifyBrokerLanding`). So we follow to the
+   * final 200 and look at where we ended up rather than at the first hop.
    */
   private async runBrokerHandoff(
     samlResponse: string,
     relayState: string,
   ): Promise<{ samlResponse: string; relayState: string; action: string }> {
     const samlBody = new URLSearchParams({ SAMLResponse: samlResponse, RelayState: relayState });
-    const samlRes = await this.http.request(oauthUrls.brokerSamlEndpoint(this.oauth), {
-      method: 'POST',
-      headers: {
-        origin: 'https://nemlog-in.mitid.dk',
-        referer: 'https://nemlog-in.mitid.dk/login/mitid',
+    const { final: brokerPageRes, history } = await this.http.followRedirects(
+      oauthUrls.brokerSamlEndpoint(this.oauth),
+      {
+        method: 'POST',
+        headers: {
+          origin: 'https://nemlog-in.mitid.dk',
+          referer: 'https://nemlog-in.mitid.dk/login/mitid',
+        },
+        body: samlBody,
       },
-      body: samlBody,
+    );
+    const chain = history.map((h) => `${h.status} ${h.url}`).join(' -> ');
+
+    if (brokerPageRes.status !== 200) {
+      throw new AulaSamlError(
+        `Broker SAML handoff failed (status ${brokerPageRes.status}, chain=${chain}): ${brokerPageRes.body.slice(0, 300)}`,
+        { htmlSnippet: brokerPageRes.body.slice(0, 500) },
+      );
+    }
+
+    const landing = classifyBrokerLanding(brokerPageRes.url, brokerPageRes.body);
+    this.logger.info('aula.broker.landing', {
+      landing,
+      hops: history.length,
+      url: brokerPageRes.url,
     });
 
-    let brokerPageRes: AulaResponse;
-    if (samlRes.status >= 300 && samlRes.status < 400) {
-      const loc = samlRes.headers.get('location');
-      if (!loc) throw new AulaSamlError('Broker SAML POST returned 3xx without Location');
-      const followUrl = new URL(loc, oauthUrls.brokerSamlEndpoint(this.oauth)).toString();
-      brokerPageRes = await this.http.request(followUrl);
-    } else if (samlRes.status === 200) {
-      brokerPageRes = samlRes;
-    } else {
-      throw new AulaSamlError(
-        `Broker SAML POST failed (status ${samlRes.status}): ${samlRes.body.slice(0, 300)}`,
-        { htmlSnippet: samlRes.body.slice(0, 500) },
-      );
+    if (landing === 'saml-form') {
+      // No post-broker-login step on this path — the broker already issued
+      // the assertion for Aula.
+      const direct = extractSamlForm(brokerPageRes.body);
+      if (!direct.hadRelayState) {
+        this.logger.warn('aula.saml.relay_state_missing', {
+          note: 'Tolerating per upstream issue #310 — Level 3 flows sometimes omit it',
+        });
+      }
+      return {
+        samlResponse: direct.samlResponse,
+        relayState: direct.relayState,
+        action: direct.action,
+      };
     }
 
     const params = extractBrokerParams(brokerPageRes.url, brokerPageRes.body);
     if (!params.sessionCode || !params.execution) {
       throw new AulaSamlError(
-        `Broker page missing session_code/execution params (url=${brokerPageRes.url})`,
+        `Broker page missing session_code/execution params (url=${brokerPageRes.url}, chain=${chain})`,
         { htmlSnippet: brokerPageRes.body.slice(0, 500) },
       );
     }

@@ -216,6 +216,32 @@ export function extractBrokerParams(urlOrForm: string, html?: string): BrokerSes
 }
 
 /**
+ * Where the broker's redirect chain landed after we posted the MitID-issued
+ * SAMLResponse to `/broker/nemlogin3/endpoint`. Two endings are known:
+ *
+ *   - `post-broker-login`: Keycloak's post-broker-login page (role selection,
+ *     #306 confirmation) — `session_code` + `execution` sit in the URL or the
+ *     form action, and the caller drives the form.
+ *   - `saml-form`: the broker went straight to the auto-submit form carrying
+ *     Aula's SAMLResponse, so there is no post-broker-login step to drive.
+ *
+ * The chain is not always one hop. For a MitID identity the broker realm has
+ * not linked before, Keycloak runs its first-broker-login flow:
+ * `nemlogin3/endpoint` → 302 `login-actions/first-broker-login` (no
+ * session_code) → 302 `broker/after-first-broker-login?session_code=…` (no
+ * execution) → … — every hop a bodyless 302, so a one-hop reader sees neither
+ * params nor a form and gives up. Follow to the final 200, then classify.
+ */
+export type BrokerLanding = 'post-broker-login' | 'saml-form' | 'unknown';
+
+export function classifyBrokerLanding(url: string, html: string): BrokerLanding {
+  if (extractHiddenInputs(html).SAMLResponse) return 'saml-form';
+  const params = extractBrokerParams(url, html);
+  if (params.sessionCode && params.execution) return 'post-broker-login';
+  return 'unknown';
+}
+
+/**
  * Detect the #306 confirmation page on a 200 response from
  * `post-broker-login`. Returns the form to submit, or null if the response is
  * the normal happy path (and the caller should look for a 302 instead).
