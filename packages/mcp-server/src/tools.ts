@@ -1047,7 +1047,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       const { messages } = await client.getMessagesForThread(args.threadId);
       const flat = messages.flatMap((m) => m.attachments ?? []);
       const att = flat[args.attachmentIndex];
-      // Images and videos arrive with `file: null` and the real envelope
+      // Images (and other media) arrive with `file: null` and the real envelope
       // under `media.file`.
       const file = att?.file ?? att?.media?.file;
       if (!file?.url) {

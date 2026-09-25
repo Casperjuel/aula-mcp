@@ -390,7 +390,7 @@ export interface ThreadMessageAttachmentFile {
 }
 
 /** One file attached to a thread message. Documents come in a `file`
- *  envelope; images and videos come with `file: null` and the same envelope
+ *  envelope; images (and other media) come with `file: null` and the same envelope
  *  under `media.file` instead. Either URL is a short-lived CloudFront
  *  presigned link (~1h TTL). */
 export interface ThreadMessageAttachment {
