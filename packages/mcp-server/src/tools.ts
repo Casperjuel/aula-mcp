@@ -1047,7 +1047,10 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       const { messages } = await client.getMessagesForThread(args.threadId);
       const flat = messages.flatMap((m) => m.attachments ?? []);
       const att = flat[args.attachmentIndex];
-      if (!att?.file?.url) {
+      // Images and videos arrive with `file: null` and the real envelope
+      // under `media.file`.
+      const file = att?.file ?? att?.media?.file;
+      if (!file?.url) {
         return jsonContent({
           error: 'attachment_not_found',
           threadId: args.threadId,
@@ -1056,10 +1059,10 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         });
       }
       const result = await downloadAttachmentToDisk({
-        url: att.file.url,
-        filename: att.file.name ?? `attachment-${args.attachmentIndex}.bin`,
+        url: file.url,
+        filename: file.name ?? `attachment-${args.attachmentIndex}.bin`,
         prefix: `${args.threadId}-${args.attachmentIndex}`,
-        ...(att.file.mediaType ? { mediaType: att.file.mediaType } : {}),
+        ...(file.mediaType ? { mediaType: file.mediaType } : {}),
       });
       return jsonContent(result);
     },
