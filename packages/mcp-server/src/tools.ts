@@ -913,7 +913,10 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     'aula.opgaver.minuddannelse',
     {
       title: 'Min Uddannelse opgaveliste',
-      description: 'Homework / task list from Min Uddannelse for the given children.',
+      description:
+        'Homework / task list from Min Uddannelse for the given children. `content` holds ' +
+        "the forløb name plus the teacher's description (HTML), fetched through a " +
+        'minuddannelse.net session; if that fails the items come back title-only with a warning.',
       inputSchema: integrationContextShape,
     },
     async (args) => {
