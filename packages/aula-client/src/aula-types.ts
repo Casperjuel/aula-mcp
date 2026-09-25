@@ -382,15 +382,20 @@ export interface ThreadsPage {
   hasMorePages: boolean;
 }
 
-/** One file attached to a thread message. Aula wraps each entry in a `file`
- *  envelope; the URL is a short-lived CloudFront presigned link (~1h TTL). */
+export interface ThreadMessageAttachmentFile {
+  name?: string;
+  url?: string;
+  mediaType?: string | null;
+  size?: number | null;
+}
+
+/** One file attached to a thread message. Documents come in a `file`
+ *  envelope; images (and other media) come with `file: null` and the same envelope
+ *  under `media.file` instead. Either URL is a short-lived CloudFront
+ *  presigned link (~1h TTL). */
 export interface ThreadMessageAttachment {
-  file?: {
-    name?: string;
-    url?: string;
-    mediaType?: string | null;
-    size?: number | null;
-  };
+  file?: ThreadMessageAttachmentFile | null;
+  media?: { file?: ThreadMessageAttachmentFile | null } | null;
 }
 
 export interface ThreadMessage {
