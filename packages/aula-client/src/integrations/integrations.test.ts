@@ -15,7 +15,7 @@ import { EasyIqClient } from './easyiq.ts';
 import { EasyIqLektierClient } from './easyiq-lektier.ts';
 import { EasyIqSkoleportalClient } from './easyiq-skoleportal.ts';
 import { MeebookClient } from './meebook.ts';
-import { MinUddannelseClient } from './min-uddannelse.ts';
+import { elevIdFromRedirectUrl, MinUddannelseClient } from './min-uddannelse.ts';
 import { SystematicClient } from './systematic.ts';
 import { decodeHtmlEntities, type IntegrationContext, isoWeekString } from './types.ts';
 
@@ -207,8 +207,16 @@ describe('MeebookClient.getWeekPlan', () => {
 // Min Uddannelse (widgets 0029 + 0030)
 // --------------------------------------------------------------------------
 
+/** Build a Min Uddannelse widget deep link the way the live API encodes it. */
+function muRedirectUrl(elevId: string, opgaveId: string): string {
+  const target = encodeURIComponent(
+    `https://www.minuddannelse.net/Node/minuge/${elevId}?opgave=${opgaveId}&uge=2026-W19`,
+  ).replace(/%[0-9A-F]{2}/g, (m) => m.toLowerCase());
+  return `https://api.minuddannelse.net/aula/redirect/G12345/${Buffer.from(target).toString('base64')}`;
+}
+
 describe('MinUddannelseClient.getOpgaver', () => {
-  test('maps opgaver[] into normalised items with subject = joined hold names', async () => {
+  test('maps opgaver[] into normalised items with subject = joined hold subject names', async () => {
     const http = new FakeHttp().enqueue({
       status: 200,
       body: JSON.stringify({
@@ -218,7 +226,10 @@ describe('MinUddannelseClient.getOpgaver', () => {
             title: 'Aflever opgave',
             ugedag: 'mandag',
             opgaveType: 'aflevering',
-            hold: [{ name: 'Dansk' }, { name: 'Tværfagligt' }],
+            hold: [
+              { navn: 'Dansk 4A', fagNavn: 'Dansk' },
+              { navn: 'Tværfagligt 4A', fagNavn: 'Tværfagligt' },
+            ],
             forloeb: { navn: 'Læseuge' },
           },
         ],
@@ -235,6 +246,95 @@ describe('MinUddannelseClient.getOpgaver', () => {
       content: 'Læseuge',
       kind: 'aflevering',
     });
+  });
+
+  test('enriches items with the teacher description via a minuddannelse.net session', async () => {
+    const opgaveUrl = muRedirectUrl('1234567', '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0');
+    const http = new FakeHttp().enqueue(
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [
+            {
+              id: '0f1e2d3c4b5a69788796a5b4c3d2e1f0',
+              kuvertnavn: 'Emilie',
+              title: 'Engelsk MED LEKTIE',
+              ugedag: 'Onsdag',
+              opgaveType: 'SimpelLektie',
+              hold: [{ navn: 'Engelsk 4A', fagNavn: 'Engelsk' }],
+              forloeb: { navn: 'Coming to England' },
+              url: opgaveUrl,
+            },
+          ],
+        }),
+      },
+      { status: 302, headers: { location: 'https://www.minuddannelse.net/AutoLogin/abc' } },
+      { status: 302, headers: { location: '/Home/AuthenticationPostAuthenticate' } },
+      { status: 302, headers: { location: '/Node/minuge/1234567' } },
+      { status: 200, body: '<!DOCTYPE html>' },
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [
+            {
+              id: '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0',
+              indholdsType: 'text',
+              indhold: JSON.stringify({
+                text: `<p style='font-family: "Times New Roman"'>LEKTIE: OPGAVE 7+8 I OPGAVES&AElig;TTET</p>`,
+              }),
+            },
+          ],
+        }),
+      },
+    );
+    const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getOpgaver(ctx({ childUserIds: ['emil1102'] }));
+
+    expect(plan.warnings).toBeUndefined();
+    expect(plan.items[0]).toMatchObject({
+      subject: 'Engelsk',
+      content: 'Coming to England\n\n<p>LEKTIE: OPGAVE 7+8 I OPGAVESÆTTET</p>',
+      url: opgaveUrl,
+    });
+    const login = http.requested[1];
+    expect(login?.url).toStartWith(`${opgaveUrl}?`);
+    expect(login?.url).toContain('userProfile=guardian');
+    expect(login?.headers?.authorization).toBe('Bearer TKN-1');
+    // The widget token must not follow the redirects onto www.minuddannelse.net.
+    for (const hop of http.requested.slice(2)) expect(hop.headers?.authorization).toBeUndefined();
+    expect(http.requested[5]?.url).toBe(
+      'https://www.minuddannelse.net/api/forloebsafvikling/opgaver/getOpgaveliste?tidspunkt=2026-W19&elevId=1234567',
+    );
+  });
+
+  test('a failed web session degrades to title-only items with a warning', async () => {
+    const http = new FakeHttp().enqueue(
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [{ id: 'a1', title: 'Dansk', url: muRedirectUrl('1234567', 'a1') }],
+        }),
+      },
+      { status: 302, headers: { location: 'https://www.minuddannelse.net/AutoLogin/abc' } },
+      { status: 200, body: '<!DOCTYPE html>' },
+      { status: 200, body: '"Unauthorized"' },
+    );
+    const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getOpgaver(ctx());
+    expect(plan.items[0]?.title).toBe('Dansk');
+    expect(plan.items[0]?.content).toBeUndefined();
+    expect(plan.warnings?.[0]).toContain('opgave descriptions unavailable');
+  });
+
+  test('elevIdFromRedirectUrl reads the MU person id out of the base64 deep link', () => {
+    // Verbatim shape from the live widget: lower-case %-escapes, base64 path segment.
+    const live =
+      'https://api.minuddannelse.net/aula/redirect/G12345/aHR0cHMlM2ElMmYlMmZ3d3cubWludWRkYW5uZWxzZS5uZXQlMmZOb2RlJTJmbWludWdlJTJmMTIzNDU2NyUzZm9wZ2F2ZSUzZDBmMWUyZDNjLTRiNWEtNjk3OC04Nzk2LWE1YjRjM2QyZTFmMCUyNnVnZSUzZDIwMjYtVzE5';
+    expect(elevIdFromRedirectUrl(live)).toBe('1234567');
+    expect(elevIdFromRedirectUrl('https://example.com/x')).toBeUndefined();
+    expect(
+      elevIdFromRedirectUrl('https://api.minuddannelse.net/aula/redirect/1/!!!'),
+    ).toBeUndefined();
   });
 
   test('getUgebrev maps personer → institutioner → ugebreve to one item per letter', async () => {
