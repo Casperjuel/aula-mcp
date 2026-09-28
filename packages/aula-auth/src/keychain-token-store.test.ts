@@ -60,6 +60,20 @@ describe('KeychainTokenStore roundtrip (macOS only)', () => {
     }
   });
 
+  // `security find-generic-password -w` prints the password hex-encoded when
+  // it contains non-ASCII bytes — e.g. a Danish identity name.
+  itDarwin('save → load survives non-ASCII characters (æ ø å)', async () => {
+    const service = uniqueService();
+    const store = new KeychainTokenStore({ service });
+    const danish: StoredTokenRecord = { ...SAMPLE, identityName: 'Søren Ærø Åberg' };
+    try {
+      await store.save(danish);
+      expect(await store.load()).toEqual(danish);
+    } finally {
+      await store.clear().catch(() => {});
+    }
+  });
+
   itDarwin('load returns null when no entry exists', async () => {
     const store = new KeychainTokenStore({ service: uniqueService() });
     expect(await store.load()).toBeNull();
