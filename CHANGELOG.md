@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.6.0](https://github.com/Casperjuel/aula-mcp/compare/v1.5.1...v1.6.0) (2026-10-05)
+
+
+### Features
+
+* **minuddannelse:** include the teacher's description on opgaver ([#110](https://github.com/Casperjuel/aula-mcp/issues/110)) ([0de0dab](https://github.com/Casperjuel/aula-mcp/commit/0de0dab844932b5afa5551aaaf5c7647c449c7fd))
+* **minuddannelse:** keep the class name on ugebrev items ([#100](https://github.com/Casperjuel/aula-mcp/issues/100)) ([f136000](https://github.com/Casperjuel/aula-mcp/commit/f1360000eaccf7cae528bed1cab6b0d0b2a32cfc))
+
+
+### Bug Fixes
+
+* **aula-auth:** decode the hex `security` prints for non-ASCII Keychain records ([#112](https://github.com/Casperjuel/aula-mcp/issues/112)) ([bc5b5c1](https://github.com/Casperjuel/aula-mcp/commit/bc5b5c169ea77eadba025d9c8cd51f5e95120ee6)), closes [#106](https://github.com/Casperjuel/aula-mcp/issues/106)
+* **auth:** follow the broker redirect chain through first-broker-login ([#108](https://github.com/Casperjuel/aula-mcp/issues/108)) ([7af5476](https://github.com/Casperjuel/aula-mcp/commit/7af54766765694be13253ed45a534014d4e8b876))
+* **ci:** drop separate-pull-requests so single-package release PRs can be tagged ([#116](https://github.com/Casperjuel/aula-mcp/issues/116)) ([27c3f66](https://github.com/Casperjuel/aula-mcp/commit/27c3f66a882a6dd2ba353fbefa77c166cbd5941f))
+* **messages:** download image attachments from media.file ([#111](https://github.com/Casperjuel/aula-mcp/issues/111)) ([fc9a7b4](https://github.com/Casperjuel/aula-mcp/commit/fc9a7b4b0cb5fbd17284d246bf417dbb69b7dc31))
+
 ## [1.5.1](https://github.com/Casperjuel/aula-mcp/compare/v1.5.0...v1.5.1) (2026-09-01)
 
 
