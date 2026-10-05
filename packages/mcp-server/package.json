@@ -17,11 +17,11 @@
   "dependencies": {
     "@aula-mcp/aula-auth": "workspace:*",
     "@aula-mcp/aula-client": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "hono": "^4.13.5",
+    "@modelcontextprotocol/sdk": "^1.32.0",
+    "hono": "^4.13.12",
     "pdf-parse": "^2.4.5",
     "qrcode": "^1.5.4",
-    "zod": "^4.5.4"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/qrcode": "^1.5.6"
