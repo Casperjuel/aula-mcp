@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import type { AulaPost } from '@aula-mcp/aula-client';
 import {
   AulaStepUpRequiredError,
+  htmlToText,
   isoDate,
   isoWeekString,
   isoWeekToMonday,
@@ -138,20 +139,6 @@ async function resolveFamilyProfileIds(
   }
   // Guardian(s) first, then children; dedupe.
   return [...new Set([...guardianIds, ...childIds])];
-}
-
-/** Strip Aula post HTML down to readable text (keeps line breaks). Exported for tests. */
-export function htmlToText(html: string): string {
-  return html
-    .replace(/<\/(p|div|li|h[1-6])>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
 }
 
 interface PdfTextResult {
@@ -913,7 +900,10 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     'aula.opgaver.minuddannelse',
     {
       title: 'Min Uddannelse opgaveliste',
-      description: 'Homework / task list from Min Uddannelse for the given children.',
+      description:
+        'Homework / task list from Min Uddannelse for the given children. `content` holds ' +
+        "the forløb name plus the teacher's description as plain text, fetched through a " +
+        'minuddannelse.net session; if that fails the items come back title-only with a warning.',
       inputSchema: integrationContextShape,
     },
     async (args) => {

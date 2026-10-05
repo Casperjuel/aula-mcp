@@ -132,3 +132,20 @@ export function decodeHtmlEntities(s: string): string {
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
     .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(Number.parseInt(h, 16)));
 }
+
+/**
+ * Reduce HTML to readable plain text: block ends become line breaks, the
+ * remaining tags go, and only then are entities decoded, so a literal
+ * `&lt;b&gt;` in the source stays text instead of turning into a tag.
+ */
+export function htmlToText(html: string): string {
+  const stripped = html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(?:p|div|li|h[1-6])>/gi, '\n')
+    .replace(/<[^>]*>/g, '');
+  return decodeHtmlEntities(stripped)
+    .replace(/[ \t\u00a0]+/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
