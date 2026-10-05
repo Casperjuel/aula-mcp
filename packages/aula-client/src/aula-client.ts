@@ -18,6 +18,7 @@
 import {
   AulaCookieJar,
   AulaHttpClient,
+  type AulaResponse,
   type AulaTokens,
   type Logger,
   silentLogger,
@@ -49,7 +50,7 @@ export interface AulaClientOptions {
   tokens: AulaTokens;
   http?: AulaHttpClient;
   logger?: Logger;
-  /** Default v22; the probe will bump if needed. */
+  /** Default v24 (current since 2026-09); the probe will bump if needed. */
   initialApiVersion?: number;
   /** Inclusive bound for probing. Default 50. */
   maxApiVersion?: number;
@@ -81,7 +82,7 @@ export class AulaClient {
     this.tokens = options.tokens;
     this.logger = options.logger ?? silentLogger;
     this.http = options.http ?? new AulaHttpClient({ logger: this.logger });
-    this.apiVersion = options.initialApiVersion ?? 22;
+    this.apiVersion = options.initialApiVersion ?? 24;
     this.maxApiVersion = options.maxApiVersion ?? 50;
     this.apiBaseHost = options.apiBaseHost ?? DEFAULT_API_BASE_HOST;
     if (options.onApiVersionChanged) this.onVersionChanged = options.onApiVersionChanged;
@@ -292,9 +293,9 @@ export class AulaClient {
   ): Promise<{ subject?: string; messages: ThreadMessage[] }> {
     // Probe-aware version: every OTHER method routes through
     // getJsonRaw / postJson, which call ensureApiVersion() implicitly
-    // and end up on the current working version (currently v23). This
+    // and end up on the current working version. This
     // one bypasses both helpers because it needs custom 403 → step-up
-    // handling, and used to pin `this.apiVersion` (default 22) directly
+    // handling, and used to pin `this.apiVersion` (then default 22) directly
     // — so a session that called get_thread before anything else
     // (e.g. straight from a cached threadId, skipping discover /
     // list_threads) hit /api/v22/ and got HTTP 410 from Aula's
@@ -431,19 +432,18 @@ export class AulaClient {
 
   /** GET with a manually-built params object (allows array fields like `childIds[]`). */
   async getJsonRaw<T>(params: URLSearchParams): Promise<T | undefined> {
-    const version = await this.ensureApiVersion();
-    params.set('access_token', this.tokens.access_token);
-    const url = `${this.apiBaseHost}/api/v${version}/?${params.toString()}`;
-    const res = await this.http.request(url, { method: 'GET' });
-    return this.parseEnvelope<T>(res.url, res.status, res.body, params);
+    const send = (version: number) => {
+      params.set('access_token', this.tokens.access_token);
+      return this.http.request(`${this.apiBaseHost}/api/v${version}/?${params.toString()}`, {
+        method: 'GET',
+      });
+    };
+    return this.parseEnvelope<T>(await send(await this.ensureApiVersion()), send);
   }
 
   /** POST JSON body to an Aula API method. Sets CSRF header from cookie jar. */
   async postJson<T>(method: string, body: string): Promise<T | undefined> {
     const version = await this.ensureApiVersion();
-    const params = new URLSearchParams({ method });
-    params.set('access_token', this.tokens.access_token);
-    const url = `${this.apiBaseHost}/api/v${version}/?${params.toString()}`;
     // Aula rejects every POST method with HTTP 403 (envelope code 10 /
     // subCode 23) until `profiles.getProfileContext` has run on the session —
     // it is what selects the acting profile server-side. A process that
@@ -472,33 +472,35 @@ export class AulaClient {
       );
     }
     await this.profileContextPromise;
-    const csrf = await this.http.jar.getCookieValue(url, 'Csrfp-Token');
-    const headers: Record<string, string> = { 'content-type': 'application/json' };
-    if (csrf) headers['csrfp-token'] = csrf;
-    const res = await this.http.request(url, { method: 'POST', headers, body });
-    return this.parseEnvelope<T>(res.url, res.status, res.body, params);
+    const send = async (v: number) => {
+      const params = new URLSearchParams({ method, access_token: this.tokens.access_token });
+      const url = `${this.apiBaseHost}/api/v${v}/?${params.toString()}`;
+      const csrf = await this.http.jar.getCookieValue(url, 'Csrfp-Token');
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (csrf) headers['csrfp-token'] = csrf;
+      return this.http.request(url, { method: 'POST', headers, body });
+    };
+    return this.parseEnvelope<T>(await send(version), send);
   }
 
   /**
-   * Probe-aware envelope parser. On 410, retries once after re-probing the
-   * version (#246/#248 mid-session bumps).
+   * Probe-aware envelope parser. On 410, re-probes the version and re-sends
+   * the original request through `send` (#246/#248 mid-session bumps). The
+   * caller owns `send` so a retried POST stays a POST with its body and CSRF
+   * header — rebuilding it here as a bare GET broke every write.
    */
   private async parseEnvelope<T>(
-    url: string,
-    status: number,
-    body: string,
-    paramsForRetry: URLSearchParams,
+    res: AulaResponse,
+    send: (version: number) => Promise<AulaResponse>,
   ): Promise<T | undefined> {
+    const { url, status, body } = res;
     if (status === 410 && this.versionVerified) {
       // Mid-session bump.
       this.versionVerified = false;
       this.apiVersion += 1;
       this.logger.warn('aula.api.version_410', { newProbeFrom: this.apiVersion });
       const newVersion = await this.ensureApiVersion();
-      paramsForRetry.set('access_token', this.tokens.access_token);
-      const retryUrl = `${this.apiBaseHost}/api/v${newVersion}/?${paramsForRetry.toString()}`;
-      const res = await this.http.request(retryUrl, { method: 'GET' });
-      return this.parseEnvelope<T>(res.url, res.status, res.body, paramsForRetry);
+      return this.parseEnvelope<T>(await send(newVersion), send);
     }
     if (status !== 200) {
       throw new AulaApiError(`API returned status ${status}`, status, url, body.slice(0, 300));
