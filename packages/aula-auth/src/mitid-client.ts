@@ -45,6 +45,7 @@ import {
   AUTHENTICATOR_TO_COMBINATION_ID,
   COMBINATION_ID_TO_AUTHENTICATOR,
   normalizeAuthenticatorType,
+  resolveOfferedCombinationIds,
 } from './mitid-types.ts';
 import { mitidUrls } from './mitid-urls.ts';
 import { CustomSrp } from './srp.ts';
@@ -189,6 +190,8 @@ export class MitidClient {
   private currentAuthenticatorSessionFlowKey?: string;
   private currentAuthenticatorEafeHash?: string;
   private currentAuthenticatorSessionId?: string;
+  /** Combination ID per authenticator, as offered by MitID in identifyAsUser. */
+  private offeredCombinationIds: Partial<Record<MitidAuthenticatorType, string>> = {};
 
   // APP poll state:
   private pollUrl?: string;
@@ -264,6 +267,7 @@ export class MitidClient {
       if (!human) continue;
       available[human] = combo.combinationItems[0]?.name ?? '';
     }
+    this.offeredCombinationIds = resolveOfferedCombinationIds(next.combinations ?? []);
     this.logger.info('mitid.authenticators_available', { available });
     return available;
   }
@@ -622,10 +626,7 @@ export class MitidClient {
 
   private async selectAuthenticator(target: MitidAuthenticatorType): Promise<void> {
     if (this.currentAuthenticatorType === target) return;
-    const combinationId = AUTHENTICATOR_TO_COMBINATION_ID[target];
-    if (!combinationId) {
-      throw new MitidError(`Cannot select authenticator type ${target}`);
-    }
+    const combinationId = this.combinationIdFor(target);
 
     const next = await this.postNext(combinationId);
     this.assertNoFatalErrors(next);
@@ -638,6 +639,26 @@ export class MitidClient {
         `Asked for ${target} but server returned ${this.currentAuthenticatorType ?? 'none'}`,
       );
     }
+  }
+
+  /**
+   * The ID MitID offered for `target`; the static table only when nothing was
+   * recorded (selecting without a prior identifyAsUser).
+   */
+  private combinationIdFor(target: MitidAuthenticatorType): string {
+    const staticId = AUTHENTICATOR_TO_COMBINATION_ID[target];
+    if (!staticId) {
+      throw new MitidError(`Cannot select authenticator type ${target}`);
+    }
+    const offered = Object.keys(this.offeredCombinationIds).sort();
+    if (offered.length === 0) return staticId;
+    const combinationId = this.offeredCombinationIds[target];
+    if (!combinationId) {
+      throw new MitidAuthenticatorUnavailableError(
+        `${target} authentication is not available for this MitID user (available: ${offered.join(', ')})`,
+      );
+    }
+    return combinationId;
   }
 
   private async postNext(combinationId: string): Promise<NextAuthenticatorResponse> {

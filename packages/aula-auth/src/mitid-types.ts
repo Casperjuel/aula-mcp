@@ -31,6 +31,32 @@ export const AUTHENTICATOR_TO_COMBINATION_ID: Readonly<Record<MitidAuthenticator
   });
 
 /**
+ * Which combination ID to send for each authenticator, given the
+ * `combinations` MitID offered after identifyAsUser. One authenticator can
+ * hide behind several IDs — an APP user may be offered S3, S4 (app + chip) or
+ * L2 (low-assurance app) — and /next rejects an ID it didn't offer, so always
+ * sending the static S3 fails the login for S4/L2-only accounts (upstream
+ * scaarup/aula#365). Prefer the static ID when it was offered, else the first
+ * offered ID for that authenticator. Unknown IDs are skipped.
+ */
+export function resolveOfferedCombinationIds(
+  combinations: ReadonlyArray<{ id: string }>,
+): Partial<Record<MitidAuthenticatorType, string>> {
+  const offered: Partial<Record<MitidAuthenticatorType, string[]>> = {};
+  for (const combo of combinations) {
+    const human = COMBINATION_ID_TO_AUTHENTICATOR[combo.id];
+    if (!human) continue;
+    offered[human] = [...(offered[human] ?? []), combo.id];
+  }
+  const resolved: Partial<Record<MitidAuthenticatorType, string>> = {};
+  for (const [human, ids] of Object.entries(offered) as Array<[MitidAuthenticatorType, string[]]>) {
+    const preferred = AUTHENTICATOR_TO_COMBINATION_ID[human];
+    resolved[human] = ids.includes(preferred) ? preferred : (ids[0] as string);
+  }
+  return resolved;
+}
+
+/**
  * Normalize the server's raw `authenticatorType` string into our human type.
  *
  * The MitID backend labels the hardware code generator ("kodeviser") as
