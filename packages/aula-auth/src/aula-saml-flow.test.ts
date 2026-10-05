@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   AulaSamlError,
   buildMitidCompletionForm,
+  classifyBrokerLanding,
   detectConfirmationForm,
   extractBrokerParams,
   extractSamlForm,
@@ -153,6 +154,56 @@ describe('extractBrokerParams', () => {
       clientId: '',
       tabId: '',
     });
+  });
+});
+
+describe('classifyBrokerLanding', () => {
+  const postBrokerUrl =
+    'https://broker.unilogin.dk/auth/realms/broker/login-actions/post-broker-login?session_code=SC&execution=EX&client_id=CID&tab_id=TID';
+
+  test('post-broker-login page: params in the URL', () => {
+    const html = `<form action="${postBrokerUrl}"><input type="hidden" name="selected-aktoer" value="" /></form>`;
+    expect(classifyBrokerLanding(postBrokerUrl, html)).toBe('post-broker-login');
+  });
+
+  test('post-broker-login page: params only in the form action', () => {
+    const html = `<form action="/auth/realms/broker/login-actions/post-broker-login?session_code=SC&execution=EX&client_id=CID&tab_id=TID"></form>`;
+    expect(
+      classifyBrokerLanding(
+        'https://broker.unilogin.dk/auth/realms/broker/broker/after-first-broker-login?session_code=SC',
+        html,
+      ),
+    ).toBe('post-broker-login');
+  });
+
+  test('SAML auto-submit form: the broker skipped post-broker-login', () => {
+    // Seen after first-broker-login -> after-first-broker-login: the final 200
+    // already carries Aula's SAMLResponse.
+    const html = `
+      <form method="post" action="https://login.aula.dk/simplesaml/module.php/saml/sp/saml2-acs.php/app-level3-sp">
+        <input type="hidden" name="SAMLResponse" value="PHNhbWw+" />
+        <input type="hidden" name="RelayState" value="rs" />
+      </form>`;
+    expect(
+      classifyBrokerLanding(
+        'https://broker.unilogin.dk/auth/realms/broker/broker/after-first-broker-login?session_code=SC',
+        html,
+      ),
+    ).toBe('saml-form');
+  });
+
+  test('SAML form wins even if the URL happens to carry broker params', () => {
+    const html = `<form action="https://login.aula.dk/acs"><input type="hidden" name="SAMLResponse" value="x" /></form>`;
+    expect(classifyBrokerLanding(postBrokerUrl, html)).toBe('saml-form');
+  });
+
+  test('unknown: a bodyless first-broker-login hop has neither', () => {
+    expect(
+      classifyBrokerLanding(
+        'https://broker.unilogin.dk/auth/realms/broker/login-actions/first-broker-login?client_id=CID&tab_id=TID',
+        '',
+      ),
+    ).toBe('unknown');
   });
 });
 
