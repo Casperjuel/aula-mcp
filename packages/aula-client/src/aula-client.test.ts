@@ -30,11 +30,14 @@ function makeClient(
 }
 
 describe('AulaClient.ensureApiVersion', () => {
-  test('returns the initial version when v22 already works', async () => {
+  test('starts at v24 and keeps it when it already works', async () => {
     const http = new FakeHttp();
     http.enqueue({ status: 200, body: envelope({ profiles: [] }) });
     const c = makeClient(http);
-    await expect(c.ensureApiVersion()).resolves.toBe(22);
+    await expect(c.ensureApiVersion()).resolves.toBe(24);
+    // One probe request, straight at v24 — no wasted v22/v23 round-trips.
+    expect(http.requested).toHaveLength(1);
+    expect(http.requested[0]?.url).toContain('/api/v24/');
   });
 
   test('bumps past 410 responses until it finds a working version', async () => {
@@ -60,7 +63,7 @@ describe('AulaClient.ensureApiVersion', () => {
       onApiVersionChanged: (from, to) => calls.push([from, to]),
     });
     await c.ensureApiVersion();
-    expect(calls).toEqual([[22, 23]]);
+    expect(calls).toEqual([[24, 25]]);
   });
 
   test('throws AulaApiVersionError when nothing in range works', async () => {
@@ -209,16 +212,43 @@ describe('AulaClient envelope handling', () => {
   test('mid-session 410 retries the call after re-probing', async () => {
     const http = new FakeHttp();
     http.enqueue(
-      { status: 200, body: envelope([]) }, // probe v22 ok
+      { status: 200, body: envelope([]) }, // probe v24 ok
       { status: 410, body: '' }, // first real call → bumped
-      { status: 200, body: envelope([{ status: 1 }]) }, // re-probe v23 ok
+      { status: 200, body: envelope([{ status: 1 }]) }, // re-probe v25 ok
       { status: 200, body: envelope([{ status: 1 }]) }, // retried call
     );
     const c = makeClient(http);
     await c.ensureApiVersion(); // probe runs once
     const out = await c.getDailyOverview([10]);
     expect(out).toEqual([{ status: 1 } as never]);
-    expect(c.currentApiVersion).toBe(23);
+    expect(c.currentApiVersion).toBe(25);
+    const retried = http.requested[3];
+    expect(retried?.method).toBe('GET');
+    expect(retried?.url).toContain('/api/v25/');
+    expect(retried?.url).toContain('childIds%5B%5D=10');
+  });
+
+  test('mid-session 410 on a POST re-sends the POST with its body and CSRF header', async () => {
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-1');
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // probe v24 ok
+      { status: 200, body: envelope({}) }, // getProfileContext bootstrap
+      { status: 410, body: '' }, // the POST → bumped
+      { status: 200, body: envelope({ profiles: [] }) }, // re-probe v25 ok
+      { status: 200, body: envelope({ saved: true }) }, // retried POST
+    );
+    const c = makeClient(http);
+    const body = { eventId: 7, title: 'Forældremøde' };
+    const out = await c.rawRequest('calendar.updateEvent', {}, body);
+    expect(out).toEqual({ saved: true });
+    const [first, retried] = [http.requested[2], http.requested[4]];
+    expect(first?.method).toBe('POST');
+    expect(retried?.method).toBe('POST');
+    expect(retried?.url).toContain('/api/v25/');
+    expect(retried?.url).toContain('method=calendar.updateEvent');
+    expect(retried?.body).toBe(JSON.stringify(body));
+    expect(retried?.headers?.['csrfp-token']).toBe('CSRF-1');
   });
 
   test('non-zero status.code throws AulaApiError', async () => {
