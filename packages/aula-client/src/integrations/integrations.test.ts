@@ -248,7 +248,7 @@ describe('MinUddannelseClient.getOpgaver', () => {
     });
   });
 
-  test('enriches items with the teacher description via a minuddannelse.net session', async () => {
+  test('opens a minuddannelse.net session when there is none and fetches the teacher description', async () => {
     const opgaveUrl = muRedirectUrl('1234567', '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0');
     const http = new FakeHttp().enqueue(
       {
@@ -268,6 +268,7 @@ describe('MinUddannelseClient.getOpgaver', () => {
           ],
         }),
       },
+      { status: 200, body: '"Unauthorized"' },
       { status: 302, headers: { location: 'https://www.minuddannelse.net/AutoLogin/abc' } },
       { status: 302, headers: { location: '/Home/AuthenticationPostAuthenticate' } },
       { status: 302, headers: { location: '/Node/minuge/1234567' } },
@@ -293,18 +294,105 @@ describe('MinUddannelseClient.getOpgaver', () => {
     expect(plan.warnings).toBeUndefined();
     expect(plan.items[0]).toMatchObject({
       subject: 'Engelsk',
-      content: 'Coming to England\n\n<p>LEKTIE: OPGAVE 7+8 I OPGAVESÆTTET</p>',
+      content: 'Coming to England\n\nLEKTIE: OPGAVE 7+8 I OPGAVESÆTTET',
       url: opgaveUrl,
     });
-    const login = http.requested[1];
+    const webOpgaver =
+      'https://www.minuddannelse.net/api/forloebsafvikling/opgaver/getOpgaveliste?tidspunkt=2026-W19&elevId=1234567';
+    expect(http.requested[1]?.url).toBe(webOpgaver);
+    const login = http.requested[2];
     expect(login?.url).toStartWith(`${opgaveUrl}?`);
     expect(login?.url).toContain('userProfile=guardian');
     expect(login?.headers?.authorization).toBe('Bearer TKN-1');
-    // The widget token must not follow the redirects onto www.minuddannelse.net.
-    for (const hop of http.requested.slice(2)) expect(hop.headers?.authorization).toBeUndefined();
-    expect(http.requested[5]?.url).toBe(
-      'https://www.minuddannelse.net/api/forloebsafvikling/opgaver/getOpgaveliste?tidspunkt=2026-W19&elevId=1234567',
+    // The widget token only goes to the redirect link, never onto www.minuddannelse.net.
+    for (const r of [http.requested[1], ...http.requested.slice(3)]) {
+      expect(r?.headers?.authorization).toBeUndefined();
+    }
+    expect(http.requested[6]?.url).toBe(webOpgaver);
+    expect(http.requested).toHaveLength(7);
+  });
+
+  test('reuses an existing minuddannelse.net session without walking the login redirect', async () => {
+    const http = new FakeHttp().enqueue(
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [{ id: 'a1', title: 'Dansk', url: muRedirectUrl('1234567', 'a1') }],
+        }),
+      },
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [{ id: 'a1', indhold: JSON.stringify({ text: '<p>Læs side 12</p>' }) }],
+        }),
+      },
     );
+    const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getOpgaver(ctx());
+    expect(plan.warnings).toBeUndefined();
+    expect(plan.items[0]?.content).toBe('Læs side 12');
+    expect(http.requested).toHaveLength(2);
+    expect(http.requested[1]?.url).toStartWith(
+      'https://www.minuddannelse.net/api/forloebsafvikling/opgaver/getOpgaveliste?',
+    );
+    expect(http.requested.some((r) => r.url.includes('/aula/redirect/'))).toBe(false);
+  });
+
+  test("one child's failure keeps the descriptions fetched for the others", async () => {
+    const http = new FakeHttp().enqueue(
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [
+            { id: 'a1', title: 'Dansk', url: muRedirectUrl('1111111', 'a1') },
+            { id: 'b2', title: 'Matematik', url: muRedirectUrl('2222222', 'b2') },
+          ],
+        }),
+      },
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [{ id: 'a1', indhold: JSON.stringify({ text: '<p>Læs side 12</p>' }) }],
+        }),
+      },
+      { status: 200, body: '"Unauthorized"' },
+      { status: 302, headers: { location: 'https://www.minuddannelse.net/AutoLogin/abc' } },
+      { status: 200, body: '<!DOCTYPE html>' },
+      { status: 200, body: '"Unauthorized"' },
+    );
+    const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getOpgaver(ctx({ childIds: [1, 2] }));
+    expect(plan.items[0]?.content).toBe('Læs side 12');
+    expect(plan.items[1]?.content).toBeUndefined();
+    expect(plan.warnings).toHaveLength(1);
+    expect(plan.warnings?.[0]).toContain('elev 2222222');
+  });
+
+  test('descriptions come back as plain text; escaped markup stays text', async () => {
+    const http = new FakeHttp().enqueue(
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [{ id: 'a1', title: 'Matematik', url: muRedirectUrl('1234567', 'a1') }],
+        }),
+      },
+      {
+        status: 200,
+        body: JSON.stringify({
+          opgaver: [
+            {
+              id: 'a1',
+              indhold: JSON.stringify({
+                text: '<p class="MsoNormal">Vis at 3 &lt; 5 &amp; 5 &gt; 3</p><p></p><p>Skriv &lt;b&gt; i hæftet<br>og aflever</p>',
+              }),
+            },
+          ],
+        }),
+      },
+    );
+    const client = new MinUddannelseClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const plan = await client.getOpgaver(ctx());
+    expect(plan.items[0]?.content).toBe('Vis at 3 < 5 & 5 > 3\n\nSkriv <b> i hæftet\nog aflever');
   });
 
   test('a failed web session degrades to title-only items with a warning', async () => {
@@ -315,6 +403,7 @@ describe('MinUddannelseClient.getOpgaver', () => {
           opgaver: [{ id: 'a1', title: 'Dansk', url: muRedirectUrl('1234567', 'a1') }],
         }),
       },
+      { status: 200, body: '"Unauthorized"' },
       { status: 302, headers: { location: 'https://www.minuddannelse.net/AutoLogin/abc' } },
       { status: 200, body: '<!DOCTYPE html>' },
       { status: 200, body: '"Unauthorized"' },

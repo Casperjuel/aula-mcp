@@ -20,7 +20,7 @@ import type { AulaHttpClient } from '@aula-mcp/aula-auth';
 import type { WidgetTokenManager } from '../widget-token-manager.ts';
 import { isWidgetTokenExpiredResponse } from '../widget-token-manager.ts';
 import {
-  decodeHtmlEntities,
+  htmlToText,
   type IntegrationContext,
   type NormalisedWeekPlan,
   type NormalisedWeekPlanItem,
@@ -148,7 +148,8 @@ export class MinUddannelseClient {
 
   /**
    * Best-effort: descriptions are an enrichment, so any failure here becomes
-   * a warning and the title-only items are still returned.
+   * a warning and the title-only items are still returned. One child failing
+   * keeps the descriptions already fetched for the others.
    */
   private async fetchDescriptions(
     ctx: IntegrationContext,
@@ -164,32 +165,59 @@ export class MinUddannelseClient {
     }
     if (!loginUrl || elevIds.size === 0) return descriptions;
 
-    try {
-      await this.openWebSession(ctx, loginUrl);
-      for (const elevId of elevIds) {
-        const params = new URLSearchParams({ tidspunkt: ctx.isoWeek, elevId });
-        const res = await this.http.request(`${MU_WEB_OPGAVER}?${params.toString()}`, {
-          headers: {
-            accept: 'application/json; charset=utf-8',
-            'x-requested-with': 'XMLHttpRequest',
-          },
-        });
-        // An expired/missing session is a 200 with the bare string "Unauthorized".
-        if (res.status !== 200 || !res.body.trimStart().startsWith('{')) {
-          throw new Error(`getOpgaveliste for elev ${elevId} failed (status ${res.status})`);
+    // The shared cookie jar usually still holds a session from an earlier
+    // call, so ask first and only walk the login redirect (at most once) when
+    // minuddannelse.net says we are not logged in.
+    let sessionOpened = false;
+    for (const elevId of elevIds) {
+      try {
+        let web = await this.fetchWebOpgaver(ctx, elevId);
+        if (!web && !sessionOpened) {
+          sessionOpened = true;
+          try {
+            await this.openWebSession(ctx, loginUrl);
+          } catch (e) {
+            warnings.push(
+              `opgave descriptions unavailable (minuddannelse.net session): ${(e as Error).message}`,
+            );
+            return descriptions;
+          }
+          web = await this.fetchWebOpgaver(ctx, elevId);
         }
-        const web = JSON.parse(res.body) as MuWebOpgaverResponse;
+        if (!web) throw new Error('not logged in to minuddannelse.net');
         for (const w of web.opgaver ?? []) {
           const text = w.id && w.indhold ? descriptionText(w.indhold) : '';
           if (w.id && text) descriptions.set(normaliseId(w.id), text);
         }
+      } catch (e) {
+        warnings.push(
+          `opgave descriptions unavailable for elev ${elevId}: ${(e as Error).message}`,
+        );
       }
-    } catch (e) {
-      warnings.push(
-        `opgave descriptions unavailable (minuddannelse.net session): ${(e as Error).message}`,
-      );
     }
     return descriptions;
+  }
+
+  /**
+   * One child's opgaver from the minuddannelse.net web API, or `undefined`
+   * when the session is missing/expired: a 200 with the bare string
+   * "Unauthorized", or a 401/403.
+   */
+  private async fetchWebOpgaver(
+    ctx: IntegrationContext,
+    elevId: string,
+  ): Promise<MuWebOpgaverResponse | undefined> {
+    const params = new URLSearchParams({ tidspunkt: ctx.isoWeek, elevId });
+    const res = await this.http.request(`${MU_WEB_OPGAVER}?${params.toString()}`, {
+      headers: {
+        accept: 'application/json; charset=utf-8',
+        'x-requested-with': 'XMLHttpRequest',
+      },
+    });
+    if (res.status === 401 || res.status === 403) return undefined;
+    if (res.status !== 200) throw new Error(`getOpgaveliste failed (status ${res.status})`);
+    if (!res.body.trimStart().startsWith('{')) return undefined;
+    return JSON.parse(res.body) as MuWebOpgaverResponse;
   }
 
   /**
@@ -317,8 +345,7 @@ function descriptionText(indhold: string): string {
   } catch {
     // Not every indholdsType wraps the HTML in JSON; use it as-is.
   }
-  // Text pasted from Word/browsers drags along inline styles that dwarf the
-  // actual homework text; the markup itself is kept for the agent to format.
-  const unstyled = html.replace(/\s(?:style|class)=(?:"[^"]*"|'[^']*')/g, '');
-  return decodeHtmlEntities(unstyled).trim();
+  // Plain text: agents don't need the markup, and Word-pasted inline styling
+  // goes with the tags.
+  return htmlToText(html);
 }

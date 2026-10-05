@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { htmlToText, registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
+import { htmlToText } from '@aula-mcp/aula-client';
+import { registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
 
 describe('validateSetTemplateArgs', () => {
   test('picked_up_by needs pickedUpBy', () => {

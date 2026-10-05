@@ -52,6 +52,7 @@ export {
   type EasyIqOptions,
   EasyIqSkoleportalClient,
   type EasyIqSkoleportalOptions,
+  htmlToText,
   type IntegrationContext,
   type IntegrationPluginInfo,
   isoDate,
