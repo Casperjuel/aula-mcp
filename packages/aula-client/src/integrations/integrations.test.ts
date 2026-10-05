@@ -570,12 +570,12 @@ describe('SystematicClient.getReminders', () => {
 describe('EasyIqSkoleportalClient.getWeekPlan', () => {
   test('per-child auth + events + Danish-entity decode', async () => {
     const http = new FakeHttp().enqueue(
-      // Auth response for child 1234567
+      // Auth response for child 1234567 (`child` echoes its userId)
       {
         status: 200,
         body: JSON.stringify({
           loginId: 'LOGIN-A',
-          child: '1234567',
+          child: 'u1234567',
           childName: 'Emilie F&aelig;rgemand',
           schoolName: 'Demo Skole',
           schoolId: 'D12345',
@@ -637,6 +637,39 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
     expect(plan.items[0]?.childName).toBe('Rasmus');
     expect(plan.warnings).toBeDefined();
     expect(plan.warnings?.[0]).toContain('child 1');
+  });
+
+  test('a response for a different child becomes a warning, not a week plan for the wrong child', async () => {
+    const http = new FakeHttp().enqueue(
+      // child 1: no SkolePortal licence, so the auth answers for child 2
+      // (numeric here, to cover a non-string `child`)
+      {
+        status: 200,
+        body: JSON.stringify({ loginId: 'LOGIN-B', child: 2, childName: 'Rasmus' }),
+      },
+      // child 2: its own auth + events
+      {
+        status: 200,
+        body: JSON.stringify({ loginId: 'LOGIN-B', child: 'U2', childName: 'Rasmus' }),
+      },
+      {
+        status: 200,
+        body: JSON.stringify([{ StartTime: '2026/05/04 09:00', CoursesDisplay: 'Engelsk' }]),
+      },
+    );
+    const client = new EasyIqSkoleportalClient({
+      http: http.asHttpClient(),
+      widgets: fakeWidgets(),
+    });
+    const plan = await client.getWeekPlan(ctx({ childIds: [1, 2] }));
+    // Only child 2's own event; no events were fetched with child 1's borrowed loginId.
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0]?.subject).toBe('Engelsk');
+    expect(http.requested).toHaveLength(3);
+    expect(plan.warnings).toEqual([
+      'child 1: SkolePortal is not available for this child (the response was for a different child)',
+    ]);
+    expect(Object.keys(plan.raw as object)).toEqual(['2']);
   });
 
   test('passes x-childfilter / x-institutionfilter / x-login per child', async () => {
