@@ -84,8 +84,14 @@ export class KeychainTokenStore implements TokenStore {
         `Keychain load failed (exit ${r.exitCode}): ${r.stderr.trim() || '<no stderr>'}`,
       );
     }
-    const blob = r.stdout.trim();
+    let blob = r.stdout.trim();
     if (!blob) return null;
+    // `security -w` prints the password hex-encoded when it contains non-ASCII
+    // bytes (e.g. "Sørensen" in identityName). JSON always starts with `{`,
+    // which isn't a hex digit, so an all-hex blob is unambiguously encoded.
+    if (/^(?:[0-9a-f]{2})+$/i.test(blob)) {
+      blob = Buffer.from(blob, 'hex').toString('utf8');
+    }
     try {
       const parsed = JSON.parse(blob) as StoredTokenRecord;
       if (parsed.version !== 1) {
