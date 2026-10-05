@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.6.1](https://github.com/Casperjuel/aula-mcp/compare/v1.6.0...v1.6.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **aula-client:** retry a mid-session 410 with the original request, start at v24 ([#122](https://github.com/Casperjuel/aula-mcp/issues/122)) ([ea3b36f](https://github.com/Casperjuel/aula-mcp/commit/ea3b36f2e7dd98cac6a79afbc3308799bdb41bdc))
+* **easyiq:** don't show a sibling's SkolePortal week plan under the wrong child ([#121](https://github.com/Casperjuel/aula-mcp/issues/121)) ([7973ac0](https://github.com/Casperjuel/aula-mcp/commit/7973ac010f3dcca539091c4a81a8f951500d4ddd))
+* **mitid:** send the combination ID MitID offered, not always S3 ([#119](https://github.com/Casperjuel/aula-mcp/issues/119)) ([b857b2d](https://github.com/Casperjuel/aula-mcp/commit/b857b2d36db6d1a85d96505465c14caebd7849ac))
+
 ## [1.6.0](https://github.com/Casperjuel/aula-mcp/compare/v1.5.1...v1.6.0) (2026-10-05)
 
 
