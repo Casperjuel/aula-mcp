@@ -17,6 +17,12 @@
  *
  * Multi-child: the PR iterates per child because each child's loginId is
  * tied to that child's filters. We do the same.
+ *
+ * When a child's school has no SkolePortal licence, AuthenticateAulaUser
+ * doesn't fail — it answers for a sibling instead (`child` is the sibling's
+ * userId). Using that loginId would file the sibling's week plan under the
+ * wrong child, so a mismatched `child` becomes a per-child warning
+ * (upstream scaarup/aula d8f5595).
  */
 
 import type { AulaHttpClient } from '@aula-mcp/aula-auth';
@@ -43,6 +49,7 @@ const SP_USER_AGENT =
 
 interface SpAuthResponse {
   loginId?: string;
+  /** userId of the child the response is for — not always the one asked about. */
   child?: string;
   childName?: string;
   schoolName?: string;
@@ -118,6 +125,11 @@ export class EasyIqSkoleportalClient {
     raw: { auth: SpAuthResponse; events: SpEvent[] };
   }> {
     const auth = await this.authenticate(ctx, childUserId);
+    if (auth.child && auth.child.toLowerCase() !== childUserId.toLowerCase()) {
+      throw new Error(
+        'SkolePortal is not available for this child (the response was for a different child)',
+      );
+    }
     if (!auth.loginId) {
       throw new Error('SkolePortal authentication response missing loginId');
     }
