@@ -36,9 +36,16 @@ const TOKENS: AulaTokens = {
 /** Mirrors ATTACHMENT_MAX_BYTES in tools.ts (module-private there). */
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
 
+interface FakeAttachmentFile {
+  name?: string;
+  url?: string;
+  mediaType?: string;
+}
+
 /** One attachment as Aula shapes it inside a thread message. */
 interface FakeAttachment {
-  file: { name?: string; url?: string; mediaType?: string };
+  file: FakeAttachmentFile | null;
+  media?: { file: FakeAttachmentFile | null } | null;
 }
 
 /** Thread 77: three attachments spread over three messages, in wire order. */
@@ -60,6 +67,16 @@ const THREADS: Record<number, Array<{ attachments?: FakeAttachment[] }>> = {
     },
   ],
   78: [{}],
+  // Thread 79: an image, which Aula sends with `file: null` and the envelope
+  // under `media.file`, next to a document for contrast.
+  79: [
+    {
+      attachments: [
+        { file: null, media: { file: { name: 'Legegrupper.png', url: 'https://cdn.test/img' } } },
+        { file: { name: 'brev.pdf', url: 'https://cdn.test/doc' }, media: null },
+      ],
+    },
+  ],
 };
 
 interface FakeOptions {
@@ -591,6 +608,28 @@ describe('MCP server: tools/call(aula.messages.get_attachment)', () => {
     expect(out.path).toBe(join(dir, '77-2-.._.._etc_pas swd.pdf'));
     // The whole point: nothing escapes the attachments directory.
     expect(dirname(out.path as string)).toBe(dir);
+  });
+
+  test('downloads image attachments from media.file', async () => {
+    stubFetch(() => new Response('png'));
+    const out = await harness.call(25, 'aula.messages.get_attachment', {
+      threadId: 79,
+      attachmentIndex: 0,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.filename).toBe('Legegrupper.png');
+    expect(out.path).toBe(join(dir, '79-0-Legegrupper.png'));
+    expect(requested).toEqual(['https://cdn.test/img']);
+  });
+
+  test('a document next to an image still downloads from file', async () => {
+    stubFetch(() => new Response('%PDF'));
+    const out = await harness.call(26, 'aula.messages.get_attachment', {
+      threadId: 79,
+      attachmentIndex: 1,
+    });
+    expect(out.filename).toBe('brev.pdf');
+    expect(requested).toEqual(['https://cdn.test/doc']);
   });
 
   test('attachment_not_found when the index is past the end', async () => {
