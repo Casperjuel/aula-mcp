@@ -50,7 +50,7 @@ const SP_USER_AGENT =
 interface SpAuthResponse {
   loginId?: string;
   /** userId of the child the response is for — not always the one asked about. */
-  child?: string;
+  child?: string | number;
   childName?: string;
   schoolName?: string;
   schoolId?: string | number;
@@ -125,7 +125,7 @@ export class EasyIqSkoleportalClient {
     raw: { auth: SpAuthResponse; events: SpEvent[] };
   }> {
     const auth = await this.authenticate(ctx, childUserId);
-    if (auth.child && auth.child.toLowerCase() !== childUserId.toLowerCase()) {
+    if (auth.child != null && String(auth.child).toLowerCase() !== childUserId.toLowerCase()) {
       throw new Error(
         'SkolePortal is not available for this child (the response was for a different child)',
       );

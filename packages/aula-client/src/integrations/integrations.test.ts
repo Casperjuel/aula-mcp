@@ -642,9 +642,10 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
   test('a response for a different child becomes a warning, not a week plan for the wrong child', async () => {
     const http = new FakeHttp().enqueue(
       // child 1: no SkolePortal licence, so the auth answers for child 2
+      // (numeric here, to cover a non-string `child`)
       {
         status: 200,
-        body: JSON.stringify({ loginId: 'LOGIN-B', child: 'u2', childName: 'Rasmus' }),
+        body: JSON.stringify({ loginId: 'LOGIN-B', child: 2, childName: 'Rasmus' }),
       },
       // child 2: its own auth + events
       {
