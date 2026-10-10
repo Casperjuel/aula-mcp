@@ -1,5 +1,5 @@
 name: aula-mcp
-version: "1.0.2"
+version: "1.0.3"
 slug: aula_mcp
 description: >-
   MCP server for the Danish school platform Aula. Exposes aula.discover,
@@ -20,9 +20,16 @@ ports:
 ports_description:
   7878/tcp: aula-mcp HTTP (/mcp) + SSE (/sse)
 map:
-  # `homeassistant_config:rw` is the modern spelling; the older `config:rw`
-  # still works but emits a deprecation warning in recent Supervisor builds.
-  - homeassistant_config:rw
+  # IMPORTANT: with the modern `homeassistant_config` map type, Supervisor
+  # mounts HA's configuration directory at /homeassistant by default — NOT at
+  # /config (that default path is only used by the deprecated `config` map
+  # type). run.sh and the docs expect the tokens at /config/aula-mcp/, so pin
+  # the mount path explicitly. Since run.sh is baked into the image at build
+  # time, bump `version` above whenever this mapping changes, or Supervisor
+  # will keep the stale image.
+  - type: homeassistant_config
+    read_only: false
+    path: /config
 # In-addon login UI exposed via HA Ingress. The addon binds two ports:
 # - 7878 (above): MCP traffic, exposed to the LAN per `ports:`.
 # - 8099 (below): setup/login UI, only reachable through HA's Ingress proxy.
