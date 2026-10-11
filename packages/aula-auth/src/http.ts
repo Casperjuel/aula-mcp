@@ -107,7 +107,9 @@ export class AulaHttpClient {
       redirect: 'manual',
     };
     if (options.body !== undefined) {
-      init.body = options.body;
+      // DOM BodyInit only accepts Uint8Array backed by ArrayBuffer. Copy so a
+      // SharedArrayBuffer view from the caller still typechecks and sends.
+      init.body = options.body instanceof Uint8Array ? new Uint8Array(options.body) : options.body;
       // URLSearchParams sets its own content-type; for raw strings, leave to caller.
       if (options.body instanceof URLSearchParams && !('content-type' in headers)) {
         headers['content-type'] = 'application/x-www-form-urlencoded';
