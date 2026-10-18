@@ -4,6 +4,7 @@ import {
   buildMitidCompletionForm,
   classifyBrokerLanding,
   detectConfirmationForm,
+  detectPrivateOrganisationRefusal,
   extractBrokerParams,
   extractSamlForm,
   parseBrokerIdpForm,
@@ -204,6 +205,46 @@ describe('classifyBrokerLanding', () => {
         '',
       ),
     ).toBe('unknown');
+  });
+
+  test('private-organisation-refused: #114 alert page with no form', () => {
+    // post-broker-login answered 200 with an alert and only a "Tilbage" link;
+    // neither session_code/execution nor a SAMLResponse anywhere.
+    expect(classifyBrokerLanding(PRIVATE_ORG_URL, PRIVATE_ORG_HTML)).toBe(
+      'private-organisation-refused',
+    );
+  });
+});
+
+const PRIVATE_ORG_URL =
+  'https://broker.unilogin.dk/auth/realms/broker/login-actions/post-broker-login?client_id=CID&tab_id=TID&client_data=CD';
+const PRIVATE_ORG_HTML = `
+  <html><head><title>Log ind på unilogin broker</title></head><body>
+    <div id="kc-content">
+      <div class="alert alert-error">
+        <span class="kc-feedback-text">
+          Du er tilknyttet en privat organisation. Du skal vælge "MitID for privat organisation",
+          som findes under "Lokalt login" i Loginvælgeren.
+        </span>
+      </div>
+      <a href="/auth/realms/broker/login-actions/restart?client_id=CID&tab_id=TID">Tilbage</a>
+    </div>
+  </body></html>`;
+
+describe('detectPrivateOrganisationRefusal', () => {
+  test('returns the collapsed alert text on the #114 page', () => {
+    expect(detectPrivateOrganisationRefusal(PRIVATE_ORG_HTML)).toBe(
+      'Du er tilknyttet en privat organisation. Du skal vælge "MitID for privat organisation", som findes under "Lokalt login" i Loginvælgeren.',
+    );
+  });
+
+  test('returns null for an empty body and for an ordinary post-broker-login form', () => {
+    expect(detectPrivateOrganisationRefusal('')).toBeNull();
+    expect(
+      detectPrivateOrganisationRefusal(
+        '<form action="/post-broker-login?session_code=SC&execution=EX"><input type="hidden" name="selected-aktoer" value="" /></form>',
+      ),
+    ).toBeNull();
   });
 });
 

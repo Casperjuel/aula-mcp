@@ -31,6 +31,7 @@ import {
   buildMitidCompletionForm,
   classifyBrokerLanding,
   detectConfirmationForm,
+  detectPrivateOrganisationRefusal,
   extractBrokerParams,
   extractSamlForm,
   type IdentityOption,
@@ -613,6 +614,22 @@ export class AulaLoginClient {
         relayState: direct.relayState,
         action: direct.action,
       };
+    }
+
+    if (landing === 'private-organisation-refused') {
+      // Issue #114. The broker wants this identity to come in through
+      // "Lokalt login" -> "MitID for privat organisation" instead of the
+      // public nemlogin3 IdP we always select. That path is not driven yet;
+      // say so instead of the generic "missing params" error below.
+      throw new AulaSamlError(
+        'Unilogin refused this MitID identity: it is linked to a private organisation and the ' +
+          'broker only accepts it through "Lokalt login" -> "MitID for privat organisation" in ' +
+          'the Loginvælger, which aula-mcp does not support yet ' +
+          '(https://github.com/Casperjuel/aula-mcp/issues/114). If MitID offered you a ' +
+          'choice of identities, retry and pick the one that is not tied to an organisation. ' +
+          `Broker said: "${detectPrivateOrganisationRefusal(brokerPageRes.body)}"`,
+        { htmlSnippet: brokerPageRes.body.slice(0, 500) },
+      );
     }
 
     const params = extractBrokerParams(brokerPageRes.url, brokerPageRes.body);

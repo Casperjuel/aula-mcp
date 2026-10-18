@@ -232,13 +232,42 @@ export function extractBrokerParams(urlOrForm: string, html?: string): BrokerSes
  * execution) → … — every hop a bodyless 302, so a one-hop reader sees neither
  * params nor a form and gives up. Follow to the final 200, then classify.
  */
-export type BrokerLanding = 'post-broker-login' | 'saml-form' | 'unknown';
+export type BrokerLanding =
+  | 'post-broker-login'
+  | 'saml-form'
+  | 'private-organisation-refused'
+  | 'unknown';
 
 export function classifyBrokerLanding(url: string, html: string): BrokerLanding {
   if (extractHiddenInputs(html).SAMLResponse) return 'saml-form';
   const params = extractBrokerParams(url, html);
   if (params.sessionCode && params.execution) return 'post-broker-login';
+  if (detectPrivateOrganisationRefusal(html)) return 'private-organisation-refused';
   return 'unknown';
+}
+
+/**
+ * Issue #114: a MitID identity linked to a private organisation is refused by
+ * the broker when it arrives through the public `nemlogin3` IdP. The SAML hop
+ * succeeds, but `post-broker-login` answers 200 with an alert and no form:
+ *
+ *   "Du er tilknyttet en privat organisation. Du skal vælge "MitID for privat
+ *    organisation", som findes under "Lokalt login" i Loginvælgeren."
+ *
+ * Returns the alert text (whitespace-collapsed) so the error can quote it, or
+ * null when the page is something else.
+ */
+const PRIVATE_ORGANISATION_RE = /privat organisation/i;
+
+export function detectPrivateOrganisationRefusal(html: string): string | null {
+  if (!html || !PRIVATE_ORGANISATION_RE.test(html)) return null;
+  const $ = cheerio.load(html);
+  const candidates = ['.alert', '#kc-error-message', '.kc-feedback-text', '#kc-content', 'body'];
+  for (const sel of candidates) {
+    const text = $(sel).first().text().replace(/\s+/g, ' ').trim();
+    if (text && PRIVATE_ORGANISATION_RE.test(text)) return text.slice(0, 300);
+  }
+  return null;
 }
 
 /**
