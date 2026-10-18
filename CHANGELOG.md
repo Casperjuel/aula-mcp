@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.6.2](https://github.com/Casperjuel/aula-mcp/compare/v1.6.1...v1.6.2) (2026-10-18)
+
+
+### Bug Fixes
+
+* **aula-auth:** copy Uint8Array request bodies onto ArrayBuffer ([#124](https://github.com/Casperjuel/aula-mcp/issues/124)) ([36ac2f1](https://github.com/Casperjuel/aula-mcp/commit/36ac2f14786258ac9112864b9b960c19bc040fde))
+* **ha-addon:** mount HA config at /config so the token store is found ([#123](https://github.com/Casperjuel/aula-mcp/issues/123)) ([67b9640](https://github.com/Casperjuel/aula-mcp/commit/67b9640ce688da74256232b3a0303d29de3283a1))
+
 ## [1.6.1](https://github.com/Casperjuel/aula-mcp/compare/v1.6.0...v1.6.1) (2026-10-05)
 
 
