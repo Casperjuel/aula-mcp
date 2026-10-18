@@ -28,8 +28,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
-    "@types/bun": "^1.4.2",
-    "@types/node": "^26.6.4",
+    "@types/bun": "^1.4.3",
+    "@types/node": "^26.6.5",
     "bun-types": "^1.4.3",
     "typescript": "^7.0.2"
   }

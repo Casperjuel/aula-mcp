@@ -697,7 +697,7 @@ describe('EasyIqSkoleportalClient.getWeekPlan', () => {
     // Authorization includes the literal `Bearer ` prefix. Aula's widget
     // token endpoint returns the raw JWT — we add the prefix; PR #352's
     // Python adds it inside `get_token` so the wire shape matches.
-    expect(auth?.headers?.['authorization']).toBe('Bearer TKN-1');
+    expect(auth?.headers?.authorization).toBe('Bearer TKN-1');
     const events = http.requested[1];
     expect(events?.url).toContain('loginId=LOGIN');
   });
@@ -842,7 +842,7 @@ describe('EasyIqLektierClient.getLektier', () => {
     );
     const auth = http.requested[0];
     // Lektier referer = /LektierWidget (NOT /UgeplanWidget).
-    expect(auth?.headers?.['referer']).toBe('https://skoleportal.easyiqcloud.dk/LektierWidget');
+    expect(auth?.headers?.referer).toBe('https://skoleportal.easyiqcloud.dk/LektierWidget');
     // x-child = the child being acted on; x-childfilter = csv of all kids.
     expect(auth?.headers?.['x-child']).toBe('abcd1234');
     expect(auth?.headers?.['x-childfilter']).toBe('abcd1234');
@@ -850,7 +850,7 @@ describe('EasyIqLektierClient.getLektier', () => {
     // x-login is the Aula guardianId, not the MitID username — confirmed
     // against a captured browser request (the real wire format).
     expect(auth?.headers?.['x-login']).toBe('dema9876');
-    expect(auth?.headers?.['authorization']).toBe('Bearer TKN-1');
+    expect(auth?.headers?.authorization).toBe('Bearer TKN-1');
   });
 });
 
