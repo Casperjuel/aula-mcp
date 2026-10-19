@@ -67,6 +67,8 @@ export interface ProfilesByLoginData {
 export interface AulaWidgetMeta {
   widgetId: string;
   name?: string;
+  /** Seen as "secure" in live payloads; other values possible, so read defensively. */
+  type?: string;
 }
 
 export interface AulaWidgetConfiguration {

@@ -28,6 +28,13 @@ export interface DiscoveredChild {
   };
 }
 
+/** A widget the schools surfaced, with whatever metadata Aula sent. */
+export interface DetectedWidget {
+  id: string;
+  name?: string;
+  type?: string;
+}
+
 /** Capability description for one functional area. */
 export interface DiscoveredCapability {
   /** Human description for the agent. */
@@ -58,6 +65,9 @@ export interface DiscoverManifest {
   /** Widget IDs the schools surfaced in pageConfiguration. Useful when
    *  diagnosing "the agent can't find my kid's ugeplan". */
   detectedWidgets: string[];
+  /** Same widgets with their display names, so unsupported ones (e.g. a
+   *  school-lunch link) can be identified without a raw request. */
+  widgets: DetectedWidget[];
   /** True when AULA_MCP_RAW=1 — the aula.raw_request escape hatch is callable. */
   rawRequestEnabled: boolean;
   /** True when AULA_MCP_WRITE=1 — write tools (aula.presence.set_template) are
@@ -132,13 +142,19 @@ export async function buildDiscoverManifest(context: AulaContext): Promise<Disco
   // Capability detection from widget configs.
   // Aula nests the widget id under `widget.widgetId` in the live API; older
   // shape was flat (`w.widgetId`). Support both — Python does too.
-  const detectedWidgets = Array.from(
-    new Set(
-      (contextData?.pageConfiguration?.widgetConfigurations ?? [])
-        .map((w) => w.widget?.widgetId ?? w.widgetId)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0),
-    ),
-  ).sort();
+  const widgetsById = new Map<string, DetectedWidget>();
+  for (const w of contextData?.pageConfiguration?.widgetConfigurations ?? []) {
+    const id = w.widget?.widgetId ?? w.widgetId;
+    if (typeof id !== 'string' || id.length === 0) continue;
+    // The same widget can be placed more than once; keep the first that has a name.
+    if (widgetsById.get(id)?.name) continue;
+    const item: DetectedWidget = { id };
+    if (w.widget?.name) item.name = w.widget.name;
+    if (w.widget?.type) item.type = w.widget.type;
+    widgetsById.set(id, item);
+  }
+  const widgets = [...widgetsById.values()].sort((a, b) => a.id.localeCompare(b.id));
+  const detectedWidgets = widgets.map((w) => w.id);
 
   const writeEnabled = process.env.AULA_MCP_WRITE === '1';
   const now = Math.floor(Date.now() / 1000);
@@ -156,6 +172,7 @@ export async function buildDiscoverManifest(context: AulaContext): Promise<Disco
     },
     capabilities: buildCapabilities(detectedWidgets, writeEnabled),
     detectedWidgets,
+    widgets,
     rawRequestEnabled: process.env.AULA_MCP_RAW === '1',
     writeEnabled,
     usage: {

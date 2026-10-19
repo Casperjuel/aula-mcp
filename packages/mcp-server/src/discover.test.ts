@@ -132,6 +132,30 @@ describe('buildDiscoverManifest', () => {
     expect(m.capabilities.huskelisten?.notes).toBeUndefined();
   });
 
+  test('widgets carries names and type, deduped and sorted by id', async () => {
+    const ctx = fakeContext();
+    const client = await ctx.getClient();
+    (client as unknown as { getProfileContext: () => Promise<unknown> }).getProfileContext =
+      async () => ({
+        userId: 5000,
+        pageConfiguration: {
+          widgetConfigurations: [
+            { widget: { widgetId: '0118', name: 'Skolemad', type: 'secure' } },
+            { widget: { widgetId: '0004', name: 'Ugeplan forældre' } },
+            { widget: { widgetId: '0004', name: 'Ugeplan forældre' } },
+            { widgetId: '0003' },
+          ],
+        },
+      });
+    const m = await buildDiscoverManifest(ctx);
+    expect(m.detectedWidgets).toEqual(['0003', '0004', '0118']);
+    expect(m.widgets).toEqual([
+      { id: '0003' },
+      { id: '0004', name: 'Ugeplan forældre' },
+      { id: '0118', name: 'Skolemad', type: 'secure' },
+    ]);
+  });
+
   test('lektier carries a "not detected" note when 0142 absent', async () => {
     const m = await buildDiscoverManifest(fakeContext({ widgets: [] }));
     expect(m.capabilities.lektier?.notes).toContain('0142');
