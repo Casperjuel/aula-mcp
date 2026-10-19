@@ -206,6 +206,81 @@ describe('AulaClient API method wrappers', () => {
       expect(http.requested.indexOf(post)).toBeGreaterThan(bootstrapIdx);
     }
   });
+
+  test('a messaging GET bootstraps the profile context first, once per client', async () => {
+    // A plain read-only client (#109) 403s on messaging reads unless the
+    // context is set; the bootstrap must precede the read and not repeat.
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({ threads: [] }) },
+      { status: 200, body: envelope({ threads: [] }) },
+    );
+    const c = makeClient(http);
+    await c.getThreads();
+    await c.getThreads();
+    expect(http.requested.map((r) => new URL(r.url).searchParams.get('method'))).toEqual([
+      'profiles.getProfilesByLogin',
+      'profiles.getProfileContext',
+      'messaging.getThreads',
+      'messaging.getThreads',
+    ]);
+  });
+
+  test('a new client (token refresh) bootstraps again before its first messaging GET', async () => {
+    // The context is activated per access token, so a client rebuilt after a
+    // refresh must not inherit the previous one's bootstrap.
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // probe, client 1
+      { status: 200, body: envelope({}) }, // bootstrap, client 1
+      { status: 200, body: envelope({ threads: [] }) },
+      { status: 200, body: envelope({ profiles: [] }) }, // probe, client 2
+      { status: 200, body: envelope({}) }, // bootstrap, client 2
+      { status: 200, body: envelope({ threads: [] }) },
+    );
+    await makeClient(http).getThreads();
+    await makeClient(http).getThreads();
+    const contextCalls = http.requested.filter((r) =>
+      r.url.includes('method=profiles.getProfileContext'),
+    );
+    expect(contextCalls.length).toBe(2);
+    expect(http.requested.at(-1)?.url).toContain('method=messaging.getThreads');
+  });
+
+  test('profiles.* and widget-token GETs do not wait on the bootstrap', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // probe
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope('WIDGET_TOKEN') },
+    );
+    const c = makeClient(http);
+    await c.getProfilesByLogin();
+    await c.getWidgetToken('0001');
+    const contextCalls = http.requested.filter((r) =>
+      r.url.includes('method=profiles.getProfileContext'),
+    );
+    expect(contextCalls.length).toBe(0);
+  });
+
+  test('getMessagesForThread bootstraps the profile context before its GET', async () => {
+    // It builds its own request (custom 403 handling), so it does not go
+    // through getJsonRaw and has to ask for the bootstrap itself.
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({ messages: [] }) },
+    );
+    await makeClient(http).getMessagesForThread(1);
+    expect(http.requested.map((r) => new URL(r.url).searchParams.get('method'))).toEqual([
+      'profiles.getProfilesByLogin',
+      'profiles.getProfileContext',
+      'messaging.getMessagesForThread',
+    ]);
+  });
 });
 
 describe('AulaClient envelope handling', () => {
@@ -306,6 +381,7 @@ describe('AulaClient.getMessagesForThread step-up', () => {
     http.enqueue(
       // version probe: profiles.getProfilesByLogin at v22 OK
       { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
       // actual fetch: envelope code 403 = sensitive thread
       {
         status: 200,
@@ -323,6 +399,7 @@ describe('AulaClient.getMessagesForThread step-up', () => {
     http.enqueue(
       // version probe: profiles.getProfilesByLogin at v22 OK
       { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
       // actual fetch
       {
         status: 200,
@@ -345,6 +422,7 @@ describe('AulaClient.getThreadsPage', () => {
     http.enqueue(
       // version probe: profiles.getProfilesByLogin at v22 OK
       { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
       {
         status: 200,
         body: envelope({ threads: [{ id: 1, read: false }], page: 0, moreMessagesExist: true }),
@@ -361,6 +439,7 @@ describe('AulaClient.getThreadsPage', () => {
     const http = new FakeHttp();
     http.enqueue(
       { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
       { status: 200, body: envelope({ threads: [] }) },
     );
     const c = makeClient(http);
@@ -374,6 +453,7 @@ describe('AulaClient.getThreadsPage', () => {
     const http = new FakeHttp();
     http.enqueue(
       { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
       { status: 200, body: envelope({ threads: [{ id: 1 }, { id: 2 }], moreMessagesExist: true }) },
     );
     const c = makeClient(http);
@@ -559,6 +639,7 @@ describe('AulaClient.getPosts', () => {
   test('scopes the feed to parent=profile and institutionProfileIds[]', async () => {
     const http = new FakeHttp();
     http.enqueue({ status: 200, body: envelope({ profiles: [] }) }); // version probe
+    http.enqueue({ status: 200, body: envelope({}) }); // profile-context bootstrap
     http.enqueue({ status: 200, body: envelope({ posts: [], moreMessagesExist: false }) });
     const c = makeClient(http);
 
@@ -578,6 +659,7 @@ describe('AulaClient.getPosts', () => {
   test('isUnread defaults to false and follows onlyUnread when set', async () => {
     const http = new FakeHttp();
     http.enqueue({ status: 200, body: envelope({ profiles: [] }) });
+    http.enqueue({ status: 200, body: envelope({}) }); // profile-context bootstrap
     http.enqueue({ status: 200, body: envelope({ posts: [] }) });
     http.enqueue({ status: 200, body: envelope({ posts: [] }) });
     const c = makeClient(http);
