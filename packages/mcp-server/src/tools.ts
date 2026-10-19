@@ -609,6 +609,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     {
       title: 'Calendar events (school schedule)',
       description:
+        'The lesson timetable (skoleskema): subjects, times, rooms — not the weekly letter ' +
+        'a teacher writes (that is aula.ugeplan.* / aula.ugebrev.*). ' +
         'Lessons + events for the given child institution-profile IDs. ' +
         'Call aula.discover first and pass children[].id as profileIds. ' +
         'Pass `range` for a preset window (today/tomorrow/this_week/next_week) ' +
