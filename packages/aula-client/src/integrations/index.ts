@@ -11,6 +11,13 @@ export {
   type MeebookOptions,
 } from './meebook.ts';
 export { MinUddannelseClient, type MinUddannelseOptions } from './min-uddannelse.ts';
+export {
+  copenhagenMidnight,
+  Pay4itClient,
+  type Pay4itOptions,
+  type SkolemadDay,
+  type SkolemadOrders,
+} from './pay4it.ts';
 export { SystematicClient, type SystematicOptions } from './systematic.ts';
 export {
   decodeHtmlEntities,

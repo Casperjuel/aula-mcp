@@ -28,6 +28,7 @@ import {
   EasyIqSkoleportalClient,
   MeebookClient,
   MinUddannelseClient,
+  Pay4itClient,
   SystematicClient,
   WidgetTokenManager,
 } from '@aula-mcp/aula-client';
@@ -206,6 +207,10 @@ export class AulaContext {
 
   async getMeebook(): Promise<MeebookClient> {
     return new MeebookClient({ http: this.http, widgets: await this.getWidgetManager() });
+  }
+
+  async getPay4it(): Promise<Pay4itClient> {
+    return new Pay4itClient({ http: this.http, widgets: await this.getWidgetManager() });
   }
 
   async getMinUddannelse(): Promise<MinUddannelseClient> {

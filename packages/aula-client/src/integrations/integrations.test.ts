@@ -16,6 +16,7 @@ import { EasyIqLektierClient } from './easyiq-lektier.ts';
 import { EasyIqSkoleportalClient } from './easyiq-skoleportal.ts';
 import { MeebookClient } from './meebook.ts';
 import { elevIdFromRedirectUrl, MinUddannelseClient } from './min-uddannelse.ts';
+import { copenhagenMidnight, Pay4itClient } from './pay4it.ts';
 import { SystematicClient } from './systematic.ts';
 import { decodeHtmlEntities, type IntegrationContext, isoWeekString } from './types.ts';
 
@@ -256,6 +257,85 @@ describe('MeebookClient.getWeeklyBooks', () => {
     const forloeb = await client.getWeeklyBooks(ctx());
     expect(forloeb.items).toEqual([]);
     expect(forloeb.warnings).toEqual(['Emilie: Log ind i Meebook først']);
+  });
+});
+
+// --------------------------------------------------------------------------
+// Pay4it Skolemad (widget 0118)
+// --------------------------------------------------------------------------
+
+describe('Pay4itClient.getOrders', () => {
+  // ctx() is ISO week 2026-W19 → Monday 2026-05-04.
+  const week19 = {
+    CanLogin: true,
+    Wallets: [
+      {
+        ID: 1,
+        WalletID: 'wallet-guid',
+        Name: 'Emilie',
+        Dates: {
+          '2026-05-04T00:00:00': ['Lasagne'],
+          '2026-05-05T00:00:00': ['Fiskefrikadeller'],
+          '2026-05-06T00:00:00': [],
+          '2026-05-07T00:00:00': ['Suppe', 'Brød'],
+        },
+      },
+    ],
+  };
+
+  test('maps Dates to days and lists school days without an order', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: JSON.stringify(week19) });
+    const client = new Pay4itClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const orders = await client.getOrders(ctx());
+    expect(orders.days).toEqual([
+      { childName: 'Emilie', date: '2026-05-04', meals: ['Lasagne'] },
+      { childName: 'Emilie', date: '2026-05-05', meals: ['Fiskefrikadeller'] },
+      { childName: 'Emilie', date: '2026-05-07', meals: ['Suppe', 'Brød'] },
+    ]);
+    expect(orders.daysWithoutOrder).toEqual([
+      { childName: 'Emilie', date: '2026-05-06' },
+      { childName: 'Emilie', date: '2026-05-08' },
+    ]);
+    expect(orders.warnings).toBeUndefined();
+    // Wallet ids never leave the client.
+    expect(JSON.stringify(orders)).not.toContain('wallet-guid');
+  });
+
+  test('posts the widget token, unilogins and the Copenhagen-local Monday', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: '{"CanLogin":true,"Wallets":[]}' });
+    const client = new Pay4itClient({ http: http.asHttpClient(), widgets: fakeWidgets('TKN-9') });
+    await client.getOrders(ctx({ childIds: [111293], childUserIds: ['thit0305'] }));
+    const req = http.requested[0];
+    expect(req?.url).toBe('https://kkapi.pay4it.dk/V2/Wallet/AulaSchoolInfoV2');
+    expect(req?.method).toBe('POST');
+    expect(JSON.parse(String(req?.body))).toEqual({
+      aulaToken: 'TKN-9',
+      childs: ['thit0305'],
+      date: '2026-05-04T00:00:00+02:00',
+    });
+  });
+
+  test('weeks > 1 makes one call per week, Monday by Monday', async () => {
+    const http = new FakeHttp()
+      .enqueue({ status: 200, body: JSON.stringify(week19) })
+      .enqueue({ status: 200, body: '{"CanLogin":true,"Wallets":[{"Name":"Emilie","Dates":{}}]}' });
+    const client = new Pay4itClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const orders = await client.getOrders(ctx(), 2);
+    expect(http.requested).toHaveLength(2);
+    expect(JSON.parse(String(http.requested[1]?.body)).date).toBe('2026-05-11T00:00:00+02:00');
+    expect(orders.daysWithoutOrder.map((d) => d.date)).toContain('2026-05-15');
+  });
+
+  test('CanLogin=false becomes a warning', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: '{"CanLogin":false,"Wallets":[]}' });
+    const client = new Pay4itClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const orders = await client.getOrders(ctx());
+    expect(orders.warnings).toEqual(['2026-05-04: Pay4it reports CanLogin=false']);
+  });
+
+  test('copenhagenMidnight uses the winter offset after DST ends', () => {
+    expect(copenhagenMidnight('2026-10-19')).toBe('2026-10-19T00:00:00+02:00');
+    expect(copenhagenMidnight('2026-11-02')).toBe('2026-11-02T00:00:00+01:00');
   });
 });
 

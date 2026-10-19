@@ -883,6 +883,33 @@ export function registerTools(server: McpServer, context: AulaContext): void {
   );
 
   server.registerTool(
+    'aula.skolemad.pay4it',
+    {
+      title: 'Skolemad orders (Pay4it / EAT)',
+      description:
+        'School-lunch orders from Pay4it (widget 0118, Københavns Kommune EAT): the meal ' +
+        'ordered per child per school day, plus `daysWithoutOrder` — Mon–Fri days with no ' +
+        'order. Pay4it does not mark school holidays, so a day without an order may be a ' +
+        'holiday rather than a missed order; say so instead of assuming. Read-only — this ' +
+        'cannot order or pay. Use when discover.detectedWidgets contains "0118".',
+      inputSchema: {
+        ...integrationContextShape,
+        weeks: z
+          .number()
+          .int()
+          .min(1)
+          .max(8)
+          .optional()
+          .describe('Number of consecutive weeks from isoWeek to check. Defaults to 1.'),
+      },
+    },
+    async (args) => {
+      const pay4it = await context.getPay4it();
+      return jsonContent(await pay4it.getOrders(await buildIntegrationCtx(args), args.weeks));
+    },
+  );
+
+  server.registerTool(
     'aula.ugeplan.easyiq_skoleportal',
     {
       title: 'EasyIQ SkolePortal weekly plan',

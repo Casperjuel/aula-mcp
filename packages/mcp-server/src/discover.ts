@@ -100,6 +100,7 @@ const WIDGET_PROVIDER_MAP: Readonly<
   '0004': { capability: 'ugeplan', provider: 'meebook', tool: 'aula.ugeplan.meebook' },
   '0029': { capability: 'ugebrev', provider: 'minuddannelse', tool: 'aula.ugebrev.minuddannelse' },
   '0030': { capability: 'opgaver', provider: 'minuddannelse', tool: 'aula.opgaver.minuddannelse' },
+  '0118': { capability: 'skolemad', provider: 'pay4it', tool: 'aula.skolemad.pay4it' },
   '0062': {
     capability: 'huskelisten',
     provider: 'systematic',
@@ -226,6 +227,7 @@ function buildCapabilities(
   const huskelistenDetected = detectedByCapability.get('huskelisten') ?? [];
   const lektierDetected = detectedByCapability.get('lektier') ?? [];
   const forloebDetected = detectedByCapability.get('forloeb') ?? [];
+  const skolemadDetected = detectedByCapability.get('skolemad') ?? [];
 
   // When detection picked a provider for a third-party capability, expose
   // ONLY that tool. Listing alternates as fallbacks invites Claude to fan
@@ -360,6 +362,18 @@ function buildCapabilities(
         ? {
             notes:
               'Meebook forløb widget (0003) not detected — call may return empty. Skip if user did not specifically ask for forløb.',
+          }
+        : {}),
+    },
+    skolemad: {
+      summary:
+        'School-lunch orders (Pay4it, widget 0118 — Københavns Kommune EAT): meals ordered ' +
+        'per day and school days with no order. Read-only.',
+      tools: ['aula.skolemad.pay4it'],
+      ...(skolemadDetected.length === 0
+        ? {
+            notes:
+              'Pay4it skolemad widget (0118) not detected — call may return empty. Skip if user did not specifically ask for skolemad.',
           }
         : {}),
     },

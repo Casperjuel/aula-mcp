@@ -88,6 +88,7 @@ describe('buildDiscoverManifest', () => {
       'posts',
       'presence',
       'profiles',
+      'skolemad',
       'ugebrev',
       'ugeplan',
     ]);
@@ -116,6 +117,12 @@ describe('buildDiscoverManifest', () => {
     expect(m.capabilities.forloeb?.notes).toBeUndefined();
     // 0003 alone is not the weekly plan — ugeplan stays undetected.
     expect(m.capabilities.ugeplan?.summary).toContain('No provider widget detected');
+  });
+
+  test('Pay4it skolemad widget (0118) → skolemad tool', async () => {
+    const m = await buildDiscoverManifest(fakeContext({ widgets: ['0118'] }));
+    expect(m.capabilities.skolemad?.tools).toEqual(['aula.skolemad.pay4it']);
+    expect(m.capabilities.skolemad?.notes).toBeUndefined();
   });
 
   test('forloeb carries a "not detected" note when 0003 absent', async () => {
