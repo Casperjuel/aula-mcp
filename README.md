@@ -191,6 +191,20 @@ aula login
 >
 > **Brug metode B i stedet.** Log ind hjemmefra og flyt tokens over. Fornyelse af access token går direkte til `login.aula.dk` og rører aldrig brokeren, så serveren kører videre af sig selv bagefter.
 
+> ℹ️ **Er dit MitID knyttet til en privat organisation? Brug `aula login --idp private-organisation`.**
+>
+> Fejler `aula login` med `Unilogin refused this MitID identity ... private organisation`, er det fordi din private MitID er tilknyttet en privat organisation (fx en virksomhed). Unilogin viser i så fald beskeden "Du er tilknyttet en privat organisation. Du skal vælge "MitID for privat organisation", som findes under "Lokalt login" i Loginvælgeren."
+>
+> **Baggrunden:** Styrelsen for It og Læring (STIL) må kun bruge NemLog-in som MitID-broker til myndighedsopgaver. Derfor skal brugere tilknyttet private organisationer, som tidligere loggede ind på Unilogin-tjenester via NemLog-in, fra oktober 2025 vælge en anden broker ved login til tjenester uden myndighedsopgave: **Lokalt login → MitID for privat organisation**. Privat- og friskoler er ikke omfattet. Se STIL's side [Tilpasning af login-flowet for private organisationer](https://viden.stil.dk/spaces/OFFSKOLELOGIN/pages/299958860/Tilpasning+af+login-flowet+for+private+organisationer). Siden nævner ikke Aula, men Aula viser samme besked.
+>
+> **Hvad flaget gør:** I en browser vælger man selv "Lokalt login" og så "MitID for privat organisation". Flaget gør det samme for dig: `aula login` sender `showIdpList` ("Lokalt login") og vælger derefter `selectedIdp=nemlogin3_privat`, og bagefter sendes SAML-svaret til brokerens `nemlogin3_privat`-endpoint i stedet for `nemlogin3`. Uden flaget er login uændret.
+>
+> ```sh
+> aula login --idp private-organisation
+> ```
+>
+> STIL's vejledning siger, at man skal indtaste sit CPR-nummer første gang man vælger "MitID for privat organisation". `aula login` har intet CPR-trin, og det er ikke afprøvet, hvad der sker for en bruger, der endnu ikke har gjort det. Fejler login for dig lige efter MitID-godkendelsen, så prøv først at logge ind på Unilogin i en browser med den valgmulighed (og skriv gerne i issue #114).
+
 B. *Eksportér tokens fra din Mac (eller fra hvor du allerede er logget ind).* macOS Keychain kan ikke flyttes mellem maskiner, så `aula tokens export` re-krypterer dem til en bærbar fil-bundle.
 
 ```sh
@@ -318,7 +332,7 @@ Form:
 ## CLI-kommandoer
 
 ```
-aula login [--username <user>] [--method APP|CODE_TOKEN] [--debug] [--transcript <file>]
+aula login [--username <user>] [--method APP|CODE_TOKEN] [--idp mitid|private-organisation] [--debug] [--transcript <file>]
 aula status [--json]
 aula whoami [--json]
 aula doctor [--json] [--verbose]
@@ -330,7 +344,7 @@ aula --help
 
 | Kommando | Hvad den gør |
 | -------- | ------------ |
-| `aula login` | Kører hele MitID-flowet (APP-metoden er default — scan QR med MitID-appen). Gemmer tokens. `--debug` opfanger en saneret wire-transcript så fejl er diagnoserbare. |
+| `aula login` | Kører hele MitID-flowet (APP-metoden er default — scan QR med MitID-appen). Gemmer tokens. `--idp private-organisation` logger ind via "Lokalt login" → "MitID for privat organisation" (til MitID-identiteter knyttet til en privat organisation, se #114). `--debug` opfanger en saneret wire-transcript så fejl er diagnoserbare. |
 | `aula status` | Viser om der er tokens, deres udløbstid og den aktive identitet. Kontakter ikke netværket. Exit-kode 1 hvis der ingen tokens er. |
 | `aula whoami` | Indlæser tokens (refresher hvis nødvendigt), kalder `getProfilesByLogin` + `getProfileContext`. Smoke-test af at hele auth + client-pipelinen virker. |
 | `aula doctor` | Kører hvert read-endpoint igennem og rapporterer per-call status med svartid. Det hurtigste "virker det her?"-tjek. `--verbose` dumper wire-transcripten inline ved fejl. |
@@ -422,6 +436,7 @@ Et par issues fra `scaarup/aula`s tracker som jeg har taget højde for:
 | Symptom | Sandsynlig årsag / fix |
 | ------- | ---------------------- |
 | `aula login` hænger efter username-prompt | MitID-appen er ikke åbnet endnu, eller QR-koderne er ikke renderet (terminal for smal). Sørg for at terminalen er ≥ 80 kolonner. |
+| `aula login` fejler med "Unilogin refused this MitID identity ... private organisation" | Dit MitID er knyttet til en privat organisation, og Unilogin vil have login via "Lokalt login" → "MitID for privat organisation". Kør `aula login --idp private-organisation`. |
 | `Login failed: MitID initialize failed (status …)` | nemlog-in.mitid.dk er ikke tilgængelig eller returnerede en fejl. Kør igen med `--debug` og inspicér transcripten. |
 | `Login failed: APP poll error: …` | MitID-appen afviste eller annullerede. Tjek at MitID-appen er logget ind på din konto. |
 | `Login failed: appProve failed (status …)` | Sjælden — MitID afviste SRP-proof'et. Kør igen med `--debug` og inspicér `~/.config/aula-mcp/transcripts/login-<timestamp>.jsonl`. |

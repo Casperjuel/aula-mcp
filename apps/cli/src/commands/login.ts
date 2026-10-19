@@ -31,6 +31,8 @@ import { aulaMcpDir, cookiesFile, defaultStore, transcriptPath } from '../store.
 export interface LoginCommandArgs {
   username?: string;
   method?: 'APP' | 'CODE_TOKEN';
+  /** Broker IdP; `private-organisation` for identities linked to a private organisation (#114). */
+  idp?: 'mitid' | 'private-organisation';
   debug?: boolean;
   /** Override the file path the wire transcript is written to. */
   transcript?: string;
@@ -43,6 +45,7 @@ export async function runLogin(args: LoginCommandArgs): Promise<void> {
     process.exit(1);
   }
   const method = args.method ?? 'APP';
+  const idp = args.idp ?? 'mitid';
 
   // Wire tracing.
   const memTracer = args.debug ? new InMemoryTracer() : null;
@@ -80,6 +83,7 @@ export async function runLogin(args: LoginCommandArgs): Promise<void> {
     const tokens = await client.login({
       username,
       method,
+      idp,
       ...(codeTokenPassword ? { password: codeTokenPassword } : {}),
       ...(promptForCodeToken ? { promptForCodeToken } : {}),
       selectIdentity: async (options: IdentityOption[]) => {
