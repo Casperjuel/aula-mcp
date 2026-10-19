@@ -126,4 +126,13 @@ describe('oauthUrls', () => {
     expect(u.searchParams.get('client_id')).toBe('cid');
     expect(u.searchParams.get('tab_id')).toBe('tid');
   });
+
+  test('broker SAML endpoint defaults to nemlogin3 and takes an alias', () => {
+    expect(oauthUrls.brokerSamlEndpoint(DEFAULT_OAUTH_CONFIG)).toBe(
+      'https://broker.unilogin.dk/auth/realms/broker/broker/nemlogin3/endpoint',
+    );
+    expect(oauthUrls.brokerSamlEndpoint(DEFAULT_OAUTH_CONFIG, 'nemlogin3_privat')).toBe(
+      'https://broker.unilogin.dk/auth/realms/broker/broker/nemlogin3_privat/endpoint',
+    );
+  });
 });
