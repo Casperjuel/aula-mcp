@@ -26,6 +26,7 @@ import {
 } from '@aula-mcp/aula-auth';
 import type {
   AulaEnvelope,
+  AulaNotification,
   CalendarEvent,
   DailyOverviewEntry,
   GetCalendarEventsArgs,
@@ -347,10 +348,13 @@ export class AulaClient {
 
   /**
    * `notifications.getNotificationsForActiveProfile` — what's unread.
-   * Returns the raw `data` field; agents can format the shape they need.
+   *
+   * Aula has more event types than we've typed, so entries can be
+   * `UnknownNotification`; narrow with `isKnownNotification` before reading
+   * type-specific fields.
    */
-  async getNotifications(): Promise<unknown> {
-    return this.getJson<unknown>('notifications.getNotificationsForActiveProfile');
+  async getNotifications(): Promise<AulaNotification[]> {
+    return this.getJson<AulaNotification[]>('notifications.getNotificationsForActiveProfile');
   }
 
   /**
