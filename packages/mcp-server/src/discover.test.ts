@@ -79,6 +79,7 @@ describe('buildDiscoverManifest', () => {
     // Always present capability blocks:
     expect(Object.keys(m.capabilities).sort()).toEqual([
       'calendar',
+      'forloeb',
       'huskelisten',
       'lektier',
       'messages',
@@ -107,6 +108,19 @@ describe('buildDiscoverManifest', () => {
     expect(m.capabilities.ugeplan?.summary).toContain('meebook');
     // Meebook surfaces the one-time browser SSO prerequisite as a note.
     expect(m.capabilities.ugeplan?.notes).toContain('Meebook');
+  });
+
+  test('Meebook forløb widget (0003) → forloeb tool, separate from ugeplan', async () => {
+    const m = await buildDiscoverManifest(fakeContext({ widgets: ['0003'] }));
+    expect(m.capabilities.forloeb?.tools).toEqual(['aula.forloeb.meebook']);
+    expect(m.capabilities.forloeb?.notes).toBeUndefined();
+    // 0003 alone is not the weekly plan — ugeplan stays undetected.
+    expect(m.capabilities.ugeplan?.summary).toContain('No provider widget detected');
+  });
+
+  test('forloeb carries a "not detected" note when 0003 absent', async () => {
+    const m = await buildDiscoverManifest(fakeContext({ widgets: ['0004'] }));
+    expect(m.capabilities.forloeb?.notes).toContain('0003');
   });
 
   test('EasyIQ SkolePortal widget (0128) → easyiq_skoleportal listed first', async () => {
@@ -154,6 +168,31 @@ describe('buildDiscoverManifest', () => {
       { id: '0004', name: 'Ugeplan forældre' },
       { id: '0118', name: 'Skolemad', type: 'secure' },
     ]);
+  });
+
+  test('widgets passes other scalar widget fields through as extra', async () => {
+    const ctx = fakeContext();
+    const client = await ctx.getClient();
+    (client as unknown as { getProfileContext: () => Promise<unknown> }).getProfileContext =
+      async () => ({
+        userId: 5000,
+        pageConfiguration: {
+          widgetConfigurations: [
+            {
+              widget: {
+                widgetId: '0118',
+                name: 'Skolemad',
+                widgetSupplier: 'Pay4it',
+                isSecure: true,
+                id: 114,
+                nested: { ignored: true },
+              },
+            },
+          ],
+        },
+      });
+    const m = await buildDiscoverManifest(ctx);
+    expect(m.widgets[0]?.extra).toEqual({ widgetSupplier: 'Pay4it', isSecure: true, id: 114 });
   });
 
   test('lektier carries a "not detected" note when 0142 absent', async () => {

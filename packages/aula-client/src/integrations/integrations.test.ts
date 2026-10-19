@@ -112,7 +112,7 @@ describe('EasyIqClient.getWeekPlan', () => {
 });
 
 // --------------------------------------------------------------------------
-// Meebook (widget 0004)
+// Meebook (widgets 0004 + 0003)
 // --------------------------------------------------------------------------
 
 describe('MeebookClient.getWeekPlan', () => {
@@ -200,6 +200,62 @@ describe('MeebookClient.getWeekPlan', () => {
     const client = new MeebookClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
     await client.getWeekPlan(ctx({ childIds: [111293], childUserIds: [''] }));
     expect(http.requested[0]?.url ?? '').toContain('childFilter%5B%5D=111293');
+  });
+});
+
+describe('MeebookClient.getWeeklyBooks', () => {
+  test('flattens person → books into forløb items', async () => {
+    const http = new FakeHttp().enqueue({
+      status: 200,
+      body: JSON.stringify([
+        {
+          id: 1,
+          name: 'Emilie',
+          unilogin: 'emil0101',
+          books: [
+            { id: 10, title: 'Brøker og decimaltal', category: 'Matematik' },
+            { id: 11, title: 'Vikingetiden', category: 'Historie' },
+          ],
+        },
+      ]),
+    });
+    const client = new MeebookClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const forloeb = await client.getWeeklyBooks(ctx());
+    expect(forloeb.items).toEqual([
+      { childName: 'Emilie', title: 'Brøker og decimaltal', subject: 'Matematik', id: 10 },
+      { childName: 'Emilie', title: 'Vikingetiden', subject: 'Historie', id: 11 },
+    ]);
+    expect(forloeb.warnings).toBeUndefined();
+  });
+
+  test('calls relatedweeklybook with the 0003 widget token and unilogin filter', async () => {
+    const http = new FakeHttp().enqueue({ status: 200, body: '[]' });
+    const usedWidgets: string[] = [];
+    const widgets = {
+      ...fakeWidgets(),
+      async withRetry<T>(widgetId: string, fn: (t: string) => Promise<T>) {
+        usedWidgets.push(widgetId);
+        return fn('TKN-1');
+      },
+    } as unknown as WidgetTokenManager;
+    const client = new MeebookClient({ http: http.asHttpClient(), widgets });
+    await client.getWeeklyBooks(ctx({ childIds: [111293], childUserIds: ['thit0305'] }));
+    const url = http.requested[0]?.url ?? '';
+    expect(usedWidgets).toEqual(['0003']);
+    expect(url).toStartWith('https://app.meebook.com/aulaapi/relatedweeklybook/all?');
+    expect(url).toContain('childFilter%5B%5D=thit0305');
+    expect(url).not.toContain('userProfile');
+  });
+
+  test('per-person exceptionMessage becomes a warning', async () => {
+    const http = new FakeHttp().enqueue({
+      status: 200,
+      body: JSON.stringify([{ name: 'Emilie', exceptionMessage: 'Log ind i Meebook først' }]),
+    });
+    const client = new MeebookClient({ http: http.asHttpClient(), widgets: fakeWidgets() });
+    const forloeb = await client.getWeeklyBooks(ctx());
+    expect(forloeb.items).toEqual([]);
+    expect(forloeb.warnings).toEqual(['Emilie: Log ind i Meebook først']);
   });
 });
 

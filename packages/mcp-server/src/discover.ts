@@ -33,6 +33,9 @@ export interface DetectedWidget {
   id: string;
   name?: string;
   type?: string;
+  /** Any other scalar fields Aula sent on the widget (e.g. a URL), passed
+   *  through untyped so unsupported widgets can be investigated. */
+  extra?: Record<string, string | number | boolean>;
 }
 
 /** Capability description for one functional area. */
@@ -93,6 +96,7 @@ const WIDGET_PROVIDER_MAP: Readonly<
   Record<string, { capability: string; provider: string; tool: string }>
 > = Object.freeze({
   '0001': { capability: 'ugeplan', provider: 'easyiq', tool: 'aula.ugeplan.easyiq' },
+  '0003': { capability: 'forloeb', provider: 'meebook', tool: 'aula.forloeb.meebook' },
   '0004': { capability: 'ugeplan', provider: 'meebook', tool: 'aula.ugeplan.meebook' },
   '0029': { capability: 'ugebrev', provider: 'minuddannelse', tool: 'aula.ugebrev.minuddannelse' },
   '0030': { capability: 'opgaver', provider: 'minuddannelse', tool: 'aula.opgaver.minuddannelse' },
@@ -151,6 +155,14 @@ export async function buildDiscoverManifest(context: AulaContext): Promise<Disco
     const item: DetectedWidget = { id };
     if (w.widget?.name) item.name = w.widget.name;
     if (w.widget?.type) item.type = w.widget.type;
+    const extra: Record<string, string | number | boolean> = {};
+    for (const [key, value] of Object.entries(w.widget ?? {})) {
+      if (key === 'widgetId' || key === 'name' || key === 'type') continue;
+      if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+        extra[key] = value;
+      }
+    }
+    if (Object.keys(extra).length > 0) item.extra = extra;
     widgetsById.set(id, item);
   }
   const widgets = [...widgetsById.values()].sort((a, b) => a.id.localeCompare(b.id));
@@ -213,6 +225,7 @@ function buildCapabilities(
   const ugebrevDetected = detectedByCapability.get('ugebrev') ?? [];
   const huskelistenDetected = detectedByCapability.get('huskelisten') ?? [];
   const lektierDetected = detectedByCapability.get('lektier') ?? [];
+  const forloebDetected = detectedByCapability.get('forloeb') ?? [];
 
   // When detection picked a provider for a third-party capability, expose
   // ONLY that tool. Listing alternates as fallbacks invites Claude to fan
@@ -335,6 +348,18 @@ function buildCapabilities(
         ? {
             notes:
               'Systematic widget (0062) not detected — call may return empty. Skip if user did not specifically ask for huskelisten.',
+          }
+        : {}),
+    },
+    forloeb: {
+      summary:
+        'Forløb (teaching units) currently running per subject, from Meebook (widget 0003). ' +
+        'Titles and subjects only — the day-by-day plan is under ugeplan.',
+      tools: ['aula.forloeb.meebook'],
+      ...(forloebDetected.length === 0
+        ? {
+            notes:
+              'Meebook forløb widget (0003) not detected — call may return empty. Skip if user did not specifically ask for forløb.',
           }
         : {}),
     },

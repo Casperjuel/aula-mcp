@@ -4,7 +4,12 @@ export {
   EasyIqSkoleportalClient,
   type EasyIqSkoleportalOptions,
 } from './easyiq-skoleportal.ts';
-export { MeebookClient, type MeebookOptions } from './meebook.ts';
+export {
+  MeebookClient,
+  type MeebookForloeb,
+  type MeebookForloebItem,
+  type MeebookOptions,
+} from './meebook.ts';
 export { MinUddannelseClient, type MinUddannelseOptions } from './min-uddannelse.ts';
 export { SystematicClient, type SystematicOptions } from './systematic.ts';
 export {

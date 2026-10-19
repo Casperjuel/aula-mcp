@@ -866,6 +866,23 @@ export function registerTools(server: McpServer, context: AulaContext): void {
   );
 
   server.registerTool(
+    'aula.forloeb.meebook',
+    {
+      title: 'Meebook forløb (teaching units)',
+      description:
+        'Forløb (teaching units) currently running per subject, from Meebook\'s "Ugens forløb" ' +
+        'widget (0003) — titles and subjects only, no dates or tasks; use ' +
+        '`aula.ugeplan.meebook` for the day-by-day plan. Use when discover.detectedWidgets ' +
+        'contains "0003".',
+      inputSchema: integrationContextShape,
+    },
+    async (args) => {
+      const meebook = await context.getMeebook();
+      return jsonContent(await meebook.getWeeklyBooks(await buildIntegrationCtx(args)));
+    },
+  );
+
+  server.registerTool(
     'aula.ugeplan.easyiq_skoleportal',
     {
       title: 'EasyIQ SkolePortal weekly plan',
