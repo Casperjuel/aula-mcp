@@ -236,6 +236,8 @@ Eksempler du kan prøve:
 | *"Har vi missede notifikationer?"* | `aula.notifications.list` |
 | *"Hvad sker der i kalenderen næste uge?"* | `aula.calendar.list` |
 | *"Hvad er ugeplanen for [barn] næste uge?"* | `aula.ugeplan.*` (vendor-specifik) |
+| *"Hvilke forløb har [barn] lige nu?"* | `aula.forloeb.meebook` (hvis skolen har 0003) |
+| *"Hvad skal [barn] have til frokost, og mangler vi at bestille?"* | `aula.skolemad.pay4it` (hvis skolen har 0118, Københavns Kommune) |
 
 ---
 
