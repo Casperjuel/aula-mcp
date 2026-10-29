@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AulaPost, ThreadMessage } from '@aula-mcp/aula-client';
 import {
+  AulaApiError,
   AulaStepUpRequiredError,
   htmlToText,
   isoDate,
@@ -104,6 +105,72 @@ type ConsentEntry = {
     role?: string; // "guardian" | "child"
   };
 };
+
+export type ReadFailureReason = 'step_up_required' | 'session_expired' | 'network' | 'unreadable';
+
+/** Why a thread could not be read, in a shape the client can act on. */
+export interface ReadFailure {
+  readable: false;
+  /** Machine-readable reason (kept under `error` for existing consumers). */
+  error: ReadFailureReason;
+  message: string;
+  /** What to tell the user / do next. */
+  action: string;
+  retryable: boolean;
+}
+
+/** Map a thrown error to a ReadFailure. Never echoes raw error text except
+ *  Aula's own step-up message, so tokens/URLs can't leak into tool output. */
+export function describeReadFailure(err: unknown): ReadFailure {
+  if (err instanceof AulaStepUpRequiredError) {
+    return {
+      readable: false,
+      error: 'step_up_required',
+      message: err.message || 'This thread is sensitive and needs MitID step-up.',
+      action:
+        'Ask the user to run `pnpm aula login` and approve it in the MitID app, then retry. ' +
+        'Other threads are unaffected.',
+      retryable: true,
+    };
+  }
+  if (err instanceof AulaApiError && (err.status === 401 || err.status === 410)) {
+    return {
+      readable: false,
+      error: 'session_expired',
+      message: `Aula rejected the session (status ${err.status}).`,
+      action: 'Ask the user to run `pnpm aula login` again, then retry.',
+      retryable: true,
+    };
+  }
+  if (err instanceof AulaApiError) {
+    return {
+      readable: false,
+      error: 'unreadable',
+      message: `Aula returned status ${err.status} for this thread.`,
+      action: 'Retry later; if it persists, run `pnpm aula doctor`.',
+      retryable: err.status >= 500,
+    };
+  }
+  if (err instanceof Error && /No tokens/i.test(err.message)) {
+    return {
+      readable: false,
+      error: 'session_expired',
+      message: 'No saved Aula login.',
+      action: 'Ask the user to run `pnpm aula login`.',
+      retryable: true,
+    };
+  }
+  return {
+    readable: false,
+    error: err instanceof TypeError ? 'network' : 'unreadable',
+    message:
+      err instanceof TypeError
+        ? 'Could not reach Aula.'
+        : 'The thread could not be read for an unknown reason.',
+    action: 'Retry; if it persists, run `pnpm aula doctor`.',
+    retryable: true,
+  };
+}
 
 /** Messages up to this many characters are returned whole. */
 const SHORT_MESSAGE_CHARS = 600;
@@ -939,7 +1006,10 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         'message — whole in `text` when short, otherwise an `excerpt` with ' +
         '`needsSummary: true`. For those, fetch aula.messages.get_thread if you need ' +
         'more and summarise it for the user rather than pasting it. A thread whose ' +
-        'content cannot be read (e.g. needs MitID step-up) gets `latest.error`.',
+        'content cannot be read gets `latest: { readable: false, error, message, action, ' +
+        'retryable }` and, for sensitive threads, `sensitive: true`; its subject and ' +
+        'sender are still listed. Show those rows as "needs MitID approval" and relay ' +
+        '`action` once, not per thread.',
       inputSchema: {
         page: z.number().int().min(0).default(0).optional(),
         includeContent: z
@@ -972,12 +1042,20 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         try {
           const { messages } = await client.getMessagesForThread(thread.id);
           const newest = newestMessage(messages);
-          return { ...thread, latest: newest ? previewMessage(newest) : { error: 'no_messages' } };
-        } catch (err) {
-          const stepUp = err instanceof AulaStepUpRequiredError;
           return {
             ...thread,
-            latest: { error: stepUp ? 'step_up_required' : 'unreadable' },
+            latest: newest
+              ? { readable: true, ...previewMessage(newest) }
+              : { readable: false, error: 'no_messages', retryable: false },
+          };
+        } catch (err) {
+          const failure = describeReadFailure(err);
+          // Thread metadata (subject, sender, unread) is kept; only the body is
+          // withheld. `sensitive` lets the client render a clear row for it.
+          return {
+            ...thread,
+            ...(failure.error === 'step_up_required' ? { sensitive: true } : {}),
+            latest: failure,
           };
         }
       });
@@ -1168,8 +1246,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       title: 'Read a single thread',
       description:
         'Returns subject + every message in the thread. If the thread is sensitive, ' +
-        'this tool returns an error code that means the user must MitID step-up to read it ' +
-        '(currently a fresh `aula login` from the CLI).',
+        'this tool does not throw: it returns `{ readable: false, error, message, action, ' +
+        'retryable }`. `error: "step_up_required"` means the user must approve a MitID ' +
+        'step-up (`pnpm aula login`); relay `action` to them.',
       inputSchema: {
         threadId: z.number().int().positive(),
         page: z.number().int().min(0).default(0).optional(),
@@ -1193,14 +1272,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
           }),
         );
       } catch (e) {
-        if (e instanceof AulaStepUpRequiredError) {
-          return jsonContent({
-            error: 'step_up_required',
-            message: e.message,
-            hint: 'Run `aula login` again to refresh your session, then retry.',
-          });
-        }
-        throw e;
+        return jsonContent({ threadId: args.threadId, ...describeReadFailure(e) });
       }
     },
   );
