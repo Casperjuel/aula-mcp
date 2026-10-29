@@ -430,6 +430,24 @@ export class AulaClient {
     );
   }
 
+  /**
+   * `messaging.reply` — post a reply into an existing thread of the guardian's
+   * personal inbox. `html` is the message body as Aula stores it (HTML).
+   * Request shape from the reverse-engineered app (eisbaw/aulalibre); it has not
+   * been verified against a live account.
+   */
+  async replyToThread(threadId: number, html: string): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.reply',
+      JSON.stringify({
+        threadId,
+        message: { text: html, attachmentIds: [] },
+        commonInboxId: null,
+        bundleId: null,
+      }),
+    );
+  }
+
   async rawRequest(
     method: string,
     params: Record<string, string> = {},

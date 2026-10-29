@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { htmlToText } from '@aula-mcp/aula-client';
-import { registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
+import { plainTextToHtml, registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
 
 describe('validateSetTemplateArgs', () => {
   test('picked_up_by needs pickedUpBy', () => {
@@ -187,6 +187,75 @@ describe('aula.messages.mark_read', () => {
       if (previous !== undefined) process.env.AULA_MCP_WRITE = previous;
     }
     expect(seen).toBe(false);
+  });
+});
+
+describe('plainTextToHtml', () => {
+  test('escapes markup and builds paragraphs and line breaks', () => {
+    expect(plainTextToHtml('Hej <b>&\nTak\n\nVenlig hilsen')).toBe(
+      '<p>Hej &lt;b&gt;&amp;<br>Tak</p><p>Venlig hilsen</p>',
+    );
+  });
+});
+
+describe('aula.messages.reply', () => {
+  type Args = { threadId: number; text: string; send?: boolean };
+  type Handler = (a: Args) => Promise<{ content: Array<{ type: 'text'; text: string }> }>;
+
+  function register(): { reply: (a: Args) => Promise<Record<string, unknown>>; sent: unknown[][] } {
+    const sent: unknown[][] = [];
+    const context = {
+      async getClient() {
+        return {
+          async replyToThread(id: number, html: string) {
+            sent.push([id, html]);
+            return { ok: true };
+          },
+        };
+      },
+      async getGuardianUserId() {
+        return '5000';
+      },
+    };
+    let handler: Handler | undefined;
+    const server = {
+      registerTool(name: string, _c: unknown, fn: Handler) {
+        if (name === 'aula.messages.reply') handler = fn;
+      },
+    };
+    const previous = process.env.AULA_MCP_WRITE;
+    process.env.AULA_MCP_WRITE = '1';
+    try {
+      // biome-ignore lint/suspicious/noExplicitAny: structural stubs for McpServer/AulaContext
+      registerTools(server as any, context as any);
+    } finally {
+      if (previous === undefined) delete process.env.AULA_MCP_WRITE;
+      else process.env.AULA_MCP_WRITE = previous;
+    }
+    if (!handler) throw new Error('aula.messages.reply was not registered');
+    const h = handler;
+    return {
+      async reply(a) {
+        const first = (await h(a)).content[0];
+        if (!first) throw new Error('tool returned no content');
+        return JSON.parse(first.text) as Record<string, unknown>;
+      },
+      sent,
+    };
+  }
+
+  test('without send it only previews and posts nothing', async () => {
+    const { reply, sent } = register();
+    const out = await reply({ threadId: 42, text: 'Tak' });
+    expect(out.sent).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  test('send: true posts the HTML-encoded text', async () => {
+    const { reply, sent } = register();
+    const out = await reply({ threadId: 42, text: 'Tak <3', send: true });
+    expect(out.sent).toBe(true);
+    expect(sent).toEqual([[42, '<p>Tak &lt;3</p>']]);
   });
 });
 
