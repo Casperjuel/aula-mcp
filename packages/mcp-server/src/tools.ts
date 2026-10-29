@@ -6,7 +6,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AulaPost } from '@aula-mcp/aula-client';
+import type { AulaPost, ThreadMessage } from '@aula-mcp/aula-client';
 import {
   AulaStepUpRequiredError,
   htmlToText,
@@ -104,6 +104,68 @@ type ConsentEntry = {
     role?: string; // "guardian" | "child"
   };
 };
+
+/** Messages up to this many characters are returned whole. */
+const SHORT_MESSAGE_CHARS = 600;
+/** Longer messages are cut to this many characters for `excerpt`. */
+const EXCERPT_CHARS = 300;
+
+export interface MessagePreview {
+  sender?: string;
+  sentAt?: string;
+  hasAttachments: boolean;
+  /** Plain-text length of the full message. */
+  length: number;
+  /** Short messages: the whole text. Long ones: omitted, see `excerpt`. */
+  text?: string;
+  /** Long messages: the opening, cut at a word boundary. */
+  excerpt?: string;
+  /** True when the message is long — summarise it for the user, don't paste it. */
+  needsSummary: boolean;
+}
+
+/** Whole text when short, an excerpt plus a flag to summarise when long. */
+export function previewMessage(msg: ThreadMessage): MessagePreview {
+  const text = htmlToText(msg.text?.html ?? msg.text?.plain ?? '').trim();
+  const base = {
+    ...(msg.sender?.fullName ? { sender: msg.sender.fullName } : {}),
+    ...(msg.sendDateTime ? { sentAt: msg.sendDateTime } : {}),
+    hasAttachments: msg.hasAttachments === true || (msg.attachments?.length ?? 0) > 0,
+    length: text.length,
+  };
+  if (text.length <= SHORT_MESSAGE_CHARS) return { ...base, text, needsSummary: false };
+  const cut = text.slice(0, EXCERPT_CHARS);
+  const lastSpace = cut.lastIndexOf(' ');
+  const excerpt = `${(lastSpace > EXCERPT_CHARS / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+  return { ...base, excerpt, needsSummary: true };
+}
+
+/** Newest message of a thread's messages, by send time (falls back to last). */
+function newestMessage(messages: ThreadMessage[]): ThreadMessage | undefined {
+  let best: ThreadMessage | undefined;
+  for (const m of messages) {
+    if (!best || (m.sendDateTime ?? '') >= (best.sendDateTime ?? '')) best = m;
+  }
+  return best;
+}
+
+/** Run `fn` over `items` with at most `limit` in flight, keeping order. */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 /**
  * Every institution profile (guardian + child, across all institutions) for
@@ -756,9 +818,21 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         'hasMorePages }`: when `hasMorePages` is true there are older threads you have ' +
         'not seen, so keep calling with `page` + 1 before concluding anything about the ' +
         'mailbox as a whole (e.g. "no unread messages"). A single call answers "what ' +
-        'arrived recently", never "what does the mailbox contain".',
+        'arrived recently", never "what does the mailbox contain". By default each ' +
+        'thread also carries `latest`: sender, time, attachment flag and the newest ' +
+        'message — whole in `text` when short, otherwise an `excerpt` with ' +
+        '`needsSummary: true`. For those, fetch aula.messages.get_thread if you need ' +
+        'more and summarise it for the user rather than pasting it. A thread whose ' +
+        'content cannot be read (e.g. needs MitID step-up) gets `latest.error`.',
       inputSchema: {
         page: z.number().int().min(0).default(0).optional(),
+        includeContent: z
+          .boolean()
+          .optional()
+          .describe(
+            'Default true: fetch the newest message of every thread (one extra call each). ' +
+              'Pass false for the bare thread list.',
+          ),
         pageSize: z
           .number()
           .int()
@@ -777,7 +851,21 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         ...(args.page !== undefined ? { page: args.page } : {}),
         ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
       });
-      return jsonContent(page);
+      if (args.includeContent === false) return jsonContent(page);
+      const threads = await mapLimit(page.threads, 5, async (thread) => {
+        try {
+          const { messages } = await client.getMessagesForThread(thread.id);
+          const newest = newestMessage(messages);
+          return { ...thread, latest: newest ? previewMessage(newest) : { error: 'no_messages' } };
+        } catch (err) {
+          const stepUp = err instanceof AulaStepUpRequiredError;
+          return {
+            ...thread,
+            latest: { error: stepUp ? 'step_up_required' : 'unreadable' },
+          };
+        }
+      });
+      return jsonContent({ ...page, threads });
     },
   );
 
