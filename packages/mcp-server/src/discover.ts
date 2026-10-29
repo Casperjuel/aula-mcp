@@ -272,6 +272,12 @@ function buildCapabilities(
       summary: 'Unread items + activity badge counts for the active guardian.',
       tools: ['aula.notifications.list'],
     },
+    groups: {
+      summary:
+        'Classes/groups the children belong to, and their member lists. Contact lists ' +
+        'hold other families’ data — only surface what the user asked for.',
+      tools: ['aula.groups.list', 'aula.contacts.list'],
+    },
     posts: {
       summary:
         'Class-level news / posts feed (teacher updates), across school and club. ' +

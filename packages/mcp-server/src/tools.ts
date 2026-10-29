@@ -668,6 +668,62 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
   );
 
+  // --- aula.groups.list ----------------------------------------------------
+
+  server.registerTool(
+    'aula.groups.list',
+    {
+      title: 'Aula groups (classes)',
+      description:
+        'Classes and groups the family’s children belong to. Use the returned ' +
+        'group ids with aula.contacts.list.',
+      inputSchema: {
+        childInstitutionProfileIds: z
+          .array(z.number())
+          .min(1)
+          .optional()
+          .describe('Optional. Omit to cover every child in the family.'),
+      },
+    },
+    async (args) => {
+      const client = await context.getClient();
+      await context.getGuardianUserId();
+      const ids = args.childInstitutionProfileIds ?? (await resolveFamilyProfileIds(client));
+      return jsonContent(await client.getGroups(ids));
+    },
+  );
+
+  // --- aula.contacts.list --------------------------------------------------
+
+  server.registerTool(
+    'aula.contacts.list',
+    {
+      title: 'Aula contact list (group members)',
+      description:
+        'Members of one group or class, from aula.groups.list. Contains other ' +
+        'families’ personal data (names, birthdays) — only surface what the user asked for.',
+      inputSchema: {
+        groupId: z.number().int(),
+        filter: z
+          .string()
+          .optional()
+          .describe('Aula role filter. Defaults to "child"; other values are untested.'),
+        page: z.number().int().min(1).optional().describe('1-based page. Defaults to 1.'),
+      },
+    },
+    async (args) => {
+      const client = await context.getClient();
+      await context.getGuardianUserId();
+      return jsonContent(
+        await client.getContactList({
+          groupId: args.groupId,
+          ...(args.filter ? { filter: args.filter } : {}),
+          ...(args.page !== undefined ? { page: args.page } : {}),
+        }),
+      );
+    },
+  );
+
   // --- aula.posts.list -----------------------------------------------------
 
   server.registerTool(
