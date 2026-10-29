@@ -79,6 +79,7 @@ describe('buildDiscoverManifest', () => {
     // Always present capability blocks:
     expect(Object.keys(m.capabilities).sort()).toEqual([
       'calendar',
+      'groups',
       'huskelisten',
       'lektier',
       'messages',

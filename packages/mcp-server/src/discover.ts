@@ -250,27 +250,42 @@ function buildCapabilities(
     },
     messages: {
       summary: writeEnabled
-        ? 'Aula messaging threads, and marking a thread read. Sensitive threads ' +
-          'require MitID step-up.'
+        ? 'Aula messaging threads, marking a thread read, and replying. Sensitive ' +
+          'threads require MitID step-up.'
         : 'Aula messaging threads. Sensitive threads require MitID step-up.',
       tools: writeEnabled
-        ? ['aula.messages.list_threads', 'aula.messages.get_thread', 'aula.messages.mark_read']
+        ? [
+            'aula.messages.list_threads',
+            'aula.messages.get_thread',
+            'aula.messages.mark_read',
+            'aula.messages.reply',
+          ]
         : ['aula.messages.list_threads', 'aula.messages.get_thread'],
       ...(writeEnabled
         ? {
             notes:
               'aula.messages.mark_read is irreversible — Aula offers no way to set a ' +
-              'thread back to unread. Only call it for threads the user has actually seen.',
+              'thread back to unread. Only call it for threads the user has actually seen. ' +
+              'aula.messages.reply sends a real message that cannot be recalled: call it ' +
+              'without `send` to get a preview, show the user the exact text, and only ' +
+              'send with `send: true` after they approve.',
           }
         : {
             notes:
-              'aula.messages.mark_read (marking a thread read) is available only when ' +
-              'the server runs with AULA_MCP_WRITE=1.',
+              'aula.messages.mark_read (marking a thread read) and aula.messages.reply ' +
+              '(replying in a thread) are available only when the server runs with ' +
+              'AULA_MCP_WRITE=1.',
           }),
     },
     notifications: {
       summary: 'Unread items + activity badge counts for the active guardian.',
       tools: ['aula.notifications.list'],
+    },
+    groups: {
+      summary:
+        'Classes/groups the children belong to, and their member lists. Contact lists ' +
+        'hold other families’ data — only surface what the user asked for.',
+      tools: ['aula.groups.list', 'aula.contacts.list'],
     },
     posts: {
       summary:
