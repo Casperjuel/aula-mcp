@@ -70,6 +70,7 @@ import { createMcpApp, type McpApp } from './setup.ts';
 import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
+import { startTokenKeepAlive } from './token-keepalive.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
 const HOST = process.env.AULA_MCP_HOST ?? '127.0.0.1';
@@ -503,6 +504,13 @@ app.post('/messages', async (c) => {
   // is just an inbound carrier, so 202 Accepted is the spec-correct ack.
   return c.body(null, 202);
 });
+
+// Keep the access token renewed in the background so an idle server doesn't
+// let the refresh_token chain go stale. Opt out with AULA_MCP_KEEPALIVE=0.
+// Single-parent only for now; multi-parent contexts have no keep-alive yet.
+if (sharedContext && process.env.AULA_MCP_KEEPALIVE !== '0') {
+  startTokenKeepAlive({ context: sharedContext, logger });
+}
 
 logger.info('aula-mcp.listening', { host: HOST, port: PORT, mode: mode.kind });
 process.stdout.write(`aula-mcp listening on http://${HOST}:${PORT}/mcp (healthz at /healthz)\n`);

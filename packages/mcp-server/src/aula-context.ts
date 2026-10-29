@@ -35,6 +35,8 @@ import {
 export interface AulaContextOptions {
   store?: TokenStore;
   logger?: Logger;
+  /** Override the HTTP client (tests). */
+  http?: AulaHttpClient;
 }
 
 export class AulaContext {
@@ -59,7 +61,7 @@ export class AulaContext {
   constructor(options: AulaContextOptions = {}) {
     this.store = options.store ?? defaultStore();
     this.logger = options.logger ?? silentLogger;
-    this.http = new AulaHttpClient({ logger: this.logger });
+    this.http = options.http ?? new AulaHttpClient({ logger: this.logger });
     this.watchTokenFile();
   }
 
@@ -138,15 +140,43 @@ export class AulaContext {
       this.logger.info('aula-context.token_expired_invalidating');
       this.clientPromise = undefined;
     }
-    if (!this.clientPromise) {
-      this.clientPromise = this.buildClient().catch((err: unknown) => {
-        // On failure, clear the cached promise so the next call retries
-        // rather than re-throwing the same stale rejection forever.
-        this.clientPromise = undefined;
-        throw err;
-      });
-    }
+    if (!this.clientPromise) this.clientPromise = this.startBuild();
     return this.clientPromise;
+  }
+
+  /**
+   * Renew the access token if it has less than `seconds` left. Used by the
+   * background keep-alive so the process has a single refresh path: the
+   * renewal goes through the same `clientPromise` as tool calls, so the two
+   * never spend the same refresh token. Resolves to true when it renewed.
+   * No stored login is not an error here; it resolves to false.
+   */
+  async refreshIfExpiringWithin(seconds: number): Promise<boolean> {
+    if (!this.clientPromise && !this.cachedRecord && !(await this.store.load())) return false;
+    // Wait for (or start) the shared build so a refresh already in flight is
+    // reused rather than raced.
+    // getClient() sets clientPromise synchronously; compare against that, not
+    // the async wrapper it returns.
+    const pending = this.getClient();
+    const current = this.clientPromise;
+    await pending;
+    // Someone invalidated and rebuilt while we waited; that build refreshes.
+    if (this.clientPromise !== current) return false;
+    if (!this.cachedRecord || !isTokenExpired(this.cachedRecord.tokens, seconds)) return false;
+    // The widget manager holds the old client, so drop it with the client.
+    this.widgetManagerPromise = undefined;
+    this.clientPromise = this.startBuild(seconds);
+    await this.clientPromise;
+    return true;
+  }
+
+  private startBuild(refreshBufferSeconds?: number): Promise<AulaClient> {
+    return this.buildClient(refreshBufferSeconds).catch((err: unknown) => {
+      // On failure, clear the cached promise so the next call retries
+      // rather than re-throwing the same stale rejection forever.
+      this.clientPromise = undefined;
+      throw err;
+    });
   }
 
   /** Drop all cached state. Useful for tests; also called when an upstream
@@ -221,7 +251,7 @@ export class AulaContext {
     return this.cachedRecord;
   }
 
-  private async buildClient(): Promise<AulaClient> {
+  private async buildClient(refreshBufferSeconds?: number): Promise<AulaClient> {
     // Plain refresh_token grant. The scaarup/aula HA integration has
     // proven empirically that Aula's OAuth server preserves the
     // `aula-sensitive` scope through refresh_token grants — HA reads
@@ -241,6 +271,7 @@ export class AulaContext {
       store: this.store,
       http: this.http,
       logger: this.logger,
+      ...(refreshBufferSeconds !== undefined ? { refreshBufferSeconds } : {}),
     });
     this.cachedRecord = record;
     return new AulaClient({ tokens: record.tokens, http: this.http, logger: this.logger });
