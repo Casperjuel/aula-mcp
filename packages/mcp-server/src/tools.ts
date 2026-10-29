@@ -168,6 +168,20 @@ async function mapLimit<T, R>(
 }
 
 /**
+ * Aula stores message bodies as HTML. Escape the user's plain text and turn
+ * blank-line-separated blocks into paragraphs, single newlines into <br>.
+ */
+export function plainTextToHtml(text: string): string {
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return escaped
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+/**
  * Every institution profile (guardian + child, across all institutions) for
  * the authenticated guardian, read from consents.getConsentResponses — the
  * only endpoint that surfaces the club child identity that profiles.list and
@@ -660,6 +674,52 @@ export function registerTools(server: McpServer, context: AulaContext): void {
 
         const result = await client.setLastReadMessage(args.threadId, messageId);
         return jsonContent({ ok: true, threadId: args.threadId, messageId, result });
+      },
+    );
+
+    // --- aula.messages.reply (gated, write) --------------------------------
+    //
+    // Two-step: without `send: true` nothing is posted and the tool returns the
+    // exact text for the user to approve. A sent message cannot be recalled.
+
+    server.registerTool(
+      'aula.messages.reply',
+      {
+        title: 'Reply in a message thread',
+        description:
+          'Reply to an existing Aula thread. WRITES to Aula — enabled when ' +
+          'AULA_MCP_WRITE=1. Two steps: call WITHOUT `send` first to get a preview, show ' +
+          'the user the exact text, and only call again with `send: true` after they ' +
+          'explicitly approve it. A sent message cannot be recalled and goes to the ' +
+          "thread's other participants (e.g. the child's teacher). Replies only; it " +
+          'cannot start a new thread.',
+        inputSchema: {
+          threadId: z
+            .number()
+            .int()
+            .positive()
+            .describe('Thread id from aula.messages.list_threads.'),
+          text: z.string().min(1).max(5000).describe('Plain-text reply body.'),
+          send: z
+            .boolean()
+            .optional()
+            .describe('Must be true to actually send. Omit to get a preview only.'),
+        },
+      },
+      async (args) => {
+        if (args.send !== true) {
+          return jsonContent({
+            ok: true,
+            sent: false,
+            preview: { threadId: args.threadId, text: args.text },
+            message: 'Not sent. Show this text to the user and call again with send: true to send.',
+          });
+        }
+        const client = await context.getClient();
+        // Same guardian-profile priming as the other messaging tools.
+        await context.getGuardianUserId();
+        const result = await client.replyToThread(args.threadId, plainTextToHtml(args.text));
+        return jsonContent({ ok: true, sent: true, threadId: args.threadId, result });
       },
     );
   }

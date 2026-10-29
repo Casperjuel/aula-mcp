@@ -435,6 +435,7 @@ describe('MCP server: tools/call(aula.presence.set_template)', () => {
     // The other write tools share the one gate, so they arrive together.
     expect(names).toContain('aula.presence.report_sick');
     expect(names).toContain('aula.messages.mark_read');
+    expect(names).toContain('aula.messages.reply');
   });
 
   test('happy path: routes through to the client and returns { ok: true, result }', async () => {
