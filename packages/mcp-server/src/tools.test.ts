@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { htmlToText } from '@aula-mcp/aula-client';
-import { plainTextToHtml, registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
+import { AulaStepUpRequiredError, htmlToText } from '@aula-mcp/aula-client';
+import {
+  plainTextToHtml,
+  previewMessage,
+  registerTools,
+  slimPost,
+  validateSetTemplateArgs,
+} from './tools.ts';
 
 describe('validateSetTemplateArgs', () => {
   test('picked_up_by needs pickedUpBy', () => {
@@ -187,6 +193,106 @@ describe('aula.messages.mark_read', () => {
       if (previous !== undefined) process.env.AULA_MCP_WRITE = previous;
     }
     expect(seen).toBe(false);
+  });
+});
+
+describe('previewMessage', () => {
+  test('short messages come back whole', () => {
+    const p = previewMessage({
+      text: { html: '<p>Husk badetøj</p>' },
+      sender: { fullName: 'Lærer' },
+      sendDateTime: '2026-10-29T08:00:00+01:00',
+    });
+    expect(p.text).toBe('Husk badetøj');
+    expect(p.needsSummary).toBe(false);
+    expect(p.excerpt).toBeUndefined();
+    expect(p.sender).toBe('Lærer');
+  });
+
+  test('long messages get an excerpt and a summarise flag, not the full text', () => {
+    const long = `${'ord '.repeat(400)}slut`;
+    const p = previewMessage({ text: { plain: long }, attachments: [{}] });
+    expect(p.needsSummary).toBe(true);
+    expect(p.text).toBeUndefined();
+    expect(p.excerpt?.length).toBeLessThan(320);
+    expect(p.excerpt?.endsWith('…')).toBe(true);
+    expect(p.length).toBe(long.length);
+    expect(p.hasAttachments).toBe(true);
+  });
+});
+
+describe('aula.messages.list_threads content', () => {
+  type H = (a: { includeContent?: boolean }) => Promise<{
+    content: Array<{ type: 'text'; text: string }>;
+  }>;
+
+  function run(
+    getMessages: (id: number) => Promise<{ messages: unknown[] }>,
+  ): (a: { includeContent?: boolean }) => Promise<Record<string, unknown>> {
+    const client = {
+      async getThreadsPage() {
+        return {
+          threads: [
+            { id: 1, read: false },
+            { id: 2, read: true },
+          ],
+          page: 0,
+          hasMorePages: false,
+        };
+      },
+      getMessagesForThread: getMessages,
+    };
+    const context = {
+      async getClient() {
+        return client;
+      },
+      async getGuardianUserId() {
+        return '5000';
+      },
+    };
+    let handler: H | undefined;
+    const server = {
+      registerTool(name: string, _c: unknown, fn: H) {
+        if (name === 'aula.messages.list_threads') handler = fn;
+      },
+    };
+    // biome-ignore lint/suspicious/noExplicitAny: structural stubs for McpServer/AulaContext
+    registerTools(server as any, context as any);
+    if (!handler) throw new Error('list_threads was not registered');
+    const h = handler;
+    return async (a) => {
+      const first = (await h(a)).content[0];
+      if (!first) throw new Error('no content');
+      return JSON.parse(first.text) as Record<string, unknown>;
+    };
+  }
+
+  test('adds the newest message to each thread and marks unreadable ones', async () => {
+    const list = run(async (id) => {
+      if (id === 2) throw new AulaStepUpRequiredError('step up');
+      return {
+        messages: [
+          { text: { plain: 'gammel' }, sendDateTime: '2026-10-01' },
+          { text: { plain: 'nyeste' }, sendDateTime: '2026-10-02' },
+        ],
+      };
+    });
+    const out = (await list({})) as { threads: Array<{ latest: Record<string, unknown> }> };
+    expect(out.threads[0]?.latest.text).toBe('nyeste');
+    expect(out.threads[1]?.latest).toEqual({ error: 'step_up_required' });
+  });
+
+  test('includeContent: false skips the per-thread fetch', async () => {
+    let fetched = 0;
+    const list = run(async () => {
+      fetched++;
+      return { messages: [] };
+    });
+    const out = (await list({ includeContent: false })) as {
+      threads: Array<Record<string, unknown>>;
+    };
+    expect(fetched).toBe(0);
+    expect(out.threads[0]?.latest).toBeUndefined();
   });
 });
 
