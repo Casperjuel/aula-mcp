@@ -8,11 +8,12 @@
  *     mid-session (e.g. server returns 410 and we bump).
  *   - **CSRF token from cookie (`Csrfp-Token`)**: lifted from the cookie jar
  *     and sent as `csrfp-token` header on POSTs.
- *   - **Profile context before POSTs**: Aula answers 403 (envelope code 10 /
- *     subCode 23) on every POST method until `profiles.getProfileContext` has
- *     run on the session — that call selects the acting profile server-side.
- *     The CSRF cookie alone does not satisfy it, so `postJson` establishes the
- *     context once per client before its first POST.
+ *   - **Profile context before POSTs and GETs**: Aula answers 403 (envelope
+ *     code 10 / subCode 23) on every POST method, and on GETs such as the
+ *     messaging ones, until `profiles.getProfileContext` has run on the
+ *     session — that call selects the acting profile server-side. The CSRF
+ *     cookie alone does not satisfy it, so `postJson` and `getJsonRaw`
+ *     establish the context once per client before their first call.
  */
 
 import {
@@ -61,6 +62,11 @@ export interface AulaClientOptions {
 }
 
 const DEFAULT_API_BASE_HOST = 'https://www.aula.dk';
+
+/** GET methods that Aula refuses (HTTP 403) until the profile context is set
+ *  — see ensureProfileContext. Measured for messaging.*; posts.* and
+ *  notifications.* as reported in upstream #109. */
+const NEEDS_PROFILE_CONTEXT = /^(messaging|posts|notifications)\./;
 
 export class AulaClient {
   readonly http: AulaHttpClient;
@@ -302,6 +308,7 @@ export class AulaClient {
     // deprecated-version response, surfacing as "410 error" to the
     // agent with no recovery.
     const version = await this.ensureApiVersion();
+    await this.ensureProfileContext('messaging.getMessagesForThread');
     const url = this.apiUrl(version, {
       method: 'messaging.getMessagesForThread',
       threadId: String(threadId),
@@ -432,6 +439,8 @@ export class AulaClient {
 
   /** GET with a manually-built params object (allows array fields like `childIds[]`). */
   async getJsonRaw<T>(params: URLSearchParams): Promise<T | undefined> {
+    const method = params.get('method') ?? '';
+    if (NEEDS_PROFILE_CONTEXT.test(method)) await this.ensureProfileContext(method);
     const send = (version: number) => {
       params.set('access_token', this.tokens.access_token);
       return this.http.request(`${this.apiBaseHost}/api/v${version}/?${params.toString()}`, {
@@ -444,24 +453,41 @@ export class AulaClient {
   /** POST JSON body to an Aula API method. Sets CSRF header from cookie jar. */
   async postJson<T>(method: string, body: string): Promise<T | undefined> {
     const version = await this.ensureApiVersion();
-    // Aula rejects every POST method with HTTP 403 (envelope code 10 /
-    // subCode 23) until `profiles.getProfileContext` has run on the session —
-    // it is what selects the acting profile server-side. A process that
-    // restores tokens from the store has never called it, so the first POST
-    // of the process fails. The Csrfp-Token cookie is NOT sufficient on its
-    // own: `profiles.getProfilesByLogin` sets the cookie and the POST still
-    // 403s; only getProfileContext clears it. Establish it once per client.
-    // Memoised, not a bare boolean: concurrent POSTs (an agent calling two
-    // calendar tools at once) would all observe the flag as false and race
-    // ahead of the in-flight context call, so some still 403. Sharing one
-    // promise makes every caller wait for the same bootstrap.
+    await this.ensureProfileContext(method);
+    const send = async (v: number) => {
+      const params = new URLSearchParams({ method, access_token: this.tokens.access_token });
+      const url = `${this.apiBaseHost}/api/v${v}/?${params.toString()}`;
+      const csrf = await this.http.jar.getCookieValue(url, 'Csrfp-Token');
+      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      if (csrf) headers['csrfp-token'] = csrf;
+      return this.http.request(url, { method: 'POST', headers, body });
+    };
+    return this.parseEnvelope<T>(await send(version), send);
+  }
+
+  /**
+   * Aula rejects every POST method, and GETs such as the messaging ones, with
+   * HTTP 403 (envelope code 10 / subCode 23) until `profiles.getProfileContext`
+   * has run on the session — it is what selects the acting profile
+   * server-side. A process that restores tokens from the store has never
+   * called it, so the first call of the process fails. The Csrfp-Token
+   * cookie is NOT sufficient on its own: `profiles.getProfilesByLogin` sets
+   * the cookie and the call still 403s; only getProfileContext clears it.
+   * Establish it once per client: a token refresh builds a new client, and
+   * the new access token needs its own activation.
+   * Memoised, not a bare boolean: concurrent calls (an agent calling two
+   * tools at once) would all observe the flag as false and race ahead of the
+   * in-flight context call, so some still 403. Sharing one promise makes
+   * every caller wait for the same bootstrap.
+   */
+  private async ensureProfileContext(method: string): Promise<void> {
     if (!this.profileContextPromise) {
       this.logger.debug('aula.api.profile_context_bootstrap', { method });
       this.profileContextPromise = this.getProfileContext().then(
         () => undefined,
         (e: unknown) => {
-          // Best-effort: let the POST run and surface Aula's own error rather
-          // than this one, but clear the memo so the next POST retries instead
+          // Best-effort: let the call run and surface Aula's own error rather
+          // than this one, but clear the memo so the next call retries instead
           // of inheriting a bootstrap that never actually happened.
           this.profileContextPromise = undefined;
           this.logger.warn('aula.api.profile_context_bootstrap_failed', {
@@ -472,15 +498,6 @@ export class AulaClient {
       );
     }
     await this.profileContextPromise;
-    const send = async (v: number) => {
-      const params = new URLSearchParams({ method, access_token: this.tokens.access_token });
-      const url = `${this.apiBaseHost}/api/v${v}/?${params.toString()}`;
-      const csrf = await this.http.jar.getCookieValue(url, 'Csrfp-Token');
-      const headers: Record<string, string> = { 'content-type': 'application/json' };
-      if (csrf) headers['csrfp-token'] = csrf;
-      return this.http.request(url, { method: 'POST', headers, body });
-    };
-    return this.parseEnvelope<T>(await send(version), send);
   }
 
   /**
