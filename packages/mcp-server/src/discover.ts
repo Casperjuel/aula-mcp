@@ -69,6 +69,8 @@ export interface DiscoverManifest {
   usage: {
     cache: string;
     nameResolution: string;
+    /** Which capability answers which kind of question. */
+    whichSource: string;
     pickOne: string;
     timeWindows: string;
     language: string;
@@ -163,6 +165,8 @@ export async function buildDiscoverManifest(context: AulaContext): Promise<Disco
         'Reuse this manifest for the rest of the session. Do not call aula.discover again unless a tool reports unknown children/widgets.',
       nameResolution:
         'Match kid names from the user prompt against children[].name (case-insensitive, partial). E.g. "luk" matches "Lukas". Use child.id for presence childIds and for aula.calendar.events profileIds. Use child.userId only for tools whose schema explicitly asks for a user/profile user ID.',
+      whichSource:
+        'Danish users mix these up: "skoleskema", "lektioner", "hvornår har de matematik" → aula.calendar.events (the timetable). "Ugeplan", "ugebrev", "hvad sker der i klassen denne uge" → the teacher-written text in ugeplan/ugebrev. If the wording could mean either (e.g. "ugeskema"), check both.',
       pickOne:
         'For ugeplan/ugebrev/opgaver/huskelisten, call only capabilities[area].tools[0] — that is the provider this user actually has. Skip alternates unless the first errors.',
       timeWindows:
@@ -245,7 +249,7 @@ function buildCapabilities(
     },
     calendar: {
       summary:
-        'School-schedule lessons (skoleskema). Pass `range: "this_week"` for the simplest call.',
+        'The lesson timetable (skoleskema) — subjects, times, rooms. Not the teacher-written weekly letter; that is ugeplan/ugebrev. Pass `range: "this_week"` for the simplest call.',
       tools: ['aula.calendar.events'],
     },
     messages: {
