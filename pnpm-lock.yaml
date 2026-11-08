@@ -23,8 +23,8 @@ importers:
         specifier: ^26.6.5
         version: 26.6.5
       bun-types:
-        specifier: ^1.4.3
-        version: 1.4.3
+        specifier: ^1.4.4
+        version: 1.4.4
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
