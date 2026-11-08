@@ -45,8 +45,8 @@ export const oauthUrls = {
     return `${cfg.authBaseUrl}/simplesaml/module.php/saml/sp/saml2-acs.php/uni-sp`;
   },
   /** Broker SAML endpoint that consumes the MitID-issued SAMLResponse. */
-  brokerSamlEndpoint(cfg: AulaOAuthConfig): string {
-    return `${cfg.brokerBaseUrl}/auth/realms/broker/broker/nemlogin3/endpoint`;
+  brokerSamlEndpoint(cfg: AulaOAuthConfig, alias = 'nemlogin3'): string {
+    return `${cfg.brokerBaseUrl}/auth/realms/broker/broker/${alias}/endpoint`;
   },
   /** Build the post-broker-login URL from the params we captured. */
   postBrokerLogin(

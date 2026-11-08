@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import {
   AulaSamlError,
+  BROKER_IDP_ALIAS,
   buildMitidCompletionForm,
   classifyBrokerLanding,
   detectConfirmationForm,
   detectPrivateOrganisationRefusal,
   extractBrokerParams,
   extractSamlForm,
+  offersBrokerIdp,
   parseBrokerIdpForm,
   parseIdentitySelectionPage,
   parseMitidVerificationToken,
@@ -279,5 +281,38 @@ describe('buildMitidCompletionForm', () => {
     expect(body.get('MitIDUseConfirmed')).toBe('True');
     expect(body.get('SessionStorageActiveSessionUuid')).toBe('SU');
     expect(body.get('SessionStorageActiveChallenge')).toBe('CH');
+  });
+});
+
+describe('offersBrokerIdp', () => {
+  const list = `
+    <form action="/x">
+      <button type="submit" name="selectedIdp" value="nemlogin3_privat">MitID for privat organisation</button>
+      <button type="submit" name="selectedIdp" value="aabenraa">Aabenraa Skoler</button>
+    </form>`;
+
+  test('finds a selectedIdp button by its exact value', () => {
+    expect(offersBrokerIdp(list, 'nemlogin3_privat')).toBe(true);
+  });
+
+  test('does not match a different value or a prefix of one', () => {
+    expect(offersBrokerIdp(list, 'nemlogin3')).toBe(false);
+    expect(offersBrokerIdp(list, 'nemlogin3_priv')).toBe(false);
+  });
+
+  test('ignores buttons with another name', () => {
+    expect(
+      offersBrokerIdp(
+        '<button name="showIdpList" value="nemlogin3_privat"></button>',
+        'nemlogin3_privat',
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('BROKER_IDP_ALIAS', () => {
+  test('maps the flag values to the Keycloak aliases seen on the wire', () => {
+    expect(BROKER_IDP_ALIAS.mitid).toBe('nemlogin3');
+    expect(BROKER_IDP_ALIAS['private-organisation']).toBe('nemlogin3_privat');
   });
 });

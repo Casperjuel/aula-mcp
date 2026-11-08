@@ -51,6 +51,32 @@ export function parseBrokerIdpForm(
   return { action, data: fields };
 }
 
+/**
+ * Which Unilogin broker IdP the login goes through.
+ *
+ *   - `mitid`: the "MitID" button on the Loginvælger (broker alias `nemlogin3`).
+ *   - `private-organisation`: "Lokalt login" -> "MitID for privat organisation"
+ *     (broker alias `nemlogin3_privat`), needed when the MitID identity is linked
+ *     to a private organisation (issue #114).
+ */
+export type BrokerIdp = 'mitid' | 'private-organisation';
+
+export const BROKER_IDP_ALIAS: Readonly<Record<BrokerIdp, string>> = Object.freeze({
+  mitid: 'nemlogin3',
+  'private-organisation': 'nemlogin3_privat',
+});
+
+/** The Loginvælger's "Lokalt login" button: submitting it lists the other IdPs. */
+export const SHOW_IDP_LIST_FIELD = 'showIdpList';
+
+/** True when the page offers a `selectedIdp` button with exactly this value. */
+export function offersBrokerIdp(html: string, alias: string): boolean {
+  const $ = cheerio.load(html);
+  return $('button[name="selectedIdp"], input[name="selectedIdp"]')
+    .toArray()
+    .some((el) => $(el).attr('value') === alias);
+}
+
 /** The `__RequestVerificationToken` injected in MitID pages. */
 export function parseMitidVerificationToken(html: string): string {
   const inputs = extractHiddenInputs(html);

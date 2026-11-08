@@ -28,6 +28,8 @@ import {
 } from './aula-oauth.ts';
 import {
   AulaSamlError,
+  BROKER_IDP_ALIAS,
+  type BrokerIdp,
   buildMitidCompletionForm,
   classifyBrokerLanding,
   detectConfirmationForm,
@@ -35,9 +37,11 @@ import {
   extractBrokerParams,
   extractSamlForm,
   type IdentityOption,
+  offersBrokerIdp,
   parseBrokerIdpForm,
   parseIdentitySelectionPage,
   parseMitidVerificationToken,
+  SHOW_IDP_LIST_FIELD,
 } from './aula-saml-flow.ts';
 import { AulaAuthError } from './errors.ts';
 import { extractHiddenInputs, extractMetaRefreshUrl } from './html.ts';
@@ -65,6 +69,12 @@ export type IdentitySelector = (options: IdentityOption[]) => Promise<number>;
 export interface AulaLoginOptions extends AulaLoginCredentials {
   /** Defaults to APP. */
   method?: AulaAuthMethod;
+  /**
+   * Broker IdP to log in through. Defaults to `mitid`. Use `private-organisation`
+   * when Unilogin refuses the identity with "Du er tilknyttet en privat
+   * organisation" (issue #114).
+   */
+  idp?: BrokerIdp;
   /** Required for CODE_TOKEN — return the 6-digit value from the kodeviser. */
   promptForCodeToken?: () => Promise<string>;
   /**
@@ -168,6 +178,7 @@ export class AulaLoginClient {
   /** Run the full MitID-backed login. Returns Aula OAuth tokens. */
   async login(opts: AulaLoginOptions): Promise<AulaTokens> {
     const method = opts.method ?? 'APP';
+    const idp: BrokerIdp = opts.idp ?? 'mitid';
     let codeTokenPrompt: (() => Promise<string>) | undefined;
     let codeTokenPassword: string | undefined;
     if (method === 'CODE_TOKEN') {
@@ -188,11 +199,11 @@ export class AulaLoginClient {
       state,
       codeChallenge: pkce.challenge,
     });
-    this.logger.info('aula.login.start', { method, username: opts.username });
+    this.logger.info('aula.login.start', { method, idp, username: opts.username });
     this.logger.debug('oauth.authorize_url', { authorizeUrl: sanitizeUrl(authorizeUrl) });
 
     // 2. Walk OAuth redirect chain → broker page or MitID page.
-    const reachedMitid = await this.walkOauthChain(authorizeUrl);
+    const reachedMitid = await this.walkOauthChain(authorizeUrl, idp);
     const verificationToken = parseMitidVerificationToken(reachedMitid.body);
 
     // 3. POST /login/mitid/initialize → Aux.
@@ -246,7 +257,11 @@ export class AulaLoginClient {
     });
 
     // 6+7. SAML to broker → broker page → post-broker-login → final SAML form.
-    const finalSamlForm = await this.runBrokerHandoff(samlForm.samlResponse, samlForm.relayState);
+    const finalSamlForm = await this.runBrokerHandoff(
+      samlForm.samlResponse,
+      samlForm.relayState,
+      idp,
+    );
 
     // 8. POST Aula SAML ACS, follow until callback URL.
     const callbackUrl = await this.postAulaSamlAcs(
@@ -387,7 +402,10 @@ export class AulaLoginClient {
    * forces 4 selectors × 4 values when the obvious combo doesn't redirect.
    * We mirror that fallback so a renamed field doesn't kill login.
    */
-  private async walkOauthChain(authorizeUrl: string): Promise<AulaResponse> {
+  private async walkOauthChain(
+    authorizeUrl: string,
+    idp: BrokerIdp = 'mitid',
+  ): Promise<AulaResponse> {
     let currentUrl = authorizeUrl;
     let currentMethod: 'GET' | 'POST' = 'GET';
     let currentBody: URLSearchParams | undefined;
@@ -421,7 +439,10 @@ export class AulaLoginClient {
         if (url.host === 'broker.unilogin.dk') {
           // IdP-selection page; try the field/value combinations until one
           // returns a 3xx that takes us off the broker page.
-          const submitted = await this.tryBrokerIdpCombinations(res.body, currentUrl);
+          const submitted =
+            idp === 'mitid'
+              ? await this.tryBrokerIdpCombinations(res.body, currentUrl)
+              : await this.selectListedBrokerIdp(res.body, currentUrl, idp);
           currentUrl = submitted.nextUrl;
           currentMethod = 'GET';
           currentBody = undefined;
@@ -488,6 +509,50 @@ export class AulaLoginClient {
       }
     }
     throw new AulaLoginError(`Broker IdP selection failed; tried: ${triedDescriptions.join(', ')}`);
+  }
+
+  /**
+   * Select an IdP that is not on the Loginvælger itself but behind "Lokalt
+   * login": submit `showIdpList`, check the list offers the IdP, then submit it.
+   * Returns the first redirect target, like `tryBrokerIdpCombinations`.
+   */
+  private async selectListedBrokerIdp(
+    pageHtml: string,
+    pageUrl: string,
+    idp: BrokerIdp,
+  ): Promise<{ nextUrl: string }> {
+    const alias = BROKER_IDP_ALIAS[idp];
+    const toList = parseBrokerIdpForm(pageHtml, { idpField: SHOW_IDP_LIST_FIELD, idpValue: '' });
+    delete toList.data.selectedIdp;
+    const listUrl = new URL(toList.action, pageUrl).toString();
+    const listRes = await this.http.request(listUrl, {
+      method: 'POST',
+      body: new URLSearchParams(toList.data),
+    });
+    if (listRes.status !== 200) {
+      throw new AulaLoginError(
+        `Broker "Lokalt login" list failed (status ${listRes.status}): ${listRes.body.slice(0, 200)}`,
+      );
+    }
+    if (!offersBrokerIdp(listRes.body, alias)) {
+      throw new AulaLoginError(
+        `Broker IdP list does not offer "${alias}" (--idp ${idp}). The Loginvælger may have changed.`,
+      );
+    }
+    const pick = parseBrokerIdpForm(listRes.body, { idpValue: alias });
+    const action = new URL(pick.action, listUrl).toString();
+    const res = await this.http.request(action, {
+      method: 'POST',
+      body: new URLSearchParams(pick.data),
+    });
+    const loc = res.headers.get('location');
+    if (res.status < 300 || res.status >= 400 || !loc) {
+      throw new AulaLoginError(
+        `Broker IdP selection (${alias}) did not redirect (status ${res.status})`,
+      );
+    }
+    this.logger.info('aula.broker.idp_selection_succeeded', { idp, alias });
+    return { nextUrl: new URL(loc, action).toString() };
   }
 
   private assertMethodAvailable(method: AulaAuthMethod, available: AvailableAuthenticators): void {
@@ -571,10 +636,11 @@ export class AulaLoginClient {
   private async runBrokerHandoff(
     samlResponse: string,
     relayState: string,
+    idp: BrokerIdp = 'mitid',
   ): Promise<{ samlResponse: string; relayState: string; action: string }> {
     const samlBody = new URLSearchParams({ SAMLResponse: samlResponse, RelayState: relayState });
     const { final: brokerPageRes, history } = await this.http.followRedirects(
-      oauthUrls.brokerSamlEndpoint(this.oauth),
+      oauthUrls.brokerSamlEndpoint(this.oauth, BROKER_IDP_ALIAS[idp]),
       {
         method: 'POST',
         headers: {
@@ -619,14 +685,16 @@ export class AulaLoginClient {
     if (landing === 'private-organisation-refused') {
       // Issue #114. The broker wants this identity to come in through
       // "Lokalt login" -> "MitID for privat organisation" instead of the
-      // public nemlogin3 IdP we always select. That path is not driven yet;
-      // say so instead of the generic "missing params" error below.
+      // public nemlogin3 IdP. `idp: 'private-organisation'` drives that path.
+      const hint =
+        idp === 'private-organisation'
+          ? 'It was already selected via --idp private-organisation, so the broker rejected that path too.'
+          : 'Retry with --idp private-organisation. If MitID offered you a choice of identities, ' +
+            'you can also pick the one that is not tied to an organisation.';
       throw new AulaSamlError(
         'Unilogin refused this MitID identity: it is linked to a private organisation and the ' +
           'broker only accepts it through "Lokalt login" -> "MitID for privat organisation" in ' +
-          'the Loginvælger, which aula-mcp does not support yet ' +
-          '(https://github.com/Casperjuel/aula-mcp/issues/114). If MitID offered you a ' +
-          'choice of identities, retry and pick the one that is not tied to an organisation. ' +
+          `the Loginvælger (https://github.com/Casperjuel/aula-mcp/issues/114). ${hint} ` +
           `Broker said: "${detectPrivateOrganisationRefusal(brokerPageRes.body)}"`,
         { htmlSnippet: brokerPageRes.body.slice(0, 500) },
       );

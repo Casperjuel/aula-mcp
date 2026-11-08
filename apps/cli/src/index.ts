@@ -35,7 +35,7 @@ const HELP = `${fmt.bold('aula')} — MCP-friendly Aula client
 
 ${fmt.bold('Usage')}:
   aula login [--username <user>] [--method APP|CODE_TOKEN] [--debug]
-             [--transcript <file>]
+             [--idp mitid|private-organisation] [--transcript <file>]
   aula refresh-stepup [--json]
   aula status [--json]
   aula whoami [--json]
@@ -86,12 +86,19 @@ async function main(): Promise<void> {
       const username = typeof args.flags.username === 'string' ? args.flags.username : undefined;
       const methodRaw = args.flags.method;
       const method = methodRaw === 'CODE_TOKEN' || methodRaw === 'APP' ? methodRaw : undefined;
+      const idpRaw = args.flags.idp;
+      const idp = idpRaw === 'private-organisation' || idpRaw === 'mitid' ? idpRaw : undefined;
+      if (idpRaw !== undefined && !idp) {
+        console.error('--idp must be "mitid" or "private-organisation"');
+        process.exit(1);
+      }
       const debug = args.flags.debug === true;
       const transcript =
         typeof args.flags.transcript === 'string' ? args.flags.transcript : undefined;
       await runLogin({
         ...(username ? { username } : {}),
         ...(method ? { method } : {}),
+        ...(idp ? { idp } : {}),
         ...(debug ? { debug: true } : {}),
         ...(transcript ? { transcript } : {}),
       });

@@ -27,7 +27,9 @@ export {
 } from './aula-oauth.ts';
 export {
   AulaSamlError,
+  BROKER_IDP_ALIAS,
   type BrokerFormData,
+  type BrokerIdp,
   type BrokerSessionParams,
   buildMitidCompletionForm,
   type ConfirmationFormData,
@@ -37,10 +39,12 @@ export {
   extractSamlForm,
   type IdentityOption,
   type MitidCompletionParams,
+  offersBrokerIdp,
   pageTitle,
   parseBrokerIdpForm,
   parseIdentitySelectionPage,
   parseMitidVerificationToken,
+  SHOW_IDP_LIST_FIELD,
 } from './aula-saml-flow.ts';
 export { AulaCookieJar } from './cookies.ts';
 export {
