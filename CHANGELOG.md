@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.7.0](https://github.com/Casperjuel/aula-mcp/compare/v1.6.2...v1.7.0) (2026-11-08)
+
+
+### Features
+
+* **aula-auth:** log in via "MitID for privat organisation" with --idp private-organisation ([#134](https://github.com/Casperjuel/aula-mcp/issues/134)) ([e9dea8f](https://github.com/Casperjuel/aula-mcp/commit/e9dea8f57b5b79505d426d9bbf6eb1a04cf70781))
+* **discover:** tell the agent timetable (skoleskema) from weekly letter (ugeplan/ugebrev) ([#138](https://github.com/Casperjuel/aula-mcp/issues/138)) ([c240b5b](https://github.com/Casperjuel/aula-mcp/commit/c240b5b9ce79a7d88bee9fe6898a567908ed71e9))
+* **mcp-server:** add aula.groups.list and aula.contacts.list tools ([#145](https://github.com/Casperjuel/aula-mcp/issues/145)) ([5c64e98](https://github.com/Casperjuel/aula-mcp/commit/5c64e98eaba98288770650f8cafe1636facf01d2))
+
+
+### Bug Fixes
+
+* **aula-client:** set the profile context before messaging, posts and notifications GETs ([#135](https://github.com/Casperjuel/aula-mcp/issues/135)) ([a488bbc](https://github.com/Casperjuel/aula-mcp/commit/a488bbc00875a942cc48a3e856558d46523f12d8))
+* **cli:** write login-log.jsonl with mode 0600 ([#137](https://github.com/Casperjuel/aula-mcp/issues/137)) ([3cb2a94](https://github.com/Casperjuel/aula-mcp/commit/3cb2a947990a440280d21c9e034d7bed3cd0f29b))
+* **mcp-server:** share one AulaContext across MCP sessions ([#136](https://github.com/Casperjuel/aula-mcp/issues/136)) ([7c45e00](https://github.com/Casperjuel/aula-mcp/commit/7c45e00bc29e951b6c5fd3c3dac320a9611ac191))
+
 ## [1.6.2](https://github.com/Casperjuel/aula-mcp/compare/v1.6.1...v1.6.2) (2026-10-18)
 
 
