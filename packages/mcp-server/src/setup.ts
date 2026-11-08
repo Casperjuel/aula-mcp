@@ -40,6 +40,10 @@ const INSTRUCTIONS = [
 
 export interface McpAppOptions {
   logger: Logger;
+  /** Reuse this context instead of creating one. The HTTP server passes one
+   *  for all its sessions so they share a single token refresh path, client
+   *  and set of caches (and one token-file watcher) rather than one each. */
+  context?: AulaContext;
 }
 
 export interface McpApp {
@@ -47,8 +51,10 @@ export interface McpApp {
   context: AulaContext;
 }
 
-export function createMcpApp({ logger }: McpAppOptions): McpApp {
-  const context = new AulaContext({ logger });
+export function createMcpApp({
+  logger,
+  context = new AulaContext({ logger }),
+}: McpAppOptions): McpApp {
   const mcp = new McpServer(
     {
       name: 'aula-mcp',

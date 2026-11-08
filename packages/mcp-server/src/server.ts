@@ -44,6 +44,7 @@ import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
+import { AulaContext } from './aula-context.ts';
 import { createMcpApp, type McpApp } from './setup.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
@@ -54,6 +55,12 @@ const HOST = process.env.AULA_MCP_HOST ?? '127.0.0.1';
 const logger = process.env.AULA_MCP_LOG === '1' ? consoleLogger('aula-mcp') : silentLogger;
 
 assertSafeBindAddress(HOST);
+
+// One AulaContext for every session on both transports. A context owns the
+// token refresh (de-duplicated per context), the AulaClient and its caches;
+// one per session meant each session refreshed and cached on its own and
+// held its own token-file watcher.
+const aulaContext = new AulaContext({ logger });
 
 // Streamable HTTP transport.
 //
@@ -182,7 +189,7 @@ async function handleMcp(request: Request): Promise<Response> {
 
   let createdSessionId: string | undefined;
 
-  const sessionApp = createMcpApp({ logger });
+  const sessionApp = createMcpApp({ logger, context: aulaContext });
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
@@ -260,9 +267,9 @@ app.delete('/mcp', (c) => handleMcp(c.req.raw));
 
 // Legacy MCP SSE transport — for clients that haven't moved to Streamable HTTP
 // yet, notably Home Assistant's official `mcp` (client) integration. Each
-// GET /sse opens a fresh session: own McpServer instance, own AulaContext,
-// own sessionId. POSTs to /messages?sessionId=… get routed back to the
-// matching session's transport.
+// GET /sse opens a fresh session: own McpServer instance, own sessionId.
+// POSTs to /messages?sessionId=… get routed back to the matching session's
+// transport.
 //
 // The session map is capped + idle-evicted. The MCP server defaults to
 // loopback, but the HA addon exposes it on the LAN, so an unbounded map is
@@ -345,9 +352,8 @@ app.get('/sse', (c) => {
       },
     });
     // McpServer.connect() binds a single transport, so we instantiate a
-    // fresh server per SSE connection. AulaContext is cheap to construct
-    // — it just lazily wraps the shared token store on first call.
-    const sessionApp = createMcpApp({ logger });
+    // fresh server per SSE connection; the AulaContext is shared.
+    const sessionApp = createMcpApp({ logger, context: aulaContext });
     sseSessions.set(sessionId, {
       transport: sseTransport,
       app: sessionApp,
