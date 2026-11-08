@@ -254,7 +254,7 @@ export class AulaContext {
  *   2. macOS + `security` available → KeychainTokenStore.
  *   3. Everything else → EncryptedFileTokenStore at AULA_MCP_DIR.
  */
-function defaultStore(): TokenStore {
+export function defaultStore(): TokenStore {
   if (KeychainTokenStore.isSupported() && process.env.AULA_MCP_NO_KEYCHAIN !== '1') {
     return new KeychainTokenStore();
   }
