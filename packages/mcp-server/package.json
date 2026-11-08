@@ -17,8 +17,8 @@
   "dependencies": {
     "@aula-mcp/aula-auth": "workspace:*",
     "@aula-mcp/aula-client": "workspace:*",
-    "@modelcontextprotocol/sdk": "^1.32.1",
-    "hono": "^4.13.14",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "hono": "^4.13.16",
     "pdf-parse": "^2.4.5",
     "qrcode": "^1.5.4",
     "zod": "^4.6.7"
