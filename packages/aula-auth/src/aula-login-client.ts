@@ -43,7 +43,7 @@ import {
   parseMitidVerificationToken,
   SHOW_IDP_LIST_FIELD,
 } from './aula-saml-flow.ts';
-import { AulaAuthError } from './errors.ts';
+import { AulaAuthError, AulaMaintenanceError, isAulaMaintenancePage } from './errors.ts';
 import { extractHiddenInputs, extractMetaRefreshUrl } from './html.ts';
 import { AulaHttpClient, type AulaResponse } from './http.ts';
 import type { Logger } from './logger.ts';
@@ -377,6 +377,9 @@ export class AulaLoginClient {
         if (isBotDefenseHost(url.host)) {
           throw new AulaBotDefenseError(botDefenseMessage(url.host, hop));
         }
+        if (isAulaMaintenancePage(res.body)) {
+          throw new AulaMaintenanceError(`silent re-authorize, hop ${hop}`);
+        }
         throw new AulaLoginError(
           `Silent SSO landed on unexpected host (${url.host}) at hop ${hop}`,
         );
@@ -465,6 +468,9 @@ export class AulaLoginClient {
         }
         if (isBotDefenseHost(url.host)) {
           throw new AulaBotDefenseError(botDefenseMessage(url.host, hop));
+        }
+        if (isAulaMaintenancePage(res.body)) {
+          throw new AulaMaintenanceError(`login, OAuth chain hop ${hop}`);
         }
         throw new AulaLoginError(
           `OAuth chain landed on unexpected host (${url.host}) at hop ${hop}`,

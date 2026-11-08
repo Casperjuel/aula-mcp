@@ -68,7 +68,13 @@ export {
   pkcs7Pad,
   pkcs7Unpad,
 } from './encoding.ts';
-export { AulaAuthError, HtmlParseError, RedirectLoopError } from './errors.ts';
+export {
+  AulaAuthError,
+  AulaMaintenanceError,
+  HtmlParseError,
+  isAulaMaintenancePage,
+  RedirectLoopError,
+} from './errors.ts';
 export {
   extractAllAttr,
   extractAttr,

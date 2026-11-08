@@ -54,6 +54,18 @@ jobs:
                 *broker.unilogin.dk*|*nemlog-in.mitid.dk*|*www.mitid.dk*)
                   echo "::notice::OAuth authorize endpoint healthy → $location"
                   ;;
+                https://login.aula.dk/\?*|https://login.aula.dk/)
+                  # During planned maintenance every login.aula.dk path 302s
+                  # to `/`, which serves a static notice with HTTP 200 (#139).
+                  # That is an outage, not MitID drift — don't page for it.
+                  if curl -sS --max-time 20 -H 'user-agent: aula-mcp-canary/1.0' "$location" \
+                    | grep -qiE 'aula bliver opdateret|aulainfo\.dk/driftstatus'; then
+                    echo "::notice::Aula is down for planned maintenance (see https://aulainfo.dk/driftstatus) — not drift."
+                  else
+                    echo "::error::Unexpected redirect target: $location"
+                    exit 2
+                  fi
+                  ;;
                 *)
                   echo "::error::Unexpected redirect target: $location"
                   exit 2
