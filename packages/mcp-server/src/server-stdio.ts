@@ -18,13 +18,21 @@
 
 import { silentLogger, stderrLogger } from '@aula-mcp/aula-auth';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { defaultStore } from './aula-context.ts';
 import { createMcpApp } from './setup.ts';
+import { startTokenKeepAlive } from './token-keepalive.ts';
 
 const logger = process.env.AULA_MCP_LOG === '1' ? stderrLogger('aula-mcp') : silentLogger;
 
 const { mcp } = createMcpApp({ logger });
 
 await mcp.connect(new StdioServerTransport());
+
+// Keep the access token renewed while the client has us running. Opt out with
+// AULA_MCP_KEEPALIVE=0.
+if (process.env.AULA_MCP_KEEPALIVE !== '0') {
+  startTokenKeepAlive({ store: defaultStore(), logger });
+}
 
 logger.info('aula-mcp.stdio_ready');
 
