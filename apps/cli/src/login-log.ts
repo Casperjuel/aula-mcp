@@ -9,7 +9,7 @@
  * No tokens are written — only metadata about the attempt.
  */
 
-import { appendFile, mkdir, readFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { loginLogPath } from './store.ts';
 
@@ -27,7 +27,11 @@ export interface LoginLogEntry {
 export async function appendLoginLog(entry: LoginLogEntry): Promise<void> {
   const path = loginLogPath();
   await mkdir(dirname(path), { recursive: true });
-  await appendFile(path, `${JSON.stringify(entry)}\n`, 'utf8');
+  // 0600 like the token files next to it: entries carry the MitID username.
+  // `mode` only applies when appendFile creates the file, so a log written
+  // with the old default is tightened explicitly.
+  await appendFile(path, `${JSON.stringify(entry)}\n`, { encoding: 'utf8', mode: 0o600 });
+  await chmod(path, 0o600).catch(() => {});
 }
 
 export async function readLoginLog(): Promise<LoginLogEntry[]> {
