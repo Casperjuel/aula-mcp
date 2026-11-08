@@ -347,6 +347,39 @@ export class AulaClient {
   }
 
   /**
+   * `groups.getGroupsByContext` — classes and groups the given children belong to.
+   * `childInstitutionProfileIds` are institution-profile ids (the `id` on a child
+   * in the discover manifest). Returns the raw `data` field.
+   */
+  async getGroups(childInstitutionProfileIds: number[]): Promise<unknown> {
+    const params = new URLSearchParams({ method: 'groups.getGroupsByContext' });
+    for (const id of childInstitutionProfileIds) {
+      params.append('childInstitutionProfileIds[]', String(id));
+    }
+    return this.getJsonRaw<unknown>(params);
+  }
+
+  /**
+   * `profiles.getContactlist` — members of one group (e.g. a class). Pages are
+   * 1-based. Returns the raw `data` field.
+   */
+  async getContactList(opts: {
+    groupId: number;
+    filter?: string;
+    page?: number;
+  }): Promise<unknown> {
+    const params = new URLSearchParams({
+      method: 'profiles.getContactlist',
+      groupId: String(opts.groupId),
+      filter: opts.filter ?? 'child',
+      field: 'name',
+      order: 'asc',
+      page: String(opts.page ?? 1),
+    });
+    return this.getJsonRaw<unknown>(params);
+  }
+
+  /**
    * `posts.getAllPosts` — class-level news feed (teacher posts, etc.).
    * Returns the raw `data` field. Pagination via `limit` + `index` (both 0-based).
    */
@@ -394,6 +427,24 @@ export class AulaClient {
     return this.postJson<unknown>(
       'messaging.setLastReadMessage',
       JSON.stringify({ threadId, messageId, commonInboxId: null, otpInboxId: null }),
+    );
+  }
+
+  /**
+   * `messaging.reply` — post a reply into an existing thread of the guardian's
+   * personal inbox. `html` is the message body as Aula stores it (HTML).
+   * Request shape from the reverse-engineered app (eisbaw/aulalibre); it has not
+   * been verified against a live account.
+   */
+  async replyToThread(threadId: number, html: string): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.reply',
+      JSON.stringify({
+        threadId,
+        message: { text: html, attachmentIds: [] },
+        commonInboxId: null,
+        bundleId: null,
+      }),
     );
   }
 
