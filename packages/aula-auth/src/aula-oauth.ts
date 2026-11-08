@@ -6,7 +6,7 @@
  * refresh-token grant, so both live here.
  */
 
-import { AulaAuthError } from './errors.ts';
+import { AulaAuthError, AulaMaintenanceError, isAulaMaintenancePage } from './errors.ts';
 import type { AulaHttpClient } from './http.ts';
 import type { Logger } from './logger.ts';
 import { silentLogger } from './logger.ts';
@@ -132,6 +132,32 @@ export async function exchangeAuthorizationCode(
   return tokens;
 }
 
+/**
+ * During an Aula maintenance window token.php answers 302 to `/` on the same
+ * host, and only that page carries the notice text (#139). Follow one such
+ * redirect, restricted to aula.dk hosts, and check it. Any failure here just
+ * means "not recognisably maintenance", so the caller reports the original
+ * error instead.
+ */
+async function redirectsToMaintenance(
+  http: AulaHttpClient,
+  res: { status: number; headers: Headers; body: string },
+  requestUrl: string,
+): Promise<boolean> {
+  if (isAulaMaintenancePage(res.body)) return true;
+  const loc = res.headers.get('location');
+  if (res.status < 300 || res.status >= 400 || !loc) return false;
+  try {
+    const target = new URL(loc, requestUrl);
+    if (target.protocol !== 'https:') return false;
+    if (target.hostname !== 'aula.dk' && !target.hostname.endsWith('.aula.dk')) return false;
+    const page = await http.request(target.toString(), { method: 'GET' });
+    return page.status === 200 && isAulaMaintenancePage(page.body);
+  } catch {
+    return false;
+  }
+}
+
 /** Refresh an access token using a previously-issued refresh token. */
 export async function refreshAccessToken(
   http: AulaHttpClient,
@@ -154,6 +180,9 @@ export async function refreshAccessToken(
     body,
   });
   if (res.status !== 200) {
+    if (await redirectsToMaintenance(http, res, oauthUrls.token(config))) {
+      throw new AulaMaintenanceError('token refresh');
+    }
     throw new OAuthError(`Token refresh failed (status ${res.status}): ${res.body.slice(0, 300)}`);
   }
   const tokens = parseTokenResponse(res.body, refreshToken);

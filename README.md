@@ -437,6 +437,7 @@ Et par issues fra `scaarup/aula`s tracker som jeg har taget højde for:
 | ------- | ---------------------- |
 | `aula login` hænger efter username-prompt | MitID-appen er ikke åbnet endnu, eller QR-koderne er ikke renderet (terminal for smal). Sørg for at terminalen er ≥ 80 kolonner. |
 | `aula login` fejler med "Unilogin refused this MitID identity ... private organisation" | Dit MitID er knyttet til en privat organisation, og Unilogin vil have login via "Lokalt login" → "MitID for privat organisation". Kør `aula login --idp private-organisation`. |
+| `Aula is down for maintenance` (login eller token-refresh) | Aula er lukket for opdatering og viser "Aula bliver opdateret". Ikke en fejl i aula-mcp — se [aulainfo.dk/driftstatus](https://aulainfo.dk/driftstatus) og prøv igen bagefter. Gemte tokens slettes ikke. |
 | `Login failed: MitID initialize failed (status …)` | nemlog-in.mitid.dk er ikke tilgængelig eller returnerede en fejl. Kør igen med `--debug` og inspicér transcripten. |
 | `Login failed: APP poll error: …` | MitID-appen afviste eller annullerede. Tjek at MitID-appen er logget ind på din konto. |
 | `Login failed: appProve failed (status …)` | Sjælden — MitID afviste SRP-proof'et. Kør igen med `--debug` og inspicér `~/.config/aula-mcp/transcripts/login-<timestamp>.jsonl`. |
