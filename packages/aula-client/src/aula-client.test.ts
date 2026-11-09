@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import type { AulaTokens } from '@aula-mcp/aula-auth';
 import { AulaClient } from './aula-client.ts';
+import {
+  type AulaNotification,
+  isKnownNotification,
+  KNOWN_NOTIFICATION_EVENT_TYPES,
+  type KnownNotification,
+} from './aula-types.ts';
 import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
 import { FakeHttp } from './test-helpers.ts';
 
@@ -669,5 +675,100 @@ describe('AulaClient.getPosts', () => {
 
     await c.getPosts({ institutionProfileIds: [1], onlyUnread: true });
     expect(http.requested.at(-1)?.url).toContain('isUnread=true');
+  });
+});
+
+describe('AulaClient.getNotifications', () => {
+  // Synthetic: shaped like responses observed live, but every id, title and
+  // timestamp is made up so no real family or school data lives in the repo.
+  const base = {
+    institutionProfileId: 1001,
+    institutionCode: '000000',
+    notificationType: 'Badge',
+    expires: '2030-01-03T08:00:00+00:00',
+    triggered: '2030-01-01T08:00:00+00:00',
+    relatedChildInstitutionProfileId: null,
+  };
+  const postShared = {
+    ...base,
+    notificationId: 'PostSharedWithMe:2001:Badge',
+    notificationEventType: 'PostSharedWithMe',
+    notificationArea: 'Posts',
+    postId: 2001,
+    postTitle: 'Example post',
+    groupId: null,
+    groupName: null,
+  } satisfies KnownNotification;
+  const newMedia = {
+    ...base,
+    notificationId: 'NewMedia:3001:Badge',
+    notificationEventType: 'NewMedia',
+    notificationArea: 'Album',
+    mediaId: 3001,
+    albumId: 3002,
+    relatedChildName: null,
+  } satisfies KnownNotification;
+  const unseen = {
+    ...base,
+    notificationId: 'SomethingNew:5001:Badge',
+    notificationEventType: 'SomethingNew',
+    notificationArea: 'Elsewhere',
+    someNewField: 'kept',
+  } satisfies AulaNotification;
+
+  async function fetchAll(): Promise<{ out: AulaNotification[]; url: string }> {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({ profiles: [] }) }); // version probe
+    http.enqueue({ status: 200, body: envelope({}) }); // profile-context bootstrap
+    http.enqueue({ status: 200, body: envelope([postShared, newMedia, unseen]) });
+    const out = await makeClient(http).getNotifications();
+    return { out, url: http.requested.at(-1)?.url ?? '' };
+  }
+
+  test('returns the bare array Aula answers with', async () => {
+    const { out, url } = await fetchAll();
+    expect(url).toContain('method=notifications.getNotificationsForActiveProfile');
+    expect(out).toHaveLength(3);
+  });
+
+  test('isKnownNotification narrows to the typed shapes and rejects unseen types', async () => {
+    const { out } = await fetchAll();
+    const [a, b, c] = out as [AulaNotification, AulaNotification, AulaNotification];
+    expect([a, b, c].map(isKnownNotification)).toEqual([true, true, false]);
+
+    // After the guard the discriminant is exhaustive; `never` makes a new
+    // union member without a branch here a compile error.
+    const describeKnown = (n: KnownNotification): number => {
+      switch (n.notificationEventType) {
+        case 'PostSharedWithMe':
+          return n.postId;
+        case 'NewMedia':
+          return n.mediaId;
+        default: {
+          const unreachable: never = n;
+          return unreachable;
+        }
+      }
+    };
+    expect([a, b].map((n) => (isKnownNotification(n) ? describeKnown(n) : -1))).toEqual([
+      2001, 3001,
+    ]);
+  });
+
+  test('an unseen event type keeps its extra fields', async () => {
+    const { out } = await fetchAll();
+    const last = out[2];
+    expect(last && !isKnownNotification(last) ? last.someNewField : undefined).toBe('kept');
+  });
+
+  test('KNOWN_NOTIFICATION_EVENT_TYPES lists every KnownNotification member', () => {
+    // The Record forces a key per union member at compile time; comparing it
+    // to the runtime tuple catches the guard's list falling behind.
+    const covered: Record<KnownNotification['notificationEventType'], true> = {
+      PostSharedWithMe: true,
+      NewMedia: true,
+    };
+    const listed: string[] = [...KNOWN_NOTIFICATION_EVENT_TYPES];
+    expect(listed.sort()).toEqual(Object.keys(covered).sort());
   });
 });
