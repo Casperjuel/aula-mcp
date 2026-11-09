@@ -43,7 +43,12 @@ import type {
   UpdatePresenceTemplateArgs,
 } from './aula-types.ts';
 import { PRESENCE_ACTIVITY_TYPE, type PresenceStatusCode } from './aula-types.ts';
-import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
+import {
+  AulaApiError,
+  AulaApiVersionError,
+  AulaClientError,
+  AulaStepUpRequiredError,
+} from './errors.ts';
 
 export interface AulaClientOptions {
   /** Tokens issued by AulaLoginClient. The access token is added as a query
@@ -62,6 +67,15 @@ export interface AulaClientOptions {
 }
 
 const DEFAULT_API_BASE_HOST = 'https://www.aula.dk';
+
+/** One entry of `consents.getConsentResponses`; only the identity part is read. */
+interface ConsentEntry {
+  institutionProfile?: {
+    id?: number;
+    /** `guardian` | `child`. */
+    role?: string;
+  };
+}
 
 /** GET methods that Aula refuses (HTTP 403) until the profile context is set
  *  — see ensureProfileContext. Measured for messaging.*; posts.* and
@@ -351,6 +365,42 @@ export class AulaClient {
    */
   async getNotifications(): Promise<unknown> {
     return this.getJson<unknown>('notifications.getNotificationsForActiveProfile');
+  }
+
+  /**
+   * Every institution-profile id for the logged-in guardian — guardians first,
+   * then children, across all institutions — from `consents.getConsentResponses`.
+   *
+   * This is what `getPosts` needs as `institutionProfileIds`: unscoped, Aula
+   * answers 200 with an empty feed. `profiles.getProfilesByLogin` is no
+   * substitute, it omits club (Klub/SFO) children that only the consent list
+   * carries. Only the logged-in user's own profiles appear, so the other
+   * parent can never leak in.
+   */
+  async getFamilyInstitutionProfileIds(): Promise<number[]> {
+    // Like the messaging/posts/notifications reads, this 403s on a client that
+    // hasn't activated the guardian profile yet (checked on a live account).
+    await this.ensureProfileContext('consents.getConsentResponses');
+    // rawRequest unwraps the Aula envelope to `.data`, so this is normally the
+    // entry array itself; accept the wrapped shape too.
+    const raw = (await this.rawRequest('consents.getConsentResponses', {
+      returnOnlyPendingConsentResponses: 'false',
+    })) as ConsentEntry[] | { data?: ConsentEntry[] } | null;
+    const entries = Array.isArray(raw) ? raw : (raw?.data ?? []);
+
+    const guardianIds: number[] = [];
+    const childIds: number[] = [];
+    for (const { institutionProfile: ip } of entries) {
+      if (!ip?.id) continue;
+      (ip.role === 'guardian' ? guardianIds : childIds).push(ip.id);
+    }
+    if (guardianIds.length === 0) {
+      throw new AulaClientError(
+        'getFamilyInstitutionProfileIds: consents.getConsentResponses returned no guardian ' +
+          'profile to authorize the request.',
+      );
+    }
+    return [...new Set([...guardianIds, ...childIds])];
   }
 
   /**
