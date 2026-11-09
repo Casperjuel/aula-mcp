@@ -26,6 +26,7 @@ import {
 } from '@aula-mcp/aula-auth';
 import type {
   AulaEnvelope,
+  AulaNotification,
   CalendarEvent,
   DailyOverviewEntry,
   GetCalendarEventsArgs,
@@ -42,8 +43,13 @@ import type {
   ThreadsPage,
   UpdatePresenceTemplateArgs,
 } from './aula-types.ts';
-import { PRESENCE_ACTIVITY_TYPE, type PresenceStatusCode } from './aula-types.ts';
+import {
+  isKnownNotification,
+  PRESENCE_ACTIVITY_TYPE,
+  type PresenceStatusCode,
+} from './aula-types.ts';
 import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
+import { postWebUrl, threadWebUrl } from './web-urls.ts';
 
 export interface AulaClientOptions {
   /** Tokens issued by AulaLoginClient. The access token is added as a query
@@ -277,7 +283,7 @@ export class AulaClient {
     if (opts.pageSize) params.pageSize = String(opts.pageSize);
     const data = await this.getJson<ThreadsData>('messaging.getThreads', params);
     return {
-      threads: data?.threads ?? [],
+      threads: (data?.threads ?? []).map((t) => ({ ...t, webUrl: threadWebUrl(t.id) })),
       page: data?.page ?? opts.page ?? 0,
       hasMorePages: data?.moreMessagesExist ?? false,
     };
@@ -347,10 +353,23 @@ export class AulaClient {
 
   /**
    * `notifications.getNotificationsForActiveProfile` — what's unread.
-   * Returns the raw `data` field; agents can format the shape they need.
+   *
+   * Aula has more event types than we've typed, so entries can be
+   * `UnknownNotification`; narrow with `isKnownNotification` before reading
+   * type-specific fields.
    */
-  async getNotifications(): Promise<unknown> {
-    return this.getJson<unknown>('notifications.getNotificationsForActiveProfile');
+  async getNotifications(): Promise<AulaNotification[]> {
+    const list = await this.getJson<AulaNotification[]>(
+      'notifications.getNotificationsForActiveProfile',
+    );
+    // Hand anything that isn't the array we've seen straight back, as before:
+    // the CLI's asArray tolerates other nestings and this shouldn't start throwing.
+    if (!Array.isArray(list)) return list;
+    return list.map((n) =>
+      isKnownNotification(n) && n.notificationEventType === 'PostSharedWithMe'
+        ? { ...n, webUrl: postWebUrl(n.postId) }
+        : n,
+    );
   }
 
   /**
@@ -404,7 +423,12 @@ export class AulaClient {
     for (const id of opts.institutionProfileIds ?? []) {
       params.append('institutionProfileIds[]', String(id));
     }
-    return this.getJsonRaw<PostsData>(params);
+    const data = await this.getJsonRaw<PostsData>(params);
+    if (!data?.posts) return data;
+    return {
+      ...data,
+      posts: data.posts.map((p) => (p.id == null ? p : { ...p, webUrl: postWebUrl(p.id) })),
+    };
   }
 
   /**

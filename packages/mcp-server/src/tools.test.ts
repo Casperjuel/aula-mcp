@@ -240,6 +240,13 @@ describe('slimPost', () => {
     expect(slim.attachments?.[0]?.url).toBe('https://cdn/plan.pdf');
   });
 
+  test('keeps webUrl when the client set one, and omits it otherwise', () => {
+    expect(slimPost({ id: 1, webUrl: 'https://www.aula.dk/portal/#/overblik/1' }).webUrl).toBe(
+      'https://www.aula.dk/portal/#/overblik/1',
+    );
+    expect('webUrl' in slimPost({ id: 1 })).toBe(false);
+  });
+
   test('falls back to timestamp when publishAt is absent', () => {
     expect(slimPost({ timestamp: '2026-05-05T08:00:00Z' }).date).toBe('2026-05-05T08:00:00Z');
   });

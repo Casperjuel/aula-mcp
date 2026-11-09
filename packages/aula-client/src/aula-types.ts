@@ -313,6 +313,11 @@ export interface PostAttachment {
 
 export interface AulaPost {
   id?: number;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
   title?: string;
   publishAt?: string;
   timestamp?: string;
@@ -342,12 +347,101 @@ export interface GetPostsArgs {
 }
 
 // --------------------------------------------------------------------------
+// notifications.*
+// --------------------------------------------------------------------------
+
+/**
+ * Fields every notification carries, whatever its event type.
+ *
+ * Shapes below were observed on live responses, not taken from Aula docs —
+ * a field typed `| null` was only ever seen as null, so its non-null type is
+ * a best guess. Only event types seen with a complete payload are listed.
+ */
+interface NotificationBase {
+  /**
+   * `<eventType>:<entityId>:<notificationType>`. Aula can emit an `Alert` and a
+   * `Badge` variant for the same event; they differ only in the last segment.
+   * To treat them as one, drop just that segment — keying on `entityId` alone
+   * would also merge a later "changed"/"cancelled" notification for the same
+   * entity into the first.
+   */
+  notificationId: string;
+  institutionProfileId: number;
+  institutionCode: string;
+  /** Where in the app the notification lands, e.g. `Posts`, `Album`, `Calendar`. */
+  notificationArea: string;
+  /** Observed: `Badge`, `Alert`. */
+  notificationType: string;
+  /** ISO 8601. */
+  expires: string;
+  /** ISO 8601. */
+  triggered: string;
+  relatedChildInstitutionProfileId: number | null;
+}
+
+/** A post was shared with the guardian directly. */
+export interface PostSharedWithMeNotification extends NotificationBase {
+  notificationEventType: 'PostSharedWithMe';
+  postId: number;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient` from `postId`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
+  postTitle: string;
+  groupId: number | null;
+  groupName: string | null;
+}
+
+/** New photo/video in a gallery album. */
+export interface NewMediaNotification extends NotificationBase {
+  notificationEventType: 'NewMedia';
+  mediaId: number;
+  albumId: number;
+  relatedChildName: string | null;
+}
+
+export type KnownNotification = PostSharedWithMeNotification | NewMediaNotification;
+
+/**
+ * Any event type we haven't seen yet. Aula has more than the three above, so
+ * `getNotifications()` can't promise a `KnownNotification` — narrow with
+ * `isKnownNotification` first.
+ */
+export interface UnknownNotification extends NotificationBase {
+  notificationEventType: string;
+  [field: string]: unknown;
+}
+
+export type AulaNotification = KnownNotification | UnknownNotification;
+
+export const KNOWN_NOTIFICATION_EVENT_TYPES = [
+  'PostSharedWithMe',
+  'NewMedia',
+] as const satisfies readonly KnownNotification['notificationEventType'][];
+
+/**
+ * Narrows to the event types with a typed shape. On `UnknownNotification`
+ * `notificationEventType` is a plain `string`, so a bare
+ * `n.notificationEventType === 'NewMedia'` check can't exclude it — this guard
+ * is what makes a `switch` on the discriminant exhaustive.
+ */
+export function isKnownNotification(n: AulaNotification): n is KnownNotification {
+  return (KNOWN_NOTIFICATION_EVENT_TYPES as readonly string[]).includes(n.notificationEventType);
+}
+
+// --------------------------------------------------------------------------
 // messaging.*
 // --------------------------------------------------------------------------
 
 export interface MessageThread {
   id: number;
   read: boolean;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
   subject?: string;
   /** Latest message's preview, when included. */
   lastMessage?: { sendDateTime?: string; sender?: { fullName?: string } };
