@@ -772,3 +772,96 @@ describe('AulaClient.getNotifications', () => {
     expect(listed.sort()).toEqual(Object.keys(covered).sort());
   });
 });
+
+describe('AulaClient web links', () => {
+  test('threads carry a webUrl built from their id', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // version probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      {
+        status: 200,
+        body: envelope({
+          threads: [
+            { id: 1001, read: false },
+            { id: 1002, read: true },
+          ],
+        }),
+      },
+    );
+    const { threads } = await makeClient(http).getThreadsPage();
+    expect(threads.map((t) => t.webUrl)).toEqual([
+      'https://www.aula.dk/portal/#/beskeder/1001',
+      'https://www.aula.dk/portal/#/beskeder/1002',
+    ]);
+  });
+
+  test('posts carry a webUrl, and a post without an id is left alone', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) },
+      { status: 200, body: envelope({ posts: [{ id: 2001, title: 'a' }, { title: 'no id' }] }) },
+    );
+    const data = await makeClient(http).getPosts({ institutionProfileIds: [1] });
+    expect(data?.posts?.[0]?.webUrl).toBe('https://www.aula.dk/portal/#/overblik/2001');
+    expect(data?.posts?.[1]).toEqual({ title: 'no id' });
+  });
+
+  test('only shared-post notifications get a webUrl', async () => {
+    const base = {
+      institutionProfileId: 1001,
+      institutionCode: '000000',
+      notificationType: 'Badge',
+      expires: '2030-01-03T08:00:00+00:00',
+      triggered: '2030-01-01T08:00:00+00:00',
+      relatedChildInstitutionProfileId: null,
+    };
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) },
+      {
+        status: 200,
+        body: envelope([
+          {
+            ...base,
+            notificationId: 'PostSharedWithMe:2001:Badge',
+            notificationEventType: 'PostSharedWithMe',
+            notificationArea: 'Posts',
+            postId: 2001,
+            postTitle: 'Example post',
+            groupId: null,
+            groupName: null,
+          },
+          {
+            ...base,
+            notificationId: 'NewMedia:3001:Badge',
+            notificationEventType: 'NewMedia',
+            notificationArea: 'Album',
+            mediaId: 3001,
+            albumId: 3002,
+            relatedChildName: null,
+          },
+        ]),
+      },
+    );
+    const [shared, media] = await makeClient(http).getNotifications();
+    expect(shared && 'webUrl' in shared ? shared.webUrl : undefined).toBe(
+      'https://www.aula.dk/portal/#/overblik/2001',
+    );
+    expect(media && 'webUrl' in media).toBe(false);
+  });
+
+  test('a notifications payload that is not an array is handed back untouched', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) },
+      { status: 200, body: envelope({ notifications: [] }) },
+    );
+    // Typed as an array, but the CLI tolerates other nestings, so compare loosely.
+    const out: unknown = await makeClient(http).getNotifications();
+    expect(out).toEqual({ notifications: [] });
+  });
+});
