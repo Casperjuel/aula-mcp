@@ -98,49 +98,6 @@ function currentWeekRange(): { from: string; to: string } {
   return { from: isoDate(monday), to: isoDate(sunday) };
 }
 
-type ConsentEntry = {
-  institutionProfile?: {
-    id?: number;
-    role?: string; // "guardian" | "child"
-  };
-};
-
-/**
- * Every institution profile (guardian + child, across all institutions) for
- * the authenticated guardian, read from consents.getConsentResponses — the
- * only endpoint that surfaces the club child identity that profiles.list and
- * discover both omit. Returns a guardian id first so the posts call is
- * authorized. Only the logged-in user's own profiles appear here, so the
- * other parent can never leak in.
- */
-async function resolveFamilyProfileIds(
-  client: Awaited<ReturnType<AulaContext['getClient']>>,
-): Promise<number[]> {
-  // rawRequest unwraps the Aula envelope to `.data`, so this is the
-  // consent-entry array directly. Guard against either shape regardless.
-  const raw = (await client.rawRequest('consents.getConsentResponses', {
-    returnOnlyPendingConsentResponses: 'false',
-  })) as { data?: ConsentEntry[] } | ConsentEntry[] | null;
-
-  const entries: ConsentEntry[] = Array.isArray(raw) ? raw : (raw?.data ?? []);
-
-  const guardianIds: number[] = [];
-  const childIds: number[] = [];
-  for (const { institutionProfile: ip } of entries) {
-    if (!ip?.id) continue;
-    (ip.role === 'guardian' ? guardianIds : childIds).push(ip.id);
-  }
-
-  if (guardianIds.length === 0) {
-    throw new Error(
-      'resolveFamilyProfileIds: consents.getConsentResponses returned no guardian ' +
-        'profile to authorize the request.',
-    );
-  }
-  // Guardian(s) first, then children; dedupe.
-  return [...new Set([...guardianIds, ...childIds])];
-}
-
 interface PdfTextResult {
   text: string;
   total: number;
@@ -690,7 +647,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     async (args) => {
       const client = await context.getClient();
       await context.getGuardianUserId();
-      const ids = args.childInstitutionProfileIds ?? (await resolveFamilyProfileIds(client));
+      const ids =
+        args.childInstitutionProfileIds ?? (await client.getFamilyInstitutionProfileIds());
       return jsonContent(await client.getGroups(ids));
     },
   );
@@ -758,7 +716,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       // Profile-scoped feed needs the guardian profile activated, or Aula 403s.
       await context.getGuardianUserId();
 
-      const institutionProfileIds = args.profileIds ?? (await resolveFamilyProfileIds(client));
+      const institutionProfileIds =
+        args.profileIds ?? (await client.getFamilyInstitutionProfileIds());
 
       const result = await client.getPosts({
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
