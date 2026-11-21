@@ -265,6 +265,7 @@ export function slimPost(post: AulaPost) {
 
   return {
     id: post.id, // needed for aula.posts.get_attachment's postId
+    ...(post.webUrl ? { webUrl: post.webUrl } : {}),
     title: post.title,
     date: post.publishAt ?? post.timestamp,
     author: post.ownerProfile?.fullName,
@@ -334,6 +335,14 @@ export function validateSetTemplateArgs(args: SetTemplateArgs): string[] {
   }
   return problems;
 }
+
+/**
+ * Appended to the descriptions of tools whose results carry `webUrl`, so the
+ * agent knows what the link is good for — and what it isn't.
+ */
+const WEB_URL_NOTE =
+  ' Each item has a `webUrl`: an in-app route (`#/...` on www.aula.dk) that opens in a ' +
+  'browser with a logged-in Aula session, not in the Aula app.';
 
 export function registerTools(server: McpServer, context: AulaContext): void {
   // --- aula.discover -------------------------------------------------------
@@ -810,7 +819,10 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     'aula.notifications.list',
     {
       title: 'Aula notifications',
-      description: 'Unread items + activity for the active guardian profile.',
+      description:
+        'Unread items + activity for the active guardian profile. `webUrl` is set on ' +
+        'shared-post notifications only; it is an in-app route (`#/...` on www.aula.dk) that opens ' +
+        'in a browser with a logged-in Aula session, not in the Aula app.',
       inputSchema: {},
     },
     async () => {
@@ -887,7 +899,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       title: 'Aula posts (class news feed)',
       description:
         'Teacher posts and class-level updates, across every institution the ' +
-        'family belongs to (school and club).',
+        'family belongs to (school and club).' +
+        WEB_URL_NOTE,
       inputSchema: {
         limit: z.number().int().min(1).max(50).optional(),
         index: z.number().int().min(0).optional(),
@@ -976,7 +989,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         'content cannot be read gets `latest: { readable: false, error, message, action, ' +
         'retryable }` and, for sensitive threads, `sensitive: true`; its subject and ' +
         'sender are still listed. Show those rows as "needs MitID approval" and relay ' +
-        '`action` once, not per thread.',
+        '`action` once, not per thread.' +
+        WEB_URL_NOTE,
       inputSchema: {
         page: z.number().int().min(0).default(0).optional(),
         includeContent: z

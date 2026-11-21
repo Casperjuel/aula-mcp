@@ -74,6 +74,7 @@ export {
   SystematicClient,
   type SystematicOptions,
 } from './integrations/index.ts';
+export { postWebUrl, threadWebUrl } from './web-urls.ts';
 export {
   isWidgetTokenExpiredResponse,
   type WidgetExpiredSignal,

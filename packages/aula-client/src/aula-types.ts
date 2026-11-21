@@ -313,6 +313,11 @@ export interface PostAttachment {
 
 export interface AulaPost {
   id?: number;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
   title?: string;
   publishAt?: string;
   timestamp?: string;
@@ -378,6 +383,11 @@ interface NotificationBase {
 export interface PostSharedWithMeNotification extends NotificationBase {
   notificationEventType: 'PostSharedWithMe';
   postId: number;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient` from `postId`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
   postTitle: string;
   groupId: number | null;
   groupName: string | null;
@@ -427,6 +437,11 @@ export function isKnownNotification(n: AulaNotification): n is KnownNotification
 export interface MessageThread {
   id: number;
   read: boolean;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
   subject?: string;
   /** Latest message's preview, when included. */
   lastMessage?: { sendDateTime?: string; sender?: { fullName?: string } };
