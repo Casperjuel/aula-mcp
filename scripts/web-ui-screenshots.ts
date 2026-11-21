@@ -129,16 +129,15 @@ await mkdir(OUT, { recursive: true });
 const month = "localStorage.removeItem('aulamcp-cal-view')";
 const openAlbum = "document.querySelector('.album').click()";
 
-await shot('oversigt-light', { hash: 'oversigt', width: 1440, theme: 'light', full: true });
-await shot('oversigt-dark', { hash: 'oversigt', width: 1440, theme: 'dark' });
-await shot('oversigt-phone', { hash: 'oversigt', width: 390, theme: 'light' });
+await shot('oversigt', { hash: 'oversigt', width: 1440, theme: 'dark', full: true });
+await shot('oversigt-phone', { hash: 'oversigt', width: 390, theme: 'dark' });
 await shot('genveje-phone', {
   hash: 'oversigt',
   width: 390,
   theme: 'dark',
   steps: [click('Genveje')],
 });
-await shot('kalender-maaned', { hash: 'kalender', width: 1440, theme: 'light', steps: [month] });
+await shot('kalender-maaned', { hash: 'kalender', width: 1440, theme: 'dark', steps: [month] });
 await shot('kalender-uge', {
   hash: 'kalender',
   width: 1440,
@@ -148,7 +147,7 @@ await shot('kalender-uge', {
 await shot('kalender-ferie', {
   hash: 'kalender',
   width: 1440,
-  theme: 'light',
+  theme: 'dark',
   steps: [
     click('Uge'),
     'document.querySelector(\'[aria-label="Næste"]\').click()',
@@ -156,20 +155,14 @@ await shot('kalender-ferie', {
   ],
 });
 await shot('kalender-phone', { hash: 'kalender', width: 390, theme: 'dark', steps: [month] });
-await shot('gennemse', { hash: 'gennemse', width: 1440, theme: 'light' });
-await shot('gennemse-dark', {
-  hash: 'gennemse',
-  width: 1440,
-  theme: 'dark',
-  steps: ["document.querySelector('.item, .row, [data-id]')?.click()"],
-});
+await shot('gennemse', { hash: 'gennemse', width: 1440, theme: 'dark' });
 await shot('sync', { hash: 'sync', width: 1440, theme: 'dark' });
-await shot('log', { hash: 'log', width: 1440, theme: 'light' });
+await shot('log', { hash: 'log', width: 1440, theme: 'dark' });
 await shot('galleri', { hash: 'galleri', width: 1440, theme: 'dark' });
 await shot('galleri-album-phone', {
   hash: 'galleri',
   width: 390,
-  theme: 'light',
+  theme: 'dark',
   steps: [openAlbum],
 });
 await shot('galleri-billede', {
@@ -178,9 +171,9 @@ await shot('galleri-billede', {
   theme: 'dark',
   steps: [openAlbum, "document.querySelector('.thumb').click()"],
 });
-await shot('vaerktoejer', { hash: 'vaerktoejer', width: 1440, theme: 'light' });
+await shot('vaerktoejer', { hash: 'vaerktoejer', width: 1440, theme: 'dark' });
 await shot('live', { hash: 'live', width: 1440, theme: 'dark' });
-await shot('gemt', { hash: 'gemt', width: 1440, theme: 'light' });
+await shot('gemt', { hash: 'gemt', width: 1440, theme: 'dark' });
 
 if (errors.length) console.warn(`page errors:\n${errors.join('\n')}`);
 ws.close();

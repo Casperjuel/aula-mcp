@@ -15,9 +15,7 @@ Demoen sender intet til Aula. Knapper, der ville ændre noget i Aula (meld syg, 
 
 Login-status, børnene med dagens komme/gå, hvad der er gemt, synkroniseringen, galleriet og de næste begivenheder.
 
-![Oversigt, lyst tema](./web-ui/oversigt-light.png)
-
-![Oversigt, mørkt tema](./web-ui/oversigt-dark.png)
+![Oversigt](./web-ui/oversigt.png)
 
 På telefonen, og menuen **Genveje** for et barn: meld syg, ændr komme/gå, meld eller fjern ferie/fri og svar på ferieregistreringer. Alt, der ændrer noget i Aula, skal bekræftes på siden først.
 
@@ -43,8 +41,6 @@ Måned, uge og liste. Ferie/fri, du selv har meldt, er gul; ferie/fri, som en an
 Alt, hvad synkroniseringen har gemt: beskeder, opslag, notifikationer, kalender, fremmøde, grupper og galleri, med søgning og filtre.
 
 ![Gennemse](./web-ui/gennemse.png)
-
-![Gennemse, mørkt tema](./web-ui/gennemse-dark.png)
 
 ## Galleri
 
