@@ -388,25 +388,26 @@ button.li { width: 100%; background: none; border-left: 0; border-right: 0; bord
 :root {
   --hue-blue: #2f5f9e; --hue-blue-soft: #e2ebf7; --hue-teal: #1f7373; --hue-teal-soft: #dbefee;
   --hue-violet: #6b4fa0; --hue-violet-soft: #ece6f5; --hue-rose: #a83b56; --hue-rose-soft: #f6e1e7;
-  --hue-sand: #76603c; --hue-sand-soft: #efe8db;
+  --hue-sand: #76603c; --hue-sand-soft: #efe8db; --hue-slate: #3f5a78; --hue-slate-soft: #e1e7ef;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --hue-blue: #8fb4e8; --hue-blue-soft: #1c2a3d; --hue-teal: #6cc8c4; --hue-teal-soft: #15302f;
     --hue-violet: #b9a3e3; --hue-violet-soft: #2a2240; --hue-rose: #ec8fa6; --hue-rose-soft: #3b1c25;
-    --hue-sand: #cdb88f; --hue-sand-soft: #2f281c;
+    --hue-sand: #cdb88f; --hue-sand-soft: #2f281c; --hue-slate: #a7bbd3; --hue-slate-soft: #1e2733;
   }
 }
 :root[data-theme="dark"] {
   --hue-blue: #8fb4e8; --hue-blue-soft: #1c2a3d; --hue-teal: #6cc8c4; --hue-teal-soft: #15302f;
   --hue-violet: #b9a3e3; --hue-violet-soft: #2a2240; --hue-rose: #ec8fa6; --hue-rose-soft: #3b1c25;
-  --hue-sand: #cdb88f; --hue-sand-soft: #2f281c;
+  --hue-sand: #cdb88f; --hue-sand-soft: #2f281c; --hue-slate: #a7bbd3; --hue-slate-soft: #1e2733;
 }
 .ev-blue { --c: var(--hue-blue); --cs: var(--hue-blue-soft); }
 .ev-teal { --c: var(--hue-teal); --cs: var(--hue-teal-soft); }
 .ev-violet { --c: var(--hue-violet); --cs: var(--hue-violet-soft); }
 .ev-rose { --c: var(--hue-rose); --cs: var(--hue-rose-soft); }
 .ev-sand { --c: var(--hue-sand); --cs: var(--hue-sand-soft); }
+.ev-slate { --c: var(--hue-slate); --cs: var(--hue-slate-soft); }
 .ev-amber { --c: var(--warn); --cs: var(--warn-soft); }
 .ev-green { --c: var(--accent); --cs: var(--accent-soft); }
 .ev-grey { --c: var(--muted); --cs: var(--surface-2); }
@@ -1756,11 +1757,14 @@ const EV_TYPES = {
   performance_meeting: ['Udviklingssamtale', 'violet'],
   holiday: ['Helligdag/fridag', 'rose'],
   presence_holiday: ['Ferie/fri (fremmøde)', 'amber'],
+  // A coming ferie/fri the parent did not register (made by the institution or
+  // someone else): Aula lists the parent's own in their ferie announcements.
+  presence_holiday_other: ['Ferie/fri, ikke meldt af dig', 'slate'],
   vacation_registration: ['Ferieregistrering', 'sand'],
   lesson: ['Lektion', 'grey'],
   other: ['Andet', 'grey'],
 };
-const NOT_IN_AGENDA = ['lesson', 'holiday', 'presence_holiday'];
+const NOT_IN_AGENDA = ['lesson', 'holiday', 'presence_holiday', 'presence_holiday_other'];
 const evHue = (type) => (EV_TYPES[type] ? EV_TYPES[type][1] : 'grey');
 const typePill = (e) => el('span', { class: 'ev-pill ev-' + evHue(e.type) }, e.label);
 
@@ -1869,9 +1873,9 @@ async function calLoad() {
       : getJson('data/activity?since=' + Math.floor(midnight(from) / 1000) + '&until=' + until).catch(() => ({ days: [] }));
     try {
       // Starts up to two weeks earlier, so a holiday that began before still shows.
-      const [rows, a] = await Promise.all([calFetch(Math.floor(midnight(addDays(from, -14)) / 1000), until), act]);
+      const [rows, a, own] = await Promise.all([calFetch(Math.floor(midnight(addDays(from, -14)) / 1000), until), act, ownVacationIds()]);
       if (seq !== calSeq) return;
-      c.items = rows.map(calEv).filter((e) => e && e.ek >= from && e.sk < to).sort(byStart);
+      c.items = rows.map(calEv).filter((e) => e && e.ek >= from && e.sk < to).map((e) => markOtherFerie(e, own)).sort(byStart);
       c.act = new Map((a.days || []).map((d) => [d.day, d.counts]));
     } catch (err) {
       if (seq !== calSeq) return;
@@ -1879,6 +1883,20 @@ async function calLoad() {
     }
   }
   renderCal();
+}
+// Ids of the ferie/fri the parent registered, as Aula lists them: only current
+// and coming ones. Null when that cannot be told (a shared view, no Aula login).
+async function ownVacationIds() {
+  if (state.owner) return null;
+  try { return new Set((await getJson('data/children/vacations')).vacations.map((v) => String(v.vacationId))); }
+  catch (err) { return null; }
+}
+// A coming ferie/fri that is not one of the parent's own gets its own colour.
+// Past ones are left as they are: Aula no longer lists them, so who made them
+// is not known.
+function markOtherFerie(e, own) {
+  if (!own || e.type !== 'presence_holiday' || e.ek < dayKey(Date.now()) || own.has(String(e.id))) return e;
+  return Object.assign({}, e, { type: 'presence_holiday_other', label: EV_TYPES.presence_holiday_other[0] });
 }
 const childNames = () => {
   const m = new Map();
