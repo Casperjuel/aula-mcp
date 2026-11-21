@@ -25,7 +25,9 @@
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
     "format": "biome format --write .",
-    "docs:tools": "bun scripts/docs-tools.ts"
+    "docs:tools": "bun scripts/docs-tools.ts",
+    "demo:web-ui": "bun scripts/web-ui-demo.ts",
+    "docs:web-ui": "bun scripts/web-ui-screenshots.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",

@@ -40,6 +40,7 @@ TypeScript + Bun + Hono. Bygget på skuldrene af [`scaarup/aula`](https://github
 - [Kom i gang](#kom-i-gang)
 - [Forbind til Claude Code (eller claude.ai)](#forbind-til-claude-code-eller-claudeai)
 - [Home Assistant (Assist + Voice)](./docs/home-assistant.md)
+- [Web-UI med skærmbilleder](./docs/web-ui.md)
 - [Self-hosting](#self-hosting)
 - [Hvad er der i manifestet](#hvad-er-der-i-manifestet)
 - [CLI-kommandoer](#cli-kommandoer)
@@ -292,7 +293,7 @@ Agenter kalder `aula.discover` én gang og genbruger resultatet resten af sessio
 
 ![aula.discover-manifest pretty-printet](./docs/demos/discover.gif)
 
-Den fulde liste over værktøjer, med beskrivelse og parametre, står i [docs/tools.md](./docs/tools.md) (genereres med `bun run docs:tools`). Setup-UI'ets side **Mine data** (`/data`) viser den samme liste, hvad aula-mcp gemmer om dig, og hvad den kan læse live fra Aula.
+Den fulde liste over værktøjer, med beskrivelse og parametre, står i [docs/tools.md](./docs/tools.md) (genereres med `bun run docs:tools`). Setup-UI'ets side **Mine data** (`/data`) viser den samme liste, hvad aula-mcp gemmer om dig, og hvad den kan læse live fra Aula. Skærmbilleder af alle siderne, med opdigtede eksempeldata, står i [docs/web-ui.md](./docs/web-ui.md).
 
 Form:
 
