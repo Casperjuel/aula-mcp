@@ -38,10 +38,11 @@ function sign(claims: JWTPayload, opts: { key?: CryptoKey; expiresIn?: string } 
     .sign(opts.key ?? signingKey);
 }
 
-function verifier() {
+function verifier(acceptIdTokens = false) {
   return createOidcVerifier({
     issuer: ISSUER,
     audience: AUDIENCE,
+    acceptIdTokens,
     keys: createLocalJWKSet({ keys: [publicJwk] }),
   });
 }
@@ -96,6 +97,13 @@ describe('createOidcVerifier', () => {
     expect((await rejection(verifier()(`Bearer ${token}`))).code).toBe('invalid_token');
   });
 
+  test('accepts an ID token only when configured, and still checks its audience', async () => {
+    const idToken = await sign({ typ: 'ID', aud: ['kagent', AUDIENCE] });
+    expect(await verifier(true)(`Bearer ${idToken}`)).toEqual({ issuer: ISSUER, sub: 'parent-a' });
+    const otherAudience = await sign({ typ: 'ID', aud: 'kagent' });
+    expect((await rejection(verifier(true)(`Bearer ${otherAudience}`))).code).toBe('invalid_token');
+  });
+
   test('rejects a token without a subject', async () => {
     const token = await sign({ sub: '' });
     expect((await rejection(verifier()(`Bearer ${token}`))).code).toBe('invalid_token');
@@ -132,14 +140,14 @@ describe('discovery', () => {
 
   test('finds the keys through the issuer', async () => {
     advertisedIssuer = undefined;
-    const verify = createOidcVerifier({ issuer, audience: AUDIENCE });
+    const verify = createOidcVerifier({ issuer, audience: AUDIENCE, acceptIdTokens: false });
     const token = await sign({ iss: issuer });
     expect(await verify(`Bearer ${token}`)).toEqual({ issuer, sub: 'parent-a' });
   });
 
   test('an issuer mismatch is a 503, and discovery is retried', async () => {
     advertisedIssuer = () => 'https://someone-else.example.com';
-    const verify = createOidcVerifier({ issuer, audience: AUDIENCE });
+    const verify = createOidcVerifier({ issuer, audience: AUDIENCE, acceptIdTokens: false });
     const request = () =>
       new Request('http://localhost/mcp', { headers: { authorization: 'Bearer x.y.z' } });
 

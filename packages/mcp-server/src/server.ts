@@ -43,6 +43,8 @@
  *                               Aula session (see server-mode.ts). Requires:
  *   AULA_MCP_OIDC_ISSUER      — the IdP issuer URL (the tokens' `iss`)
  *   AULA_MCP_OIDC_AUDIENCE    — the audience aula-mcp's tokens carry (`aud`)
+ *   AULA_MCP_OIDC_ACCEPT_ID_TOKEN — 1 to also accept ID tokens (kagent behind
+ *                               oauth2-proxy forwards only those). Default 0.
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
