@@ -65,8 +65,11 @@ import {
   ownChildren,
   sendSickReport,
   sickReportRefusal,
+  type VacationAnswerDay,
+  vacationAnswerProblems,
   vacationDays,
   vacationProblems,
+  vacationRequests,
 } from './child-actions.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
@@ -595,6 +598,75 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     await auditOf(c)?.({
       category: 'aula',
       action: 'presence_add_vacation',
+      ok: true,
+      durationMs: Date.now() - started,
+      details,
+    });
+    return c.json({ ok: true });
+  });
+
+  // The institution's ferie requests (ferieregistrering) and the answer to one.
+  app.get('/data/children/vacation-requests', async (c) => {
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    try {
+      return c.json({ requests: await vacationRequests(client) });
+    } catch (err) {
+      return aulaFailed(c, 'vacation_requests', err);
+    }
+  });
+
+  app.post('/data/children/vacation-requests/answer', async (c) => {
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const { childId, responseId } = body;
+    const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
+    const days: VacationAnswerDay[] = [];
+    for (const d of Array.isArray(body.days) ? (body.days as unknown[]) : []) {
+      const row = (d ?? {}) as Record<string, unknown>;
+      if (typeof row.date !== 'string' || typeof row.isComing !== 'boolean') {
+        return c.json({ error: 'each day needs date and isComing' }, 400);
+      }
+      days.push({
+        date: row.date,
+        isComing: row.isComing,
+        ...(typeof row.entryTime === 'string' && row.entryTime ? { entryTime: row.entryTime } : {}),
+        ...(typeof row.exitTime === 'string' && row.exitTime ? { exitTime: row.exitTime } : {}),
+      });
+    }
+    if (!Number.isSafeInteger(childId) || !Number.isSafeInteger(responseId)) {
+      return c.json({ error: 'give childId, responseId and days' }, 400);
+    }
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const started = Date.now();
+    const details = { days: days.length, coming: days.filter((d) => d.isComing).length };
+    try {
+      const request = (await vacationRequests(client)).find(
+        (r) => r.childId === childId && r.responseId === responseId,
+      );
+      if (!request) return c.json({ error: 'no such ferie request' }, 404);
+      const problems = vacationAnswerProblems(request, days, comment);
+      if (problems.length > 0) return c.json({ error: problems.join(' ') }, 400);
+      await client.respondToVacationRequest({
+        childId: request.childId,
+        responseId: request.responseId,
+        days,
+        ...(comment ? { comment } : {}),
+      });
+    } catch (err) {
+      await auditOf(c)?.({
+        category: 'aula',
+        action: 'presence_answer_vacation_request',
+        ok: false,
+        durationMs: Date.now() - started,
+        details: { ...details, error: (err as Error).message.slice(0, 300) },
+      });
+      return aulaFailed(c, 'vacation_answer', err);
+    }
+    await auditOf(c)?.({
+      category: 'aula',
+      action: 'presence_answer_vacation_request',
       ok: true,
       durationMs: Date.now() - started,
       details,

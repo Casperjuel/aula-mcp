@@ -21,12 +21,15 @@ import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
 import {
+  childrenToday,
   ownChildren,
   sendSickReport,
   sickReportRefusal,
   VACATION_COMMENT_MAX,
+  vacationAnswerProblems,
   vacationDays,
   vacationProblems,
+  vacationRequests,
 } from './child-actions.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
@@ -502,6 +505,55 @@ export function registerTools(
     },
   );
 
+  // --- aula.presence.children_today ----------------------------------------
+
+  server.registerTool(
+    'aula.presence.children_today',
+    {
+      title: "My children's status today",
+      description:
+        "Each of the logged-in guardian's own children with today's presence in plain " +
+        'words: id, name, status code and Danish label (Ikke kommet, Syg, Ferie/fri, ' +
+        'Kommet, På tur, Sover, Fritidsaktivitet, Fysisk placering, Gået), the planned ' +
+        'drop-off and pickup (entryTime, exitTime), the actual check-in and check-out, ' +
+        'the henteform (activityType) and who picks up (exitWith). Needs no ids, so it ' +
+        'is the quickest answer to "is my child at school?" and the step before ' +
+        'aula.presence.report_sick. Read-only.',
+      inputSchema: {},
+    },
+    async () => {
+      const client = await context.getClient();
+      return jsonContent({ children: await childrenToday(client) });
+    },
+  );
+
+  // --- aula.presence.vacation_requests -------------------------------------
+  //
+  // presence.getVacationRegistrationsByChildren, as nickknissen/aula reads it.
+
+  server.registerTool(
+    'aula.presence.vacation_requests',
+    {
+      title: 'Ferie requests from the institution',
+      description:
+        "The school's or SFO's ferie requests (ferieregistrering) for the logged-in " +
+        "guardian's own children: the institution asks, for a holiday period, on which " +
+        'days the child comes. Per request: child, registrationId, responseId, title, ' +
+        'the period (startDate–endDate), the answer deadline, the note to the guardian, ' +
+        'missingAnswer (Aula still waits for an answer), editable (an answer may still ' +
+        'be given or changed) and timesRequired (days the child comes need drop-off and ' +
+        'pickup times). Unanswered requests come first. Answer one with ' +
+        'aula.presence.answer_vacation_request. This lists requests the institution ' +
+        "made, not ferie the guardian registered (see aula.presence.templates' " +
+        'isOnVacation for that). Read-only.',
+      inputSchema: {},
+    },
+    async () => {
+      const client = await context.getClient();
+      return jsonContent({ requests: await vacationRequests(client) });
+    },
+  );
+
   // --- aula.messages.mark_read / mark_unread (write, on by default) -------
   //
   // Writes to Aula, but only the guardian's own read state, and each can undo
@@ -832,8 +884,9 @@ export function registerTools(
           'must be removed in the Aula app, so confirm the child and the dates with the ' +
           "user before calling. Uses Aula's calendar.addVacation call as the guardian " +
           'portal sends it; it is not yet verified against the live API, so check the ' +
-          'result with aula.presence.templates (isOnVacation) afterwards. For an answer to ' +
-          "an institution's vacation request (ferieregistrering), use the Aula app.",
+          'result with aula.presence.templates (isOnVacation) afterwards. To answer an ' +
+          "institution's ferie request (ferieregistrering), use " +
+          'aula.presence.answer_vacation_request instead.',
         inputSchema: {
           institutionProfileIds: z
             .array(z.number().int().positive())
@@ -881,6 +934,96 @@ export function registerTools(
               childIds: args.institutionProfileIds,
               startDate: args.startDate,
               endDate: args.endDate,
+              ...(args.comment ? { comment: args.comment } : {}),
+            }),
+        );
+        return jsonContent({ ok: true, result });
+      },
+    );
+
+    // --- aula.presence.answer_vacation_request (gated, write) ---------------
+    //
+    // calendar.respondToVacationRegistrationRequest, not verified against the
+    // live API (see AulaClient.respondToVacationRequest).
+
+    server.registerTool(
+      'aula.presence.answer_vacation_request',
+      {
+        title: 'Answer a ferie request',
+        description:
+          "Answer one of the institution's ferie requests (ferieregistrering) for one " +
+          'child: for each day of the period whether the child comes, and when the ' +
+          'institution asks for it the drop-off and pickup times. WRITES to Aula — ' +
+          'enabled when AULA_MCP_WRITE=1. The staff plan from the answer, so confirm the ' +
+          'child, every day and the times with the user before calling. Take childId and ' +
+          'responseId from aula.presence.vacation_requests; only requests Aula marks as ' +
+          'editable can be answered, and while they stay editable a new call replaces the ' +
+          "answer. Uses Aula's calendar.respondToVacationRegistrationRequest as the Aula " +
+          'app sends it; it is not yet verified against the live API, so read ' +
+          'aula.presence.vacation_requests again afterwards and check that missingAnswer ' +
+          'is false.',
+        inputSchema: {
+          childId: z
+            .number()
+            .int()
+            .positive()
+            .describe("Child institution-profile id, the request's childId."),
+          responseId: z
+            .number()
+            .int()
+            .positive()
+            .describe('The responseId of the request from aula.presence.vacation_requests.'),
+          days: z
+            .array(
+              z.object({
+                date: z.string().describe('A day in the request period, YYYY-MM-DD.'),
+                isComing: z.boolean().describe('True when the child comes that day.'),
+                entryTime: z
+                  .string()
+                  .optional()
+                  .describe('Drop-off HH:MM, on days the child comes.'),
+                exitTime: z.string().optional().describe('Pickup HH:MM, on days the child comes.'),
+              }),
+            )
+            .min(1)
+            .max(366)
+            .describe('Each day of the period with the answer for it.'),
+          comment: z
+            .string()
+            .max(VACATION_COMMENT_MAX)
+            .optional()
+            .describe(`Optional note to the staff, at most ${VACATION_COMMENT_MAX} characters.`),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        const request = (await vacationRequests(client)).find(
+          (r) => r.childId === args.childId && r.responseId === args.responseId,
+        );
+        if (!request) {
+          return jsonContent({
+            error: 'unknown_request',
+            message:
+              'Refusing to write: no ferie request with this childId and responseId for the ' +
+              "logged-in guardian's children. Call aula.presence.vacation_requests.",
+          });
+        }
+        const days = args.days.map((d) => ({
+          date: d.date,
+          isComing: d.isComing,
+          ...(d.entryTime ? { entryTime: d.entryTime } : {}),
+          ...(d.exitTime ? { exitTime: d.exitTime } : {}),
+        }));
+        const problems = vacationAnswerProblems(request, days, args.comment);
+        if (problems.length > 0) return jsonContent({ error: 'invalid', problems });
+        const result = await audited(
+          'presence_answer_vacation_request',
+          { days: days.length, coming: days.filter((d) => d.isComing).length },
+          () =>
+            client.respondToVacationRequest({
+              childId: args.childId,
+              responseId: args.responseId,
+              days,
               ...(args.comment ? { comment: args.comment } : {}),
             }),
         );

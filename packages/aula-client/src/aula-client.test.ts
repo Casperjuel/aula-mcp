@@ -669,6 +669,55 @@ describe('AulaClient.addVacation', () => {
   });
 });
 
+describe('AulaClient ferie requests', () => {
+  test('reads registrations by childIds[]', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope([]) }, // probe
+      { status: 200, body: envelope([{ child: { id: 42 }, vacationRegistrations: [] }]) },
+    );
+    const c = makeClient(http);
+    expect(await c.getVacationRegistrations([42, 43])).toEqual([
+      { child: { id: 42 }, vacationRegistrations: [] },
+    ]);
+    const url = http.requested.at(-1)?.url ?? '';
+    expect(url).toContain('method=presence.getVacationRegistrationsByChildren');
+    expect(url).toContain('childIds%5B%5D=42');
+    expect(url).toContain('childIds%5B%5D=43');
+  });
+
+  test('answers with per-day isComing, times only on days the child comes', async () => {
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-9');
+    http.enqueue(
+      { status: 200, body: envelope({}) },
+      { status: 200, body: envelope({}) },
+      { status: 200, body: envelope({}) },
+    );
+    const c = makeClient(http);
+    await c.respondToVacationRequest({
+      childId: 42,
+      responseId: 7,
+      days: [
+        { date: '2026-12-22', isComing: true, entryTime: '08:00', exitTime: '15:00' },
+        { date: '2026-12-23', isComing: false, entryTime: '08:00' },
+      ],
+    });
+    const post = http.requested[2];
+    expect(post?.url).toContain('method=calendar.respondToVacationRegistrationRequest');
+    expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
+    expect(JSON.parse(String(post?.body))).toEqual({
+      childId: 42,
+      vacationRegistrationResponseId: 7,
+      days: [
+        { date: '2026-12-22', entryTime: '08:00', exitTime: '15:00', isComing: true },
+        { date: '2026-12-23', entryTime: null, exitTime: null, isComing: false },
+      ],
+      comment: '',
+    });
+  });
+});
+
 describe('AulaClient.getPosts', () => {
   test('scopes the feed to parent=profile and institutionProfileIds[]', async () => {
     const http = new FakeHttp();

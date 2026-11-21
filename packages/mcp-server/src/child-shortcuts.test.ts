@@ -8,7 +8,14 @@ import { describe, expect, test } from 'bun:test';
 import type { StoredTokenRecord, TokenStore } from '@aula-mcp/aula-auth';
 import type { AulaClient } from '@aula-mcp/aula-client';
 import type { AulaContext } from './aula-context.ts';
-import { childPlan, childrenToday, vacationDays, vacationProblems } from './child-actions.ts';
+import {
+  childPlan,
+  childrenToday,
+  vacationAnswerProblems,
+  vacationDays,
+  vacationProblems,
+  vacationRequests,
+} from './child-actions.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { createStorage } from './storage.ts';
 import { sqliteDriver } from './storage-sql.ts';
@@ -101,6 +108,49 @@ function fakeClient() {
     },
     addVacation: async (args: unknown) => {
       calls.push({ method: 'addVacation', args });
+      return {};
+    },
+    // Shaped as nickknissen/aula's fixture for getVacationRegistrationsByChildren.
+    getVacationRegistrations: async () => [
+      {
+        child: { id: 11, name: 'Anna' },
+        vacationRegistrations: [
+          {
+            vacationRegistrationId: 5,
+            responseId: 50,
+            title: 'Efterårsferie',
+            startDate: '2026-10-12T00:00:00',
+            endDate: '2026-10-16T00:00:00',
+            isEditable: false,
+            isMissingAnswer: false,
+          },
+        ],
+      },
+      {
+        child: { id: 12, name: 'Bo' },
+        vacationRegistrations: [
+          {
+            vacationRegistrationId: 7,
+            responseId: 70,
+            title: 'Juleferie',
+            startDate: '2026-12-21T00:00:00',
+            endDate: '2026-12-23T00:00:00',
+            responseDeadline: '2026-12-01T00:00:00',
+            noteToGuardian: 'Svar venligst',
+            isEditable: true,
+            isMissingAnswer: true,
+            isPresenceTimesRequired: true,
+          },
+          { title: 'Uden id' },
+        ],
+      },
+      {
+        child: { id: 99, name: 'Fremmed' },
+        vacationRegistrations: [{ vacationRegistrationId: 9, responseId: 90 }],
+      },
+    ],
+    respondToVacationRequest: async (args: unknown) => {
+      calls.push({ method: 'respondToVacationRequest', args });
       return {};
     },
   };
@@ -386,5 +436,92 @@ describe('dashboard child shortcuts', () => {
     );
     expect((await post('/data/children/plan', { ...base, child: 99 })).status).toBe(404);
     expect(calls).toEqual([]);
+  });
+});
+
+describe('ferie requests', () => {
+  test('only the parent’s own children, open ones first', async () => {
+    const list = await vacationRequests(fakeClient().client);
+    expect(list.map((r) => [r.childId, r.responseId])).toEqual([
+      [12, 70],
+      [11, 50],
+    ]);
+    expect(list[0]).toMatchObject({
+      childName: 'Bo',
+      startDate: '2026-12-21',
+      endDate: '2026-12-23',
+      deadline: '2026-12-01T00:00:00',
+      missingAnswer: true,
+      editable: true,
+      timesRequired: true,
+    });
+  });
+
+  test('an answer stays in the period and gives times when asked', async () => {
+    const [open, closed] = await vacationRequests(fakeClient().client);
+    if (!open || !closed) throw new Error('fixture');
+    const ok = [
+      { date: '2026-12-21', isComing: true, entryTime: '08:00', exitTime: '15:00' },
+      { date: '2026-12-22', isComing: false },
+    ];
+    expect(vacationAnswerProblems(open, ok)).toEqual([]);
+    expect(vacationAnswerProblems(closed, [{ date: '2026-10-12', isComing: false }])).toEqual([
+      'Aula does not allow answering this request (any more).',
+    ]);
+    expect(vacationAnswerProblems(open, [])).toEqual(['days must name at least one day.']);
+    expect(
+      vacationAnswerProblems(open, [
+        { date: '2026-12-24', isComing: false },
+        { date: '2026-12-21', isComing: true },
+        { date: '2026-12-22', isComing: true, entryTime: '15:00', exitTime: '08:00' },
+        { date: '2026-12-22', isComing: false },
+      ]),
+    ).toEqual([
+      '2026-12-24: outside the request (2026-12-21 – 2026-12-23).',
+      '2026-12-21: the institution asks for entryTime and exitTime.',
+      '2026-12-22: entryTime must be before exitTime.',
+      '2026-12-22: named twice.',
+    ]);
+  });
+
+  test('GET and POST /data/children/vacation-requests answer and audit counts only', async () => {
+    const { get, post, audit, calls } = await setup();
+    const { requests } = (await (await get('/data/children/vacation-requests')).json()) as {
+      requests: unknown[];
+    };
+    expect(requests).toHaveLength(2);
+
+    const days = [
+      { date: '2026-12-21', isComing: true, entryTime: '08:00', exitTime: '15:00' },
+      { date: '2026-12-22', isComing: false },
+    ];
+    const answer = (body: Record<string, unknown>) =>
+      post('/data/children/vacation-requests/answer', body);
+    expect((await answer({ childId: 99, responseId: 90, days })).status).toBe(404);
+    expect((await answer({ childId: 11, responseId: 70, days })).status).toBe(404);
+    expect((await answer({ childId: 11, responseId: 50, days })).status).toBe(400);
+    expect(
+      (
+        await answer({
+          childId: 12,
+          responseId: 70,
+          days: [{ date: '2026-12-21', isComing: true }],
+        })
+      ).status,
+    ).toBe(400);
+    expect((await answer({ childId: 12, responseId: 70, days: [{ date: 1 }] })).status).toBe(400);
+    expect(calls).toEqual([]);
+
+    const res = await answer({ childId: 12, responseId: 70, days, comment: ' Hilsen ' });
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([
+      {
+        method: 'respondToVacationRequest',
+        args: { childId: 12, responseId: 70, days, comment: 'Hilsen' },
+      },
+    ]);
+    const [entry] = await audit();
+    expect(entry).toMatchObject({ action: 'presence_answer_vacation_request', ok: true });
+    expect(entry?.details).toEqual({ days: 2, coming: 1, trigger: 'dashboard' });
   });
 });

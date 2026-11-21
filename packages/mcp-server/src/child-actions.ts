@@ -230,3 +230,123 @@ export function vacationProblems(
 export function vacationDays(startDate: string, endDate: string): number {
   return Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86_400_000) + 1;
 }
+
+export interface VacationRequest {
+  childId: number;
+  childName: string;
+  /** The request (vacationRegistrationId). */
+  registrationId: number;
+  /** What an answer is sent to (responseId). */
+  responseId: number;
+  title: string;
+  startDate: string | null;
+  endDate: string | null;
+  deadline: string | null;
+  noteToGuardian: string | null;
+  /** Aula still waits for an answer. */
+  missingAnswer: boolean;
+  /** Aula lets the guardian answer or change the answer. */
+  editable: boolean;
+  /** Days the child comes need komme/gå times. */
+  timesRequired: boolean;
+}
+
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const day = (v: unknown): string | null =>
+  typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+
+/**
+ * The institution's ferie requests for the guardian's own children, open ones
+ * first. Rows Aula sends for other children, or without ids, are dropped.
+ */
+export async function vacationRequests(client: AulaClient): Promise<VacationRequest[]> {
+  const children = await ownChildren(client);
+  if (children.size === 0) return [];
+  const groups = await client.getVacationRegistrations([...children.keys()]);
+  const out: VacationRequest[] = [];
+  for (const group of groups) {
+    const g = (group ?? {}) as { child?: { id?: unknown }; vacationRegistrations?: unknown };
+    const childId = num(g.child?.id);
+    if (childId === null || !children.has(childId) || !Array.isArray(g.vacationRegistrations)) {
+      continue;
+    }
+    for (const row of g.vacationRegistrations as Record<string, unknown>[]) {
+      const registrationId = num(row?.vacationRegistrationId);
+      const responseId = num(row?.responseId);
+      if (registrationId === null || responseId === null) continue;
+      out.push({
+        childId,
+        childName: children.get(childId) ?? '',
+        registrationId,
+        responseId,
+        title: str(row.title) ?? '',
+        startDate: day(row.startDate),
+        endDate: day(row.endDate),
+        deadline: str(row.responseDeadline),
+        noteToGuardian: str(row.noteToGuardian),
+        missingAnswer: row.isMissingAnswer === true,
+        editable: row.isEditable === true,
+        timesRequired: row.isPresenceTimesRequired === true,
+      });
+    }
+  }
+  return out.sort(
+    (a, b) =>
+      Number(b.missingAnswer) - Number(a.missingAnswer) ||
+      (a.startDate ?? '').localeCompare(b.startDate ?? ''),
+  );
+}
+
+export interface VacationAnswerDay {
+  date: string;
+  isComing: boolean;
+  entryTime?: string;
+  exitTime?: string;
+}
+
+const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * What is wrong with an answer to `request`, empty when nothing is: Aula must
+ * still allow answering, each day must lie in the request's period and appear
+ * once, and a day the child comes needs drop-off before pickup (both when
+ * the institution asks for times).
+ */
+export function vacationAnswerProblems(
+  request: VacationRequest,
+  days: VacationAnswerDay[],
+  comment = '',
+): string[] {
+  const problems: string[] = [];
+  if (!request.editable) problems.push('Aula does not allow answering this request (any more).');
+  if (days.length === 0) problems.push('days must name at least one day.');
+  const seen = new Set<string>();
+  for (const d of days) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d.date)) {
+      problems.push(`${d.date}: date must be YYYY-MM-DD.`);
+      continue;
+    }
+    if (seen.has(d.date)) problems.push(`${d.date}: named twice.`);
+    seen.add(d.date);
+    if (
+      (request.startDate && d.date < request.startDate) ||
+      (request.endDate && d.date > request.endDate)
+    ) {
+      problems.push(`${d.date}: outside the request (${request.startDate} – ${request.endDate}).`);
+    }
+    if (!d.isComing) continue;
+    for (const t of [d.entryTime, d.exitTime]) {
+      if (t !== undefined && !HH_MM.test(t)) problems.push(`${d.date}: times must be HH:MM.`);
+    }
+    if (request.timesRequired && (!d.entryTime || !d.exitTime)) {
+      problems.push(`${d.date}: the institution asks for entryTime and exitTime.`);
+    }
+    if (d.entryTime && d.exitTime && d.entryTime >= d.exitTime) {
+      problems.push(`${d.date}: entryTime must be before exitTime.`);
+    }
+  }
+  if (comment.length > VACATION_COMMENT_MAX) {
+    problems.push(`comment must be at most ${VACATION_COMMENT_MAX} characters.`);
+  }
+  return problems;
+}

@@ -29,6 +29,8 @@ threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With
 | [`aula.profiles.list`](#aulaprofileslist) | read | List Aula profiles |
 | [`aula.presence.today`](#aulapresencetoday) | read | Daily presence overview |
 | [`aula.presence.templates`](#aulapresencetemplates) | read | Komme/gå templates (drop-off & pickup schedule) |
+| [`aula.presence.children_today`](#aulapresencechildren_today) | read | My children's status today |
+| [`aula.presence.vacation_requests`](#aulapresencevacation_requests) | read | Ferie requests from the institution |
 | [`aula.calendar.events`](#aulacalendarevents) | read | Calendar events (school schedule) |
 | [`aula.notifications.list`](#aulanotificationslist) | read | Aula notifications |
 | [`aula.groups.list`](#aulagroupslist) | read | Aula groups (classes) |
@@ -51,6 +53,7 @@ threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With
 | [`aula.presence.set_template`](#aulapresenceset_template) | write (`AULA_MCP_WRITE=1`) | Set a komme/gå template (drop-off & pickup time) |
 | [`aula.presence.report_sick`](#aulapresencereport_sick) | write (`AULA_MCP_WRITE=1`) | Report a child sick (or well again) |
 | [`aula.presence.add_vacation`](#aulapresenceadd_vacation) | write (`AULA_MCP_WRITE=1`) | Register ferie/fri for a child |
+| [`aula.presence.answer_vacation_request`](#aulapresenceanswer_vacation_request) | write (`AULA_MCP_WRITE=1`) | Answer a ferie request |
 | [`aula.messages.reply`](#aulamessagesreply) | write (`AULA_MCP_WRITE=1`) | Reply in a message thread |
 | [`aula.raw_request`](#aularaw_request) | raw (`AULA_MCP_RAW=1`) | Raw Aula API call (escape hatch) |
 
@@ -264,6 +267,22 @@ Recurring komme/gå (presence) templates for the given children — the drop-off
 | `childIds` | array | yes | Aula child IDs (from aula.discover.children[].id) |
 | `from` | string | no | Window start YYYY-MM-DD. Defaults to this Monday. |
 | `to` | string | no | Window end YYYY-MM-DD. Defaults to this Sunday. |
+
+## `aula.presence.children_today`
+
+**My children's status today** · read
+
+Each of the logged-in guardian's own children with today's presence in plain words: id, name, status code and Danish label (Ikke kommet, Syg, Ferie/fri, Kommet, På tur, Sover, Fritidsaktivitet, Fysisk placering, Gået), the planned drop-off and pickup (entryTime, exitTime), the actual check-in and check-out, the henteform (activityType) and who picks up (exitWith). Needs no ids, so it is the quickest answer to "is my child at school?" and the step before aula.presence.report_sick. Read-only.
+
+No parameters.
+
+## `aula.presence.vacation_requests`
+
+**Ferie requests from the institution** · read
+
+The school's or SFO's ferie requests (ferieregistrering) for the logged-in guardian's own children: the institution asks, for a holiday period, on which days the child comes. Per request: child, registrationId, responseId, title, the period (startDate–endDate), the answer deadline, the note to the guardian, missingAnswer (Aula still waits for an answer), editable (an answer may still be given or changed) and timesRequired (days the child comes need drop-off and pickup times). Unanswered requests come first. Answer one with aula.presence.answer_vacation_request. This lists requests the institution made, not ferie the guardian registered (see aula.presence.templates' isOnVacation for that). Read-only.
+
+No parameters.
 
 ## `aula.calendar.events`
 
@@ -521,13 +540,26 @@ Mark a child as sick for today, or take the report back. WRITES to Aula — enab
 
 **Register ferie/fri for a child** · write (`AULA_MCP_WRITE=1`)
 
-Register a planned absence (ferie/fri) for whole days, from startDate to endDate. WRITES to Aula — enabled when AULA_MCP_WRITE=1. The institution sees it in its presence overview. aula-mcp cannot delete a registration: a mistake must be removed in the Aula app, so confirm the child and the dates with the user before calling. Uses Aula's calendar.addVacation call as the guardian portal sends it; it is not yet verified against the live API, so check the result with aula.presence.templates (isOnVacation) afterwards. For an answer to an institution's vacation request (ferieregistrering), use the Aula app.
+Register a planned absence (ferie/fri) for whole days, from startDate to endDate. WRITES to Aula — enabled when AULA_MCP_WRITE=1. The institution sees it in its presence overview. aula-mcp cannot delete a registration: a mistake must be removed in the Aula app, so confirm the child and the dates with the user before calling. Uses Aula's calendar.addVacation call as the guardian portal sends it; it is not yet verified against the live API, so check the result with aula.presence.templates (isOnVacation) afterwards. To answer an institution's ferie request (ferieregistrering), use aula.presence.answer_vacation_request instead.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
 | `institutionProfileIds` | array | yes | Child institution-profile ids (aula.discover children[].id). Must belong to the logged-in guardian; anything else is rejected. |
 | `startDate` | string | yes | First day of the absence, YYYY-MM-DD, today or later (Danish time). |
 | `endDate` | string | yes | Last day of the absence, YYYY-MM-DD, within a year of startDate. |
+| `comment` | string | no | Optional note to the staff, at most 250 characters. |
+
+## `aula.presence.answer_vacation_request`
+
+**Answer a ferie request** · write (`AULA_MCP_WRITE=1`)
+
+Answer one of the institution's ferie requests (ferieregistrering) for one child: for each day of the period whether the child comes, and when the institution asks for it the drop-off and pickup times. WRITES to Aula — enabled when AULA_MCP_WRITE=1. The staff plan from the answer, so confirm the child, every day and the times with the user before calling. Take childId and responseId from aula.presence.vacation_requests; only requests Aula marks as editable can be answered, and while they stay editable a new call replaces the answer. Uses Aula's calendar.respondToVacationRegistrationRequest as the Aula app sends it; it is not yet verified against the live API, so read aula.presence.vacation_requests again afterwards and check that missingAnswer is false.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `childId` | integer | yes | Child institution-profile id, the request's childId. |
+| `responseId` | integer | yes | The responseId of the request from aula.presence.vacation_requests. |
+| `days` | array | yes | Each day of the period with the answer for it. |
 | `comment` | string | no | Optional note to the staff, at most 250 characters. |
 
 ## `aula.messages.reply`

@@ -285,6 +285,58 @@ export class AulaClient {
    * This is a write to the live Aula platform — the MCP server gates the
    * tool that calls it behind `AULA_MCP_WRITE=1`.
    */
+  /**
+   * `presence.getVacationRegistrationsByChildren` — the institution's ferie
+   * requests ("Ferieregistrering": the school or SFO asks whether the child
+   * comes in a holiday period). Aula groups the answer by child:
+   * `[{ child, vacationRegistrations: [...] }]`. Method and `childIds[]` as
+   * in nickknissen/aula (MIT, with tests); takes institution-profile ids.
+   */
+  async getVacationRegistrations(childIds: readonly number[]): Promise<unknown[]> {
+    if (childIds.length === 0) return [];
+    const params = new URLSearchParams();
+    params.set('method', 'presence.getVacationRegistrationsByChildren');
+    for (const id of childIds) params.append('childIds[]', String(id));
+    const data = await this.getJsonRaw<unknown>(params);
+    return Array.isArray(data) ? data : [];
+  }
+
+  /**
+   * `calendar.respondToVacationRegistrationRequest` — answers one of the
+   * institution's ferie requests for one child: per day whether the child
+   * comes, and the times when it does.
+   *
+   * NOT verified against the live API. Method and payload come from the
+   * decompiled Aula app as documented by eisbaw/aulalibre (MIT,
+   * `RespondToVacationRegistrationRequestDto`): `{ childId,
+   * vacationRegistrationResponseId, days: [{ date, entryTime, exitTime,
+   * isComing }], comment }`. The response is undocumented.
+   *
+   * This is a write to the live Aula platform — the MCP server gates the
+   * tool that calls it behind `AULA_MCP_WRITE=1`.
+   */
+  async respondToVacationRequest(args: {
+    childId: number;
+    responseId: number;
+    days: { date: string; isComing: boolean; entryTime?: string; exitTime?: string }[];
+    comment?: string;
+  }): Promise<unknown> {
+    return this.postJson<unknown>(
+      'calendar.respondToVacationRegistrationRequest',
+      JSON.stringify({
+        childId: args.childId,
+        vacationRegistrationResponseId: args.responseId,
+        days: args.days.map((d) => ({
+          date: d.date,
+          entryTime: d.isComing ? (d.entryTime ?? null) : null,
+          exitTime: d.isComing ? (d.exitTime ?? null) : null,
+          isComing: d.isComing,
+        })),
+        comment: args.comment ?? '',
+      }),
+    );
+  }
+
   async addVacation(args: {
     childIds: number[];
     startDate: string;

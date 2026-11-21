@@ -1000,6 +1000,8 @@ async function loadKids(force) {
   kidsAt = Date.now();
   try { state.kids = { list: (await getJson('data/children')).children }; }
   catch (err) { state.kids = { error: err.message }; }
+  try { state.ferie = (await getJson('data/children/vacation-requests')).requests; }
+  catch { state.ferie = null; }
   rerender('oversigt');
 }
 /** Checkboxes for a child's brothers and sisters that pass ok(k), for doing the same for them. */
@@ -1012,6 +1014,8 @@ function siblingPicker(c, ok) {
   };
 }
 const kidToday = (id) => (state.kids && state.kids.list ? state.kids.list.find((k) => k.id === id) : null);
+/** The institution's ferie requests for a child that still wait for an answer. */
+const ferieOpen = (id) => (state.ferie || []).filter((r) => r.childId === id && r.missingAnswer && r.editable);
 function kidPill(k) {
   const cls = k.status === 1 ? 'err' : k.status === 3 || k.status === 5 ? 'ok' : k.status === 2 ? 'warn' : k.status === 4 || k.status === 6 ? 'run' : 'neutral';
   return el('span', { class: 'pill ' + cls }, k.label);
@@ -1033,7 +1037,8 @@ function kidsPanel() {
     const k = kidToday(c.id);
     return el('section', { class: 'panel' },
       el('div', { class: 'kid' }, el('div', { class: 'kid-face', 'aria-hidden': 'true' }, (c.name || '?').slice(0, 1)),
-        el('div', { style: 'min-width:0' }, el('h2', {}, c.name), el('div', { class: 'kid-meta' }, c.institution ? el('span', {}, c.institution) : null, k ? kidPill(k) : null)),
+        el('div', { style: 'min-width:0' }, el('h2', {}, c.name), el('div', { class: 'kid-meta' }, c.institution ? el('span', {}, c.institution) : null, k ? kidPill(k) : null,
+          ferieOpen(c.id).length ? el('span', { class: 'pill warn' }, 'Ferie: svar mangler') : null)),
         state.owner ? null : el('button', { class: 'btn', 'aria-haspopup': 'dialog', onclick: () => openKid(c) }, icon('more'), 'Genveje')),
       k ? kidTodayLine(k) : null);
   }));
@@ -1091,6 +1096,7 @@ function openKid(c) {
           : item('warn', 'Meld syg i dag', 'Institutionen får besked i Aula med det samme', () => askSick(true), true),
         item('door', 'Ændr komme/gå', 'For én dag, hver uge eller hver anden uge', () => planForm(todayKey())),
         item('sun', 'Meld ferie/fri', 'Hele dage, en eller flere i træk', () => vacationForm()),
+        item('task', 'Ferieregistrering', ferieOpen(c.id).length ? ferieOpen(c.id).length + ' venter på dit svar' : 'Institutionens spørgsmål om ferie', () => requestList()),
         item('week', 'Se komme/gå-plan', 'De næste 14 dage', () => planList()),
         item('cal', 'Åbn kalender', 'Begivenheder for familien', () => { d.close(); go('kalender'); })));
   };
@@ -1249,6 +1255,101 @@ function openKid(c) {
       also.node,
       status,
       el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => menu() }, 'Annuller'), save));
+  };
+  const span = (a, b) => a === b ? longDay(a) : longDay(a) + ' til ' + longDay(b);
+  const requestList = async () => {
+    fill(body, head('Ferieregistrering for ' + first, true), skeleton());
+    let list;
+    try {
+      state.ferie = (await getJson('data/children/vacation-requests')).requests;
+      list = state.ferie.filter((r) => r.childId === c.id);
+    } catch (err) {
+      fill(body, head('Ferieregistrering for ' + first, true), el('p', { class: 'muted small' }, 'Kunne ikke hente fra Aula: ' + kidErr(err)));
+      return;
+    }
+    const row = (r) => el('button', { class: 'li menu-li', onclick: () => answerForm(r) },
+      el('span', { class: 'type-dot' }, icon(r.missingAnswer ? 'warn' : 'sun')),
+      el('span', { style: 'min-width:0;display:block' },
+        el('span', { class: 'li-title', style: 'display:block' }, r.title || 'Ferie'),
+        el('span', { class: 'li-sub', style: 'display:block' }, [
+          r.startDate && r.endDate ? span(r.startDate, r.endDate) : '',
+          r.missingAnswer ? 'Svar mangler' : 'Besvaret',
+          r.deadline ? 'Svar senest ' + longDay(String(r.deadline).slice(0, 10)) : '',
+          r.editable ? '' : 'Kan ikke ændres',
+        ].filter(Boolean).join(' · '))),
+      icon('chev'));
+    fill(body, head('Ferieregistrering for ' + first, true),
+      el('p', { class: 'muted small', style: 'margin:0' }, 'Institutionen spørger, hvilke dage ' + first + ' kommer i en ferie.'),
+      list.length ? el('div', { class: 'list' }, list.map(row)) : el('p', { class: 'muted small' }, 'Institutionen har ikke spurgt om ferie lige nu.'));
+  };
+  const answerForm = (r) => {
+    const title = r.title || 'Ferie';
+    if (!r.startDate || !r.endDate || !r.editable) {
+      fill(body, head(title, true),
+        el('p', {}, r.editable ? 'Aula sendte ingen periode, så den kan kun besvares i Aula.' : 'Aula lader dig ikke svare på den (mere).'),
+        el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => requestList() }, 'Tilbage')));
+      return;
+    }
+    const days = [];
+    for (let k = r.startDate; k <= r.endDate && days.length < 366; k = addDays(k, 1)) {
+      if (dow(k) !== 0 && dow(k) !== 6) days.push(k);
+    }
+    const rows = days.map((k) => {
+      const coming = el('input', { type: 'checkbox', id: 'vr-c-' + k });
+      const entry = el('input', { class: 'input', type: 'time', id: 'vr-in-' + k, 'aria-label': 'Kommer kl.' });
+      const exit = el('input', { class: 'input', type: 'time', id: 'vr-out-' + k, 'aria-label': 'Går kl.' });
+      const times = el('div', { class: 'form-grid', hidden: '' }, entry, exit);
+      coming.addEventListener('change', () => { times.hidden = !coming.checked; });
+      return {
+        k, coming, entry, exit,
+        node: el('div', { class: 'field' },
+          el('label', { for: 'vr-c-' + k, style: 'display:flex;gap:8px;align-items:center' }, coming, longDay(k) + ': kommer'),
+          times),
+      };
+    });
+    const note = el('input', { class: 'input', id: 'vr-comment', type: 'text', maxlength: '250' });
+    const status = el('p', { class: 'muted small', style: 'margin:0' });
+    const save = el('button', { class: 'btn btn-primary' }, 'Send svar');
+    save.addEventListener('click', () => {
+      const answer = rows.map((x) => x.coming.checked
+        ? { date: x.k, isComing: true, entryTime: x.entry.value, exitTime: x.exit.value }
+        : { date: x.k, isComing: false });
+      const missing = answer.filter((a) => a.isComing && (r.timesRequired ? !a.entryTime || !a.exitTime : false));
+      if (missing.length) { status.textContent = 'Skriv hvornår ' + first + ' kommer og går ' + longDay(missing[0].date) + '.'; return; }
+      const wrong = answer.filter((a) => a.isComing && a.entryTime && a.exitTime && a.entryTime >= a.exitTime);
+      if (wrong.length) { status.textContent = longDay(wrong[0].date) + ': kommer skal være før går.'; return; }
+      const come = answer.filter((a) => a.isComing);
+      const comment = note.value.trim();
+      d.close();
+      confirmDialog({
+        icon: 'sun',
+        title: 'Send svar for ' + first + '?',
+        ok: 'Send svar',
+        body: [
+          el('p', {}, title + ', ' + span(r.startDate, r.endDate) + '. ' + (come.length
+            ? first + ' kommer ' + come.length + ' af ' + answer.length + ' dage:'
+            : first + ' kommer ingen af dagene.')),
+          come.length ? el('ul', {}, come.map((a) => el('li', {}, longDay(a.date) + (a.entryTime || a.exitTime ? ' ' + (a.entryTime || '?') + '–' + (a.exitTime || '?') : '')))) : null,
+          comment ? el('p', {}, 'Besked: ' + comment) : null,
+          el('p', { class: 'muted small' }, 'Personalet planlægger ud fra svaret. Du kan ændre det, så længe Aula tillader det. Det står i din log under Handlinger i Aula.'),
+        ],
+        onok: async () => {
+          try {
+            await postJson('data/children/vacation-requests/answer', { childId: c.id, responseId: r.responseId, days: answer, comment });
+            toast('Svaret for ' + first + ' er sendt til Aula');
+          } catch (err) { toast('Kunne ikke: ' + kidErr(err)); }
+          loadKids(true);
+        },
+      });
+    });
+    fill(body, head(title, true),
+      el('p', { class: 'muted small', style: 'margin:0' }, span(r.startDate, r.endDate) + (r.deadline ? '. Svar senest ' + longDay(String(r.deadline).slice(0, 10)) : '') + '. Sæt flueben ved de dage, ' + first + ' kommer.'),
+      r.noteToGuardian ? el('p', {}, r.noteToGuardian) : null,
+      r.timesRequired ? el('p', { class: 'muted small', style: 'margin:0' }, 'Institutionen vil vide, hvornår ' + first + ' kommer og går.') : null,
+      el('div', {}, rows.map((x) => x.node)),
+      el('div', { class: 'field' }, el('label', { for: 'vr-comment' }, 'Besked til personalet (valgfri)'), note),
+      status,
+      el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => requestList() }, 'Annuller'), save));
   };
   menu();
   if (!d.open) d.showModal();

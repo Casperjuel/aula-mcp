@@ -223,18 +223,27 @@ function buildCapabilities(
     presence: {
       summary: writeEnabled
         ? 'Daily presence (arrived/sick/picked up), the recurring komme/gå schedule, ' +
-          'setting drop-off/pickup times, reporting a child sick, and registering ferie/fri.'
-        : 'Daily presence (arrived/sick/picked up) and the recurring komme/gå ' +
-          '(drop-off/pickup) schedule.',
+          "the institution's ferie requests, setting drop-off/pickup times, reporting a " +
+          'child sick, registering ferie/fri and answering ferie requests.'
+        : 'Daily presence (arrived/sick/picked up), the recurring komme/gå ' +
+          "(drop-off/pickup) schedule and the institution's ferie requests.",
       tools: writeEnabled
         ? [
+            'aula.presence.children_today',
             'aula.presence.today',
             'aula.presence.templates',
+            'aula.presence.vacation_requests',
             'aula.presence.set_template',
             'aula.presence.report_sick',
             'aula.presence.add_vacation',
+            'aula.presence.answer_vacation_request',
           ]
-        : ['aula.presence.today', 'aula.presence.templates'],
+        : [
+            'aula.presence.children_today',
+            'aula.presence.today',
+            'aula.presence.templates',
+            'aula.presence.vacation_requests',
+          ],
       ...(writeEnabled
         ? {
             notes:
@@ -242,14 +251,16 @@ function buildCapabilities(
               'Confirm the child and the intent with the user before calling it — do not ' +
               'infer a sick report from a passing mention that a child is unwell. ' +
               'aula.presence.add_vacation cannot be undone from aula-mcp; confirm the ' +
-              'child and the dates first.',
+              'child and the dates first. For aula.presence.answer_vacation_request, ' +
+              'confirm every day and the times with the user.',
           }
         : {
             notes:
-              'aula.presence.set_template (writing komme/gå times) and ' +
-              'aula.presence.report_sick (reporting a child sick) and ' +
-              'aula.presence.add_vacation (registering ferie/fri) are available only ' +
-              'when the server runs with AULA_MCP_WRITE=1.',
+              'aula.presence.set_template (writing komme/gå times), ' +
+              'aula.presence.report_sick (reporting a child sick), ' +
+              'aula.presence.add_vacation (registering ferie/fri) and ' +
+              'aula.presence.answer_vacation_request (answering a ferie request) are ' +
+              'available only when the server runs with AULA_MCP_WRITE=1.',
           }),
     },
     calendar: {

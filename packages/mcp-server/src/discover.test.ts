@@ -154,8 +154,10 @@ describe('buildDiscoverManifest', () => {
     const m = await buildDiscoverManifest(fakeContext());
     expect(m.writeEnabled).toBe(false);
     expect(m.capabilities.presence?.tools).toEqual([
+      'aula.presence.children_today',
       'aula.presence.today',
       'aula.presence.templates',
+      'aula.presence.vacation_requests',
     ]);
     expect(m.capabilities.presence?.notes).toContain('AULA_MCP_WRITE');
   });
@@ -168,6 +170,7 @@ describe('buildDiscoverManifest', () => {
       expect(m.writeEnabled).toBe(true);
       expect(m.capabilities.presence?.tools).toContain('aula.presence.set_template');
       expect(m.capabilities.presence?.tools).toContain('aula.presence.report_sick');
+      expect(m.capabilities.presence?.tools).toContain('aula.presence.answer_vacation_request');
       // With writes on, the note switches from "this is gated" to a caution
       // about the one tool that notifies a school.
       expect(m.capabilities.presence?.notes).toContain('report_sick');
