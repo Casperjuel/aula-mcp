@@ -75,6 +75,8 @@ export interface ListQuery {
   /** Unix seconds, inclusive. */
   since?: number;
   until?: number;
+  /** Ids that start with this, e.g. `123:` for the messages of thread 123. */
+  idPrefix?: string;
   limit?: number;
   offset?: number;
 }
@@ -211,6 +213,8 @@ export class ParentStorage {
     if (query.childId) add('child_id = ?', query.childId);
     if (query.since !== undefined) add('occurred_at >= ?', query.since);
     if (query.until !== undefined) add('occurred_at <= ?', query.until);
+    if (query.idPrefix)
+      add("id LIKE ? ESCAPE '\\'", `${query.idPrefix.replace(/[\\%_]/g, '\\$&')}%`);
     params.push(Math.min(Math.max(query.limit ?? 50, 1), 500), Math.max(query.offset ?? 0, 0));
     const rows = await this.db.all<ItemRow>(
       `SELECT ${COLUMNS} FROM items WHERE ${where.join(' AND ')}

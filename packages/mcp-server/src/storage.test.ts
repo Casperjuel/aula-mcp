@@ -108,6 +108,23 @@ for (const [name, driver] of backends) {
       expect((await parent.stats()).map((s) => s.kind)).toEqual(['post']);
     });
 
+    test('lists by id prefix, with LIKE wildcards taken literally', async () => {
+      const parent = (await open()).forParent('parent-a');
+      await parent.put([
+        { kind: 'message', id: '7:1', occurredAt: 1, data: 1 },
+        { kind: 'message', id: '7:2', occurredAt: 2, data: 2 },
+        { kind: 'message', id: '70:1', occurredAt: 3, data: 3 },
+        { kind: 'message', id: '7_1', occurredAt: 4, data: 4 },
+        { kind: 'message', id: 'a%b', occurredAt: 5, data: 5 },
+      ]);
+      const ids = async (idPrefix: string) =>
+        (await parent.list({ kind: 'message', idPrefix })).map((item) => item.id);
+      expect(await ids('7:')).toEqual(['7:2', '7:1']);
+      expect(await ids('7_')).toEqual(['7_1']);
+      expect(await ids('a%')).toEqual(['a%b']);
+      expect(await ids('%')).toEqual([]);
+    });
+
     test('payloads are encrypted at rest and bound to their parent and id', async () => {
       const db = driver();
       if (name === 'postgres')

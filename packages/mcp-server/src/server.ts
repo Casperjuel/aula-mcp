@@ -640,6 +640,14 @@ if (INGRESS_PORT_RAW) {
           },
         }
       : {}),
+    ...(sync
+      ? {
+          sync: {
+            forParent: (caller: Caller | null) =>
+              sync.forParent(parentIdOf(caller), contextFor(caller)),
+          },
+        }
+      : {}),
   };
   const setupApp = createSetupApp(
     multiParent && setupLogin

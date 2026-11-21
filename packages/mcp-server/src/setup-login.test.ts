@@ -7,6 +7,7 @@ import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { createStorage } from './storage.ts';
 import { sqliteDriver } from './storage-sql.ts';
+import type { SyncJobName } from './sync.ts';
 
 const PUBLIC_URL = 'https://aula-setup.example.com';
 const CLIENT_ID = 'aula-mcp-setup';
@@ -98,6 +99,7 @@ function setup(clientSecret?: string) {
     return store;
   };
   const liveFor: string[] = [];
+  const syncRuns: Array<{ sub: string; jobs: SyncJobName[] }> = [];
   const app = createSetupApp({
     logger: silentLogger,
     parents: { login, storeFor, changed: (caller) => changed.push(caller.sub) },
@@ -108,9 +110,18 @@ function setup(clientSecret?: string) {
         liveFor.push(caller?.sub ?? 'none');
         throw new Error(`no Aula in tests (${caller?.sub})`);
       },
+      sync: {
+        forParent: (caller) => ({
+          status: async () => [],
+          run: async (jobs) => {
+            syncRuns.push({ sub: caller?.sub ?? 'none', jobs: jobs ?? [] });
+            return [];
+          },
+        }),
+      },
     },
   });
-  return { app, storeFor, changed, liveFor };
+  return { app, storeFor, changed, liveFor, syncRuns };
 }
 
 type App = ReturnType<typeof setup>['app'];
@@ -308,6 +319,70 @@ describe('setup UI sign-in', () => {
     expect((await app.request('/data/live', { headers: { cookie: b } })).status).toBe(409);
     expect((await app.request('/data/live', { headers: { cookie: a } })).status).toBe(502);
     expect(liveFor).toEqual(['parent-a']);
+  });
+
+  test('the dashboard reads, deletes and syncs only for the signed-in parent', async () => {
+    const { app, storeFor, syncRuns } = setup();
+    expect((await app.request('/')).status).toBe(302);
+    expect((await app.request('/data/items')).status).toBe(401);
+    expect((await app.request('/data/items/post/1')).status).toBe(401);
+    expect((await app.request('/data/sync')).status).toBe(401);
+
+    const a = await signIn(app, 'parent-a');
+    const b = await signIn(app, 'parent-b');
+    const login: StoredTokenRecord = {
+      version: 1,
+      username: 'b',
+      tokens: {
+        access_token: 'AT',
+        refresh_token: 'RT',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        obtained_at: Math.floor(Date.now() / 1000),
+      },
+      saved_at: Math.floor(Date.now() / 1000),
+    };
+    await storeFor({ issuer, sub: 'parent-b' }).save(login);
+    const page = await app.request('/', { headers: { cookie: a } });
+    expect(await page.text()).toContain('Parent parent-a');
+
+    const itemsOf = async (cookie: string) =>
+      (
+        (await (await app.request('/data/items', { headers: { cookie } })).json()) as {
+          items: Array<{ id: string }>;
+        }
+      ).items.map((item) => item.id);
+    expect(await itemsOf(a)).toEqual(['1']);
+    expect(await itemsOf(b)).toEqual([]);
+    expect((await app.request('/data/items/post/1', { headers: { cookie: a } })).status).toBe(200);
+    expect((await app.request('/data/items/post/1', { headers: { cookie: b } })).status).toBe(404);
+
+    const post = (path: string, cookie: string, body: unknown, origin = PUBLIC_URL) =>
+      app.request(path, {
+        method: 'POST',
+        headers: { cookie, origin, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    // B deleting everything removes nothing of A's.
+    const deleted = await post('/data/delete', b, { confirm: 'SLET', all: true });
+    expect(await deleted.json()).toEqual({ deleted: 0 });
+    expect(await itemsOf(a)).toEqual(['1']);
+    // And a page on another site cannot delete for A.
+    const forged = await post(
+      '/data/delete',
+      a,
+      { confirm: 'SLET', all: true },
+      'https://evil.example.com',
+    );
+    expect(forged.status).toBe(403);
+    expect(await itemsOf(a)).toEqual(['1']);
+
+    // A has no Aula login here, so A cannot start a sync; B's run is B's.
+    expect((await post('/data/sync/run', a, {})).status).toBe(409);
+    expect((await post('/data/sync/run', b, { jobs: ['posts'] })).status).toBe(202);
+    expect((await post('/data/sync/run', b, {}, 'https://evil.example.com')).status).toBe(403);
+    expect(syncRuns).toEqual([{ sub: 'parent-b', jobs: ['posts'] }]);
   });
 
   test('a login session belongs to the parent who started it', async () => {
