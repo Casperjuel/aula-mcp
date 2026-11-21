@@ -169,6 +169,13 @@ function twoWeeks(now = new Date()): { from: string; to: string } {
 }
 
 /** A one-day komme/gå change from the dashboard, or what is wrong with it. */
+/** `children` (a list of ids) or `child` (one id) from a request body. */
+function childIdsOf(body: Record<string, unknown>): number[] | null {
+  const raw = Array.isArray(body.children) ? body.children : [body.child];
+  const ids = raw.filter((v): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0);
+  return ids.length > 0 && ids.length === raw.length && ids.length <= 10 ? [...new Set(ids)] : null;
+}
+
 function planArgs(body: Record<string, unknown>): UpdatePresenceTemplateArgs | string {
   const { child, date, activityType } = body;
   if (typeof child !== 'number' || !Number.isInteger(child) || child <= 0) {
@@ -437,9 +444,9 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
   app.post('/data/children/sick', async (c) => {
     const body = await changeBody(c);
     if (!body) return c.json({ error: 'expected a JSON body' }, 415);
-    const child = body.child;
-    if (typeof child !== 'number' || !Number.isInteger(child) || typeof body.sick !== 'boolean') {
-      return c.json({ error: 'give child (an id) and sick (true or false)' }, 400);
+    const ids = childIdsOf(body);
+    if (!ids || typeof body.sick !== 'boolean') {
+      return c.json({ error: 'give child (an id) or children, and sick (true or false)' }, 400);
     }
     const sick = body.sick;
     const client = await clientOf(c);
@@ -447,16 +454,16 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const started = Date.now();
     const action = sick ? 'presence_report_sick' : 'presence_undo_sick';
     try {
-      const refusal = await sickReportRefusal(client, [child], sick);
+      const refusal = await sickReportRefusal(client, ids, sick);
       if (refusal) return c.json(refusal, 409);
-      await sendSickReport(client, [child], sick);
+      await sendSickReport(client, ids, sick);
     } catch (err) {
       await auditOf(c)?.({
         category: 'aula',
         action,
         ok: false,
         durationMs: Date.now() - started,
-        details: { children: 1, error: (err as Error).message.slice(0, 300) },
+        details: { children: ids.length, error: (err as Error).message.slice(0, 300) },
       });
       return aulaFailed(c, 'sick', err);
     }
@@ -465,7 +472,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       action,
       ok: true,
       durationMs: Date.now() - started,
-      details: { children: 1 },
+      details: { children: ids.length },
     });
     return c.json({ ok: true });
   });
@@ -523,26 +530,23 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
   app.post('/data/children/vacation', async (c) => {
     const body = await changeBody(c);
     if (!body) return c.json({ error: 'expected a JSON body' }, 415);
-    const { child, startDate, endDate } = body;
+    const { startDate, endDate } = body;
+    const ids = childIdsOf(body);
     const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
-    if (
-      typeof child !== 'number' ||
-      !Number.isInteger(child) ||
-      typeof startDate !== 'string' ||
-      typeof endDate !== 'string'
-    ) {
-      return c.json({ error: 'give child (an id), startDate and endDate' }, 400);
+    if (!ids || typeof startDate !== 'string' || typeof endDate !== 'string') {
+      return c.json({ error: 'give child (an id) or children, startDate and endDate' }, 400);
     }
     const problems = vacationProblems({ startDate, endDate, comment });
     if (problems.length > 0) return c.json({ error: problems.join(' ') }, 400);
     const client = await clientOf(c);
     if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
     const started = Date.now();
-    const details = { children: 1, days: vacationDays(startDate, endDate) };
+    const details = { children: ids.length, days: vacationDays(startDate, endDate) };
     try {
-      if (!(await ownChildren(client)).has(child)) return c.json({ error: 'not your child' }, 404);
+      const own = await ownChildren(client);
+      if (!ids.every((id) => own.has(id))) return c.json({ error: 'not your child' }, 404);
       await client.addVacation({
-        childIds: [child],
+        childIds: ids,
         startDate,
         endDate,
         ...(comment ? { comment } : {}),

@@ -292,6 +292,32 @@ describe('dashboard child shortcuts', () => {
     expect(entry?.details).toEqual({ children: 1, days: 5, trigger: 'dashboard' });
   });
 
+  test('sick and ferie take several children at once, all of them the parent’s own', async () => {
+    const { post, audit, calls } = await setup();
+    const ferie = { startDate: '2099-01-01', endDate: '2099-01-02' };
+    expect((await post('/data/children/vacation', { ...ferie, children: [11, 99] })).status).toBe(
+      404,
+    );
+    expect((await post('/data/children/vacation', { ...ferie, children: [11, 'x'] })).status).toBe(
+      400,
+    );
+    expect((await post('/data/children/sick', { children: [12, 99], sick: true })).status).toBe(
+      409,
+    );
+    expect(calls).toEqual([]);
+    expect((await post('/data/children/vacation', { ...ferie, children: [11, 12] })).status).toBe(
+      200,
+    );
+    expect((await post('/data/children/sick', { children: [11, 12], sick: true })).status).toBe(
+      200,
+    );
+    expect(calls.map((x) => x.args)).toMatchObject([
+      { childIds: [11, 12] },
+      { institutionProfileIds: [11, 12], status: 1 },
+    ]);
+    expect((await audit()).map((e) => e.details?.children)).toEqual([2, 2]);
+  });
+
   test('POST /data/children/vacation refuses before it reaches Aula', async () => {
     const { post, calls } = await setup();
     const base = { child: 12, startDate: '2099-01-01', endDate: '2099-01-05' };

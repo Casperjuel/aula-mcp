@@ -1002,6 +1002,15 @@ async function loadKids(force) {
   catch (err) { state.kids = { error: err.message }; }
   rerender('oversigt');
 }
+/** Checkboxes for a child's brothers and sisters that pass ok(k), for doing the same for them. */
+function siblingPicker(c, ok) {
+  const kids = state.kids && state.kids.list ? state.kids.list.filter((k) => k.id !== c.id && ok(k)) : [];
+  const boxes = kids.map((k) => ({ k, box: el('input', { type: 'checkbox', id: 'sib-' + k.id }) }));
+  return {
+    node: boxes.length ? el('div', { class: 'field' }, boxes.map(({ k, box }) => el('label', { for: 'sib-' + k.id, style: 'display:flex;gap:8px;align-items:center;font-weight:400' }, box, 'Også ' + k.name))) : null,
+    picked: () => boxes.filter(({ box }) => box.checked).map(({ k }) => k),
+  };
+}
 const kidToday = (id) => (state.kids && state.kids.list ? state.kids.list.find((k) => k.id === id) : null);
 function kidPill(k) {
   const cls = k.status === 1 ? 'err' : k.status === 3 || k.status === 5 ? 'ok' : k.status === 2 ? 'warn' : k.status === 4 || k.status === 6 ? 'run' : 'neutral';
@@ -1052,6 +1061,7 @@ function openKid(c) {
     icon('chev'));
   const askSick = (sick) => {
     d.close();
+    const also = siblingPicker(c, (k) => sick ? k.status !== 1 : k.status === 1);
     confirmDialog({
       danger: sick, icon: sick ? 'warn' : 'sun',
       title: sick ? 'Meld ' + first + ' syg i dag?' : 'Meld ' + first + ' rask igen?',
@@ -1059,10 +1069,13 @@ function openKid(c) {
       body: [
         el('p', {}, sick ? c.name + ' meldes syg i Aula for i dag. Institutionen får besked med det samme.'
           : 'Sygemeldingen tages tilbage i Aula, og ' + first + ' står som ikke kommet.'),
+        also.node,
         el('p', { class: 'muted small' }, 'Det står i din log under Handlinger i Aula.'),
       ],
       onok: async () => {
-        try { await postJson('data/children/sick', { child: c.id, sick }); toast(sick ? first + ' er meldt syg i Aula' : first + ' er meldt rask i Aula'); }
+        const kids = [c].concat(also.picked());
+        const names = kids.map((k) => (k.name || '').split(' ')[0]).join(' og ');
+        try { await postJson('data/children/sick', { children: kids.map((k) => k.id), sick }); toast(sick ? names + ' er meldt syg i Aula' : names + ' er meldt rask i Aula'); }
         catch (err) { toast('Kunne ikke: ' + kidErr(err)); }
         loadKids(true);
       },
@@ -1200,25 +1213,28 @@ function openKid(c) {
     to.min = todayKey();
     from.addEventListener('change', () => { to.min = from.value; if (to.value < from.value) to.value = from.value; });
     const status = el('p', { class: 'muted small', style: 'margin:0' });
+    const also = siblingPicker(c, () => true);
     const save = el('button', { class: 'btn btn-primary' }, 'Meld ferie/fri');
     const span = () => from.value === to.value ? longDay(from.value) : longDay(from.value) + ' til ' + longDay(to.value);
     save.addEventListener('click', () => {
       if (!from.value || !to.value || to.value < from.value) { status.textContent = 'Vælg en første og en sidste dag.'; return; }
       const comment = note.value.trim();
+      const kids = [c].concat(also.picked());
+      const names = kids.map((k) => (k.name || '').split(' ')[0]).join(' og ');
       d.close();
       confirmDialog({
         icon: 'sun',
-        title: 'Meld ' + first + ' på ferie/fri?',
+        title: 'Meld ' + names + ' på ferie/fri?',
         ok: 'Meld ferie/fri',
         body: [
-          el('p', {}, c.name + ' meldes på ferie/fri i Aula ' + span() + '. Institutionen kan se det med det samme.'),
+          el('p', {}, kids.map((k) => k.name).join(' og ') + ' meldes' + ' på ferie/fri i Aula ' + span() + '. Institutionen kan se det med det samme.'),
           comment ? el('p', {}, 'Besked: ' + comment) : null,
           el('p', { class: 'muted small' }, 'Du kan ikke slette ferien herfra. Er den forkert, slettes den i Aula. Det står i din log under Handlinger i Aula.'),
         ],
         onok: async () => {
           try {
-            await postJson('data/children/vacation', { child: c.id, startDate: from.value, endDate: to.value, comment });
-            toast(first + ' er meldt på ferie/fri i Aula');
+            await postJson('data/children/vacation', { children: kids.map((k) => k.id), startDate: from.value, endDate: to.value, comment });
+            toast(names + ' er meldt på ferie/fri i Aula');
           } catch (err) { toast('Kunne ikke: ' + kidErr(err)); }
           loadKids(true);
         },
@@ -1230,6 +1246,7 @@ function openKid(c) {
         el('div', { class: 'field' }, el('label', { for: 'kv-from' }, 'Første dag'), from),
         el('div', { class: 'field' }, el('label', { for: 'kv-to' }, 'Sidste dag'), to)),
       el('div', { class: 'field' }, el('label', { for: 'kv-comment' }, 'Besked til personalet (valgfri)'), note),
+      also.node,
       status,
       el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => menu() }, 'Annuller'), save));
   };
