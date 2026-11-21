@@ -91,6 +91,8 @@ spec:
             {{- end }}
             - name: AULA_MCP_TOOL_NAMES
               value: {{ .Values.toolNames | default (ternary "underscore" "dotted" .Values.kagent.enabled) | quote }}
+            - name: AULA_MCP_KEEPALIVE
+              value: {{ ternary "1" "0" .Values.tokenKeepAlive | quote }}
             {{- with .Values.encryptionKey.existingSecret }}
             - name: AULA_MCP_KEY
               valueFrom:
