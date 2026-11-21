@@ -21,6 +21,11 @@ export function toolNameStyle(env: NodeJS.ProcessEnv = process.env): ToolNameSty
   throw new Error(`AULA_MCP_TOOL_NAMES must be "dotted" or "underscore", got "${value}".`);
 }
 
+/** One tool name in the given style. */
+export function toolName(name: string, style: ToolNameStyle): string {
+  return style === 'underscore' ? name.replaceAll('.', '_') : name;
+}
+
 /** Rewrites the given tool names in free text, and leaves anything else
  *  that merely looks like one (`aula.dk`) alone. `aula.discover.children`
  *  becomes `aula_discover.children`: the longest tool name prefix wins. */

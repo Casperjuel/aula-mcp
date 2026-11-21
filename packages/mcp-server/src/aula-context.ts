@@ -37,12 +37,16 @@ export interface AulaContextOptions {
   logger?: Logger;
   /** Override the HTTP client (tests). */
   http?: AulaHttpClient;
+  /** Replaces the CLI advice (`aula login`) when there are no tokens or the
+   *  refresh fails, e.g. with where a parent logs in through the setup UI. */
+  loginHint?: string;
 }
 
 export class AulaContext {
   private readonly store: TokenStore;
   private readonly logger: Logger;
   private readonly http: AulaHttpClient;
+  private readonly loginHint: string | undefined;
   // Fields below are declared as `T | undefined` (not just `T?`) so we can
   // explicitly assign `undefined` to invalidate the cache (the strict
   // `exactOptionalPropertyTypes` flag forbids `field = undefined` on `T?`).
@@ -62,6 +66,7 @@ export class AulaContext {
     this.store = options.store ?? defaultStore();
     this.logger = options.logger ?? silentLogger;
     this.http = options.http ?? new AulaHttpClient({ logger: this.logger });
+    this.loginHint = options.loginHint;
     this.watchTokenFile();
   }
 
@@ -251,6 +256,20 @@ export class AulaContext {
     return this.cachedRecord;
   }
 
+  /** By name, not instanceof: see watchTokenFile on duplicated classes. */
+  private withLoginHint(err: unknown): unknown {
+    if (!this.loginHint || !(err instanceof Error)) return err;
+    if (err.name === 'TokenStoreError' && err.message.startsWith('No tokens on disk')) {
+      return new Error(`Not logged in to Aula. ${this.loginHint}`, { cause: err });
+    }
+    if (err.name === 'OAuthError') {
+      return new Error(`Renewing the Aula login failed (${err.message}). ${this.loginHint}`, {
+        cause: err,
+      });
+    }
+    return err;
+  }
+
   private async buildClient(refreshBufferSeconds?: number): Promise<AulaClient> {
     // Plain refresh_token grant. The scaarup/aula HA integration has
     // proven empirically that Aula's OAuth server preserves the
@@ -272,6 +291,8 @@ export class AulaContext {
       http: this.http,
       logger: this.logger,
       ...(refreshBufferSeconds !== undefined ? { refreshBufferSeconds } : {}),
+    }).catch((err: unknown) => {
+      throw this.withLoginHint(err);
     });
     this.cachedRecord = record;
     return new AulaClient({ tokens: record.tokens, http: this.http, logger: this.logger });

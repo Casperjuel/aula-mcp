@@ -71,6 +71,22 @@ describe('createSetupApp', () => {
     expect(body.logged_in).toBe(true);
     expect(body.username).toBe('demo');
     expect(body.seconds_remaining).toBeGreaterThan(0);
+    expect(body).toMatchObject({ auto_renew: false, renews_at: null, seconds_until_renew: null });
+  });
+
+  test('GET /status says when the keep-alive renews next', async () => {
+    const store = new MemoryStore();
+    await store.save(SAMPLE_RECORD);
+    const app = createSetupApp({ store, autoRenew: true });
+    const body = (await (await app.fetch(new Request('http://test/status'))).json()) as {
+      auto_renew: boolean;
+      renews_at: number;
+      seconds_until_renew: number;
+    };
+    expect(body.auto_renew).toBe(true);
+    // Renewal starts 15 minutes before the access token expires.
+    expect(body.renews_at).toBe(SAMPLE_RECORD.tokens.expires_at - 15 * 60);
+    expect(body.seconds_until_renew).toBeGreaterThanOrEqual(0);
   });
 
   test('POST /login/start rejects missing username', async () => {

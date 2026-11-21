@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { silentLogger } from '@aula-mcp/aula-auth';
@@ -46,5 +46,30 @@ describe('ParentContexts', () => {
   test('a parent with no login has no tokens, not the single-parent ones', async () => {
     const parents = await setup();
     await expect(parents.get(parentA).getClient()).rejects.toThrow(/No tokens/);
+  });
+
+  test('with a login hint, a parent with no tokens is told where to log in', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'aula-parents-'));
+    contexts = new ParentContexts({
+      logger: silentLogger,
+      baseDir: dir,
+      loginHint: 'Log in at https://aula-setup.example.com.',
+    });
+    await expect(contexts.get(parentA).getClient()).rejects.toThrow(
+      'Not logged in to Aula. Log in at https://aula-setup.example.com.',
+    );
+  });
+
+  test("all() lists every parent directory as that parent's own context", async () => {
+    const parents = await setup();
+    expect(await parents.all()).toEqual([]);
+    await mkdir(parentDirectory(dir as string, parentA), { recursive: true });
+    await mkdir(parentDirectory(dir as string, parentB), { recursive: true });
+    const all = await parents.all();
+    expect(all).toHaveLength(2);
+    // The same context tool calls use, so the keep-alive and tool calls share
+    // one refresh path.
+    expect(all).toContain(parents.get(parentA));
+    expect(all).toContain(parents.get(parentB));
   });
 });

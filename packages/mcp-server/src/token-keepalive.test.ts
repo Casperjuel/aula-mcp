@@ -72,4 +72,35 @@ describe('startTokenKeepAlive', () => {
     ka.stop();
     expect(schedule.stopped).toBe(true);
   });
+
+  test('checks every context, and one failing renewal does not stop the rest', async () => {
+    const failing = contextReturning(new Error('refresh failed'));
+    const renewing = contextReturning(true);
+    let listed = 0;
+    const ka = startTokenKeepAlive({
+      contexts: async () => {
+        listed++;
+        return [failing, renewing];
+      },
+      schedule: fakeSchedule(),
+      checkOnStart: false,
+    });
+    expect(await ka.tick()).toBe(true);
+    expect(await ka.tick()).toBe(true);
+    expect(failing.calls).toHaveLength(2);
+    expect(renewing.calls).toHaveLength(2);
+    // Looked up again on every check, so parents who log in later are kept alive.
+    expect(listed).toBe(2);
+  });
+
+  test('a failing lookup is swallowed too', async () => {
+    const ka = startTokenKeepAlive({
+      contexts: async () => {
+        throw new Error('EACCES');
+      },
+      schedule: fakeSchedule(),
+      checkOnStart: false,
+    });
+    expect(await ka.tick()).toBe(false);
+  });
 });
