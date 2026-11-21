@@ -7,6 +7,8 @@
 
 import type { Logger } from '@aula-mcp/aula-auth';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
+import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { AulaContext } from './aula-context.ts';
 import { type ToolNameStyle, toolName, toolNameStyle, underscoreTools } from './tool-names.ts';
 import { registerTools } from './tools.ts';
@@ -88,7 +90,7 @@ export function createMcpApp({
     : tools
       ? tools.rewrite(INSTRUCTIONS)
       : INSTRUCTIONS;
-  const mcp = new McpServer(
+  const mcp = new AulaMcpServer(
     {
       name: 'aula-mcp',
       version: VERSION,
@@ -101,6 +103,45 @@ export function createMcpApp({
   if (loginRequired) registerLoginTool(mcp, loginRequired, toolNames, registerAulaTools);
   else registerAulaTools(mcp);
   return { mcp, context };
+}
+
+/**
+ * Some clients send `"arguments": null` when the model calls a tool without
+ * arguments (kagent does for `aula_discover`). MCP says `arguments` is an
+ * optional object, and the SDK's CallToolRequest schema (`z.record(...)
+ * .optional()`) rejects null with "expected record, received null" before
+ * any tool handler runs. Treat null, like a missing value, as `{}`.
+ *
+ * This runs on every transport: the HTTP, SSE and stdio servers all reach
+ * the session through `mcp.connect()`.
+ */
+class AulaMcpServer extends McpServer {
+  override connect(transport: Transport): Promise<void> {
+    acceptNullToolArguments(transport);
+    return super.connect(transport);
+  }
+}
+
+/**
+ * Installs a message handler that rewrites `tools/call` params in place. The
+ * SDK's Protocol.connect() keeps a handler that is already set and calls it
+ * with the same message object before dispatching it, so this runs first,
+ * from the very first message, with no window where a request slips past.
+ */
+function acceptNullToolArguments(transport: Transport): void {
+  const previous = transport.onmessage;
+  transport.onmessage = (message, extra) => {
+    defaultToolArguments(message);
+    previous?.(message, extra);
+  };
+}
+
+function defaultToolArguments(message: JSONRPCMessage): void {
+  if (!('method' in message) || message.method !== 'tools/call') return;
+  const params = message.params as { arguments?: unknown } | undefined;
+  if (params && typeof params === 'object' && params.arguments == null) {
+    params.arguments = {};
+  }
 }
 
 export function loginMessage(setupUrl: string | null): string {

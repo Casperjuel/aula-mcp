@@ -2,7 +2,11 @@ import { describe, expect, test } from 'bun:test';
 import { type StoredTokenRecord, silentLogger, type TokenStore } from '@aula-mcp/aula-auth';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import {
+  type JSONRPCMessage,
+  ToolListChangedNotificationSchema,
+} from '@modelcontextprotocol/sdk/types.js';
 import { AulaContext } from './aula-context.ts';
 import { createMcpApp, type LoginRequired } from './setup.ts';
 
@@ -109,5 +113,110 @@ describe('createMcpApp with loginRequired', () => {
     expect(names).not.toContain('aula_login_required');
     expect(session.listChanged()).toBeGreaterThan(0);
     await session.close();
+  });
+});
+
+describe('tools/call without arguments', () => {
+  // kagent sends `"arguments": null` for a tool that takes no arguments. The
+  // SDK's CallToolRequest schema only takes an object or nothing, so without
+  // the fix in setup.ts the call fails with "expected record, received null"
+  // before the tool handler runs.
+  const setupUrl = 'https://aula-setup.example.com';
+  const initialize: JSONRPCMessage = {
+    jsonrpc: '2.0',
+    id: 0,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 'kagent-like', version: '0.0.0' },
+    },
+  };
+  const initialized: JSONRPCMessage = { jsonrpc: '2.0', method: 'notifications/initialized' };
+  const callLoginTool = (params: Record<string, unknown>): JSONRPCMessage => ({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'tools/call',
+    params: { name: 'aula_login_required', ...params },
+  });
+
+  interface Reply {
+    result?: { content: unknown; isError?: boolean };
+    error?: unknown;
+  }
+
+  function expectLoginAnswer(reply: Reply | undefined): void {
+    expect(reply?.error).toBeUndefined();
+    expect(reply?.result?.isError).toBeFalsy();
+    expect(JSON.stringify(reply?.result?.content)).toContain(setupUrl);
+  }
+
+  function newApp() {
+    const context = new AulaContext({ store: new CountingStore(), logger: silentLogger });
+    const app = createMcpApp({
+      logger: silentLogger,
+      context,
+      toolNames: 'underscore',
+      loginRequired: { setupUrl, loggedIn: async () => false },
+    });
+    return {
+      app,
+      close: async () => {
+        await app.mcp.close();
+        context.dispose();
+      },
+    };
+  }
+
+  for (const [label, params] of [
+    ['null', { arguments: null }],
+    ['missing', {}],
+  ] as const) {
+    test(`arguments ${label} succeeds over an in-process (stdio-like) transport`, async () => {
+      const { app, close } = newApp();
+      const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+      await app.mcp.connect(serverSide);
+      const replies: JSONRPCMessage[] = [];
+      clientSide.onmessage = (message) => {
+        replies.push(message);
+      };
+      await clientSide.start();
+      await clientSide.send(initialize);
+      await clientSide.send(initialized);
+      await clientSide.send(callLoginTool(params));
+      for (let i = 0; i < 50 && !replies.some((m) => 'id' in m && m.id === 1); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expectLoginAnswer(replies.find((m) => 'id' in m && m.id === 1) as Reply | undefined);
+      await close();
+    });
+  }
+
+  test('arguments null succeeds over Streamable HTTP', async () => {
+    const { app, close } = newApp();
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      enableJsonResponse: true,
+      sessionIdGenerator: () => crypto.randomUUID(),
+    });
+    await app.mcp.connect(transport);
+    let sessionId: string | undefined;
+    const post = async (body: JSONRPCMessage) => {
+      const headers: Record<string, string> = {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+      };
+      if (sessionId) headers['mcp-session-id'] = sessionId;
+      const res = await transport.handleRequest(
+        new Request('http://test/mcp', { method: 'POST', headers, body: JSON.stringify(body) }),
+      );
+      sessionId ??= res.headers.get('mcp-session-id') ?? undefined;
+      return res;
+    };
+    await post(initialize);
+    await post(initialized);
+    const res = await post(callLoginTool({ arguments: null }));
+    expect(res.status).toBe(200);
+    expectLoginAnswer((await res.json()) as Reply);
+    await close();
   });
 });
