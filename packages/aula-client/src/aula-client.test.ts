@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import type { AulaTokens } from '@aula-mcp/aula-auth';
 import { AulaClient } from './aula-client.ts';
-import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
+import {
+  AulaApiError,
+  AulaApiVersionError,
+  AulaClientError,
+  AulaStepUpRequiredError,
+} from './errors.ts';
 import { FakeHttp } from './test-helpers.ts';
 
 const TOKENS: AulaTokens = {
@@ -669,5 +674,61 @@ describe('AulaClient.getPosts', () => {
 
     await c.getPosts({ institutionProfileIds: [1], onlyUnread: true });
     expect(http.requested.at(-1)?.url).toContain('isUnread=true');
+  });
+});
+
+describe('AulaClient.getFamilyInstitutionProfileIds', () => {
+  const guardian = (id: number) => ({ institutionProfile: { id, role: 'guardian' } });
+  const child = (id: number) => ({ institutionProfile: { id, role: 'child' } });
+
+  function clientWithConsents(entries: unknown) {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // version probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope(entries) },
+    );
+    return { http, client: makeClient(http) };
+  }
+
+  test('returns guardians first, then children, without duplicates', async () => {
+    const { client } = clientWithConsents([
+      child(2001),
+      guardian(1001),
+      child(2002),
+      child(2001),
+      guardian(1002),
+    ]);
+    await expect(client.getFamilyInstitutionProfileIds()).resolves.toEqual([
+      1001, 1002, 2001, 2002,
+    ]);
+  });
+
+  test('activates the profile context first and asks for already-answered consents too', async () => {
+    const { http, client } = clientWithConsents([guardian(1001)]);
+    await client.getFamilyInstitutionProfileIds();
+    expect(http.requested.map((r) => new URL(r.url).searchParams.get('method'))).toEqual([
+      'profiles.getProfilesByLogin',
+      'profiles.getProfileContext',
+      'consents.getConsentResponses',
+    ]);
+    // Without this Aula only lists consents still waiting for an answer, which
+    // would drop every child that has already been consented.
+    expect(http.requested.at(-1)?.url).toContain('returnOnlyPendingConsentResponses=false');
+  });
+
+  test('skips entries that carry no id', async () => {
+    const { client } = clientWithConsents([
+      guardian(1001),
+      { institutionProfile: { role: 'child' } },
+      {},
+      child(2001),
+    ]);
+    await expect(client.getFamilyInstitutionProfileIds()).resolves.toEqual([1001, 2001]);
+  });
+
+  test('throws when the consent list holds no guardian to authorize the call', async () => {
+    const { client } = clientWithConsents([child(2001)]);
+    await expect(client.getFamilyInstitutionProfileIds()).rejects.toBeInstanceOf(AulaClientError);
   });
 });
