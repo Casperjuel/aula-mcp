@@ -62,7 +62,7 @@ export const SYNC_JOB_DESCRIPTIONS: Record<SyncJobName, string> = {
   notifications: 'Notifications.',
   posts: 'Posts from schools and clubs.',
   presence: "Today's presence (check-in, pick-up) per child.",
-  calendar: 'Calendar events from a week back to eight weeks ahead.',
+  calendar: "Calendar events from a week back to eight weeks ahead, plus Aula's important dates.",
   directory: "The children's groups and their contact lists.",
   gallery:
     'Photo albums and their photos and videos, downloaded in original quality with a ' +
@@ -245,6 +245,11 @@ const syncCalendar: SyncJob = async ({ client, store, now }) => {
       })),
     );
   }
+  // Aula's "important dates": upcoming events it highlights, same shape.
+  const important = findArray(await client.rawRequest('calendar.getImportantDates', {}), [
+    'events',
+  ]).filter((e) => typeof e.startDateTime === 'string') as unknown as CalendarEvent[];
+  events.push(...important);
   const byId = new Map<string, ItemInput>();
   for (const event of events) {
     const id = (event as { id?: number | string }).id;

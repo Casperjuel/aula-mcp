@@ -171,6 +171,20 @@ describe('other jobs', () => {
     expect(windows[1]?.[0]).toBe(windows[0]?.[1] as string);
   });
 
+  test("calendar also stores Aula's important dates, once each", async () => {
+    const holiday = { id: 7, type: 'presence_holiday', startDateTime: '2026-12-24T00:00:00+01:00' };
+    const client = fakeClient({
+      rawRequest: async (method: string) =>
+        method === 'calendar.getImportantDates'
+          ? [holiday]
+          : [{ institutionProfile: { id: 5, role: 'guardian' } }],
+      getCalendarEvents: async () => [holiday as never],
+    });
+    await SYNC_JOB_RUNNERS.calendar(input(client));
+    const rows = await storage.forParent('p').list({ kind: 'calendar_event' });
+    expect(rows.map((r) => r.id)).toEqual(['7']);
+  });
+
   test('directory skips a group without a contact list', async () => {
     const client = fakeClient({
       getGroups: async () => [{ id: 40 }, { id: 41 }],
