@@ -223,6 +223,7 @@ async function sessionAppFor(caller: Caller | null): Promise<McpApp> {
     ...(loginRequired ? { loginRequired } : {}),
     ...(sync ? { sync: sync.forParent(parentIdOf(caller), context) } : {}),
     ...(gallery ? { gallery } : {}),
+    ...(storage ? { local: storage.forParent(parentIdOf(caller)) } : {}),
   });
 }
 

@@ -58,15 +58,8 @@ import QRCode from 'qrcode';
 import type { AulaContext } from './aula-context.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
-import {
-  detail,
-  SENDER_ROLES,
-  type SenderRole,
-  searchText,
-  senderRole,
-  summarize,
-  threadMessage,
-} from './item-view.ts';
+import { detail, SENDER_ROLES, type SenderRole, summarize } from './item-view.ts';
+import { roleCounts, searchItems, threadMessages } from './local-data.ts';
 import { type Caller, callerId } from './oidc.ts';
 import { renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
@@ -86,9 +79,6 @@ import { toolNameStyle } from './tool-names.ts';
  *  MitID identity after the picker is shown. After this the login rejects
  *  with a timeout so the session entry gets cleaned up instead of leaking. */
 const IDENTITY_PICK_TIMEOUT_MS = 5 * 60 * 1000;
-
-/** Most stored items a search reads through before it stops. */
-const SEARCH_SCAN_LIMIT = 10_000;
 
 export interface SetupAppOptions {
   logger?: Logger;
@@ -332,62 +322,26 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
         return c.json({ error: 'role needs kind=message or kind=message_thread' }, 400);
       }
     }
-    if (!q && !role) {
-      const rows = await store.list({ ...query, offset: page.offset, limit: page.limit + 1 });
-      return c.json({
-        items: rows.slice(0, page.limit).map(summarize),
-        ...page,
-        more: rows.length > page.limit,
-      });
-    }
-    const matches = [];
-    let scanned = 0;
-    let skip = page.offset;
-    for (;;) {
-      const rows = await store.list({ ...query, offset: scanned, limit: 500 });
-      scanned += rows.length;
-      for (const row of rows) {
-        if (role && senderRole(row) !== role) continue;
-        if (q && !searchText(row).includes(q)) continue;
-        if (skip > 0) skip--;
-        else matches.push(row);
-      }
-      const exhausted = rows.length < 500;
-      if (matches.length > page.limit || exhausted || scanned >= SEARCH_SCAN_LIMIT) {
-        return c.json({
-          items: matches.slice(0, page.limit).map(summarize),
-          ...page,
-          more: matches.length > page.limit,
-          ...(!exhausted && matches.length <= page.limit ? { search_truncated: true } : {}),
-        });
-      }
-    }
+    const found = await searchItems(store, {
+      ...query,
+      ...(q ? { q } : {}),
+      ...(role ? { role: role as SenderRole } : {}),
+      ...page,
+    });
+    return c.json({
+      items: found.items.map(summarize),
+      ...page,
+      more: found.more,
+      ...(found.truncated ? { search_truncated: true } : {}),
+    });
   });
 
   // How many threads and messages each kind of sender wrote, for this parent.
   app.get('/data/messages/roles', async (c) => {
     const store = storageOf(c);
     if (!store) return c.json({ error: 'local storage is off' }, 404);
-    const count = async (kind: 'message' | 'message_thread') => {
-      const counts: Record<SenderRole, number> = { guardian: 0, employee: 0, child: 0, other: 0 };
-      let scanned = 0;
-      for (;;) {
-        const rows = await store.list({ kind, offset: scanned, limit: 500 });
-        scanned += rows.length;
-        for (const row of rows) {
-          const role = senderRole(row);
-          if (role) counts[role]++;
-        }
-        if (rows.length < 500) return { counts, truncated: false };
-        if (scanned >= SEARCH_SCAN_LIMIT) return { counts, truncated: true };
-      }
-    };
-    const [threads, messages] = await Promise.all([count('message_thread'), count('message')]);
-    return c.json({
-      threads: threads.counts,
-      messages: messages.counts,
-      ...(threads.truncated || messages.truncated ? { truncated: true } : {}),
-    });
+    const { threads, messages, truncated } = await roleCounts(store);
+    return c.json({ threads, messages, ...(truncated ? { truncated: true } : {}) });
   });
 
   app.get('/data/items/:kind/:id', async (c) => {
@@ -397,12 +351,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (!isKind(kind)) return c.json({ error: 'unknown kind' }, 400);
     const item = await store.get(kind, c.req.param('id'));
     if (!item) return c.json({ error: 'not found' }, 404);
-    const messages =
-      kind === 'message_thread'
-        ? (await store.list({ kind: 'message', idPrefix: `${item.id}:`, limit: 500 }))
-            .reverse()
-            .map(threadMessage)
-        : undefined;
+    const messages = kind === 'message_thread' ? await threadMessages(store, item.id) : undefined;
     return c.json({ item: detail(item), ...(messages ? { messages } : {}) });
   });
 

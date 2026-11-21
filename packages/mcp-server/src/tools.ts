@@ -25,6 +25,8 @@ import { buildDiscoverManifest } from './discover.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
 import type { GalleryView } from './gallery.ts';
 import { registerGalleryTools } from './gallery-tools.ts';
+import { registerLocalTools } from './local-tools.ts';
+import type { ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
 import { registerSyncTools } from './sync-tools.ts';
 
@@ -354,6 +356,8 @@ export interface ToolExtras {
   sync?: ParentSync;
   /** The caller's downloaded gallery; the aula.gallery.* tools are registered when set. */
   gallery?: GalleryView;
+  /** The caller's stored data; the aula.local.* tools are registered when set. */
+  local?: ParentStorage;
 }
 
 /** `env` decides which gated tools are registered (tool-catalog.ts lists
@@ -366,6 +370,7 @@ export function registerTools(
 ): void {
   if (extras.sync) registerSyncTools(server, extras.sync);
   if (extras.gallery) registerGalleryTools(server, extras.gallery);
+  if (extras.local) registerLocalTools(server, extras.local);
 
   // --- aula.discover -------------------------------------------------------
 

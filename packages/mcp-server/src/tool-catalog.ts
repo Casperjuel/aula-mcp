@@ -9,6 +9,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { type ZodRawShape, z } from 'zod';
 import { AulaContext } from './aula-context.ts';
 import type { GalleryView } from './gallery.ts';
+import type { ParentStorage } from './storage.ts';
 import { type ToolNameStyle, toolName } from './tool-names.ts';
 import { registerTools } from './tools.ts';
 
@@ -81,7 +82,11 @@ function collect(env: NodeJS.ProcessEnv): Collected[] {
   // Registration never touches the context; only the handlers do.
   const context = new AulaContext({ logger: silentLogger, store: NO_STORE });
   try {
-    registerTools(collector, context, env, { sync: NO_SYNC, gallery: NO_GALLERY });
+    registerTools(collector, context, env, {
+      sync: NO_SYNC,
+      gallery: NO_GALLERY,
+      local: NO_LOCAL,
+    });
   } finally {
     context.dispose();
   }
@@ -95,6 +100,7 @@ const NO_SYNC = {
 
 /** Registration never calls it. */
 const NO_GALLERY = {} as GalleryView;
+const NO_LOCAL = {} as ParentStorage;
 
 const NO_STORE = {
   load: async () => null,

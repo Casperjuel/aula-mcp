@@ -1,0 +1,106 @@
+/**
+ * Reading one parent's stored Aula data: search with text and sender-role
+ * filters, role counts and a thread with its messages. Shared by the
+ * dashboard routes and the aula.local.* tools so both answer the same. The
+ * stored data is encrypted, so the filters run here and not in SQL.
+ */
+
+import { type SenderRole, searchText, senderRole, threadMessage } from './item-view.ts';
+import type { ItemKind, ParentStorage, StoredItem } from './storage.ts';
+
+/** Most stored items a search reads through before it stops. */
+export const SEARCH_SCAN_LIMIT = 10_000;
+
+const SCAN_PAGE = 500;
+
+export interface ItemSearch {
+  kind?: ItemKind;
+  /** Unix seconds, inclusive. */
+  since?: number;
+  until?: number;
+  /** Lowercased text to find in what the parent sees. */
+  q?: string;
+  /** Only messages or threads from this kind of sender. */
+  role?: SenderRole;
+  offset: number;
+  limit: number;
+}
+
+export interface ItemPage {
+  items: StoredItem[];
+  more: boolean;
+  /** The scan stopped at SEARCH_SCAN_LIMIT before the end. */
+  truncated: boolean;
+}
+
+/** Newest first, a page at a time. */
+export async function searchItems(store: ParentStorage, search: ItemSearch): Promise<ItemPage> {
+  const { q, role, offset, limit } = search;
+  const query = {
+    ...(search.kind ? { kind: search.kind } : {}),
+    ...(search.since !== undefined ? { since: search.since } : {}),
+    ...(search.until !== undefined ? { until: search.until } : {}),
+  };
+  if (!q && !role) {
+    const rows = await store.list({ ...query, offset, limit: limit + 1 });
+    return { items: rows.slice(0, limit), more: rows.length > limit, truncated: false };
+  }
+  const matches: StoredItem[] = [];
+  let scanned = 0;
+  let skip = offset;
+  for (;;) {
+    const rows = await store.list({ ...query, offset: scanned, limit: SCAN_PAGE });
+    scanned += rows.length;
+    for (const row of rows) {
+      if (role && senderRole(row) !== role) continue;
+      if (q && !searchText(row).includes(q)) continue;
+      if (skip > 0) skip--;
+      else matches.push(row);
+    }
+    const exhausted = rows.length < SCAN_PAGE;
+    if (matches.length > limit || exhausted || scanned >= SEARCH_SCAN_LIMIT) {
+      return {
+        items: matches.slice(0, limit),
+        more: matches.length > limit,
+        truncated: !exhausted && matches.length <= limit,
+      };
+    }
+  }
+}
+
+export interface RoleCounts {
+  threads: Record<SenderRole, number>;
+  messages: Record<SenderRole, number>;
+  truncated: boolean;
+}
+
+/** How many threads and messages each kind of sender wrote. */
+export async function roleCounts(store: ParentStorage): Promise<RoleCounts> {
+  const count = async (kind: 'message' | 'message_thread') => {
+    const counts: Record<SenderRole, number> = { guardian: 0, employee: 0, child: 0, other: 0 };
+    let scanned = 0;
+    for (;;) {
+      const rows = await store.list({ kind, offset: scanned, limit: SCAN_PAGE });
+      scanned += rows.length;
+      for (const row of rows) {
+        const role = senderRole(row);
+        if (role) counts[role]++;
+      }
+      if (rows.length < SCAN_PAGE) return { counts, truncated: false };
+      if (scanned >= SEARCH_SCAN_LIMIT) return { counts, truncated: true };
+    }
+  };
+  const [threads, messages] = await Promise.all([count('message_thread'), count('message')]);
+  return {
+    threads: threads.counts,
+    messages: messages.counts,
+    truncated: threads.truncated || messages.truncated,
+  };
+}
+
+/** The stored messages of a thread, oldest first. */
+export async function threadMessages(store: ParentStorage, threadId: string) {
+  return (await store.list({ kind: 'message', idPrefix: `${threadId}:`, limit: 500 }))
+    .reverse()
+    .map(threadMessage);
+}

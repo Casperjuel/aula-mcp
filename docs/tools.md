@@ -14,6 +14,11 @@ Every MCP tool the server offers. Read tools are always on; write tools need
 | [`aula.gallery.albums`](#aulagalleryalbums) | read | Gallery albums |
 | [`aula.gallery.media`](#aulagallerymedia) | read | Media in an album |
 | [`aula.gallery.thumbnail`](#aulagallerythumbnail) | read | Show a thumbnail |
+| [`aula.local.overview`](#aulalocaloverview) | read | What is stored locally |
+| [`aula.local.search`](#aulalocalsearch) | read | Search stored Aula data |
+| [`aula.local.get`](#aulalocalget) | read | One stored item in full |
+| [`aula.local.calendar`](#aulalocalcalendar) | read | Stored calendar |
+| [`aula.local.message_roles`](#aulalocalmessage_roles) | read | Who writes the messages |
 | [`aula.discover`](#auladiscover) | read | Discover Aula context |
 | [`aula.profiles.list`](#aulaprofileslist) | read | List Aula profiles |
 | [`aula.presence.today`](#aulapresencetoday) | read | Daily presence overview |
@@ -102,6 +107,62 @@ Returns the stored thumbnail (about 170 KB, JPEG) of one photo or video as an im
 | --- | --- | --- | --- |
 | `albumId` | integer | yes | Album id. |
 | `mediaId` | integer | yes | Media id from aula.gallery.media. |
+
+## `aula.local.overview`
+
+**What is stored locally** · read
+
+What the local database holds of the caller's own Aula data: per kind the number of items, the oldest and newest (when they happened in Aula) and when the kind was last updated, plus when each sync job last succeeded. Start here to see how far back aula.local.search can look. Never calls Aula. Kinds: message_thread, message (one message of a thread), post, notification, calendar_event, presence, contact, group, gallery_album, gallery_media (weekly_plan and task are reserved and empty for now).
+
+No parameters.
+
+## `aula.local.search`
+
+**Search stored Aula data** · read
+
+Search the caller's own Aula data in the local database, newest first. Every filter is optional and they combine: `kind`, `q` (case-insensitive text in what the parent sees: subject, sender, message text, fields), `role` (only messages and threads; needs kind message or message_thread), `since`/`until` (when it happened in Aula). Each result has kind, id, time, a Danish title and subtitle, unread for threads, senderRole for messages and the event details for calendar items; open one with aula.local.get. Text search reads at most 10 000 items and says `truncated` when it stopped early. Never calls Aula, so it is fast and goes back further than the live tools, but is only as fresh as the last sync (aula.sync.status). Example: kind "message", q "udflugt", role "employee". Kinds: message_thread, message (one message of a thread), post, notification, calendar_event, presence, contact, group, gallery_album, gallery_media (weekly_plan and task are reserved and empty for now). Sender roles come from Aula: guardian (a parent), employee (school or daycare staff), child, other (system and automatic messages).
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `kind` | string | no | Only this kind. |
+| `q` | string | no | Text to find, e.g. "madpakke". |
+| `role` | string | no | Sender role: guardian, employee, child or other. |
+| `since` | string | no | From: an ISO date (Copenhagen midnight) or date-time. |
+| `until` | string | no | Until: an ISO date (Copenhagen midnight) or date-time. |
+| `limit` | integer | no | Default 20. |
+| `offset` | integer | no | Default 0. |
+
+## `aula.local.get`
+
+**One stored item in full** · read
+
+One item from the local database as the parent would read it: Danish title, the text as plain text (HTML removed), labelled fields (for a calendar event: type, start, end, place, who made it, invited, response) and attachment names. A message_thread comes with all its stored messages, oldest first, each with sender, time, text and sender role. Set `raw` for Aula's own JSON as it was stored. Take `kind` and `id` from aula.local.search. Never calls Aula and never marks anything read.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `kind` | string | yes | Kind from aula.local.search. |
+| `id` | string | yes | Id from aula.local.search. |
+| `raw` | boolean | no | Also return Aula's stored JSON. Default false. |
+
+## `aula.local.calendar`
+
+**Stored calendar** · read
+
+The caller's stored Aula calendar events in a date range, oldest first, with type (event, holiday, presence_holiday, vacation_registration, birthday, excursion, other, school_home_meeting, parental_meeting, performance_meeting, lesson) and its Danish label, start, end, all-day, place, the children it belongs to and whether an answer is asked for, with answer and deadline. Defaults to today and 14 days ahead. The calendar sync keeps a week back to eight weeks ahead, plus older events it has seen before. Use `types` to pick some, e.g. ["parental_meeting","excursion"]. For live data from Aula use aula.calendar.events instead. Never calls Aula.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `since` | string | no | From, default today: an ISO date (Copenhagen midnight) or date-time. |
+| `until` | string | no | Until, default 14 days after since: an ISO date (Copenhagen midnight) or date-time. |
+| `types` | array | no | Only these event types. |
+
+## `aula.local.message_roles`
+
+**Who writes the messages** · read
+
+How many stored message threads and messages each kind of sender wrote, for the caller only: counts for guardian, employee, child and other. A thread counts by its latest sender. Filter the messages themselves with aula.local.search and `role`. Sender roles come from Aula: guardian (a parent), employee (school or daycare staff), child, other (system and automatic messages). Never calls Aula.
+
+No parameters.
 
 ## `aula.discover`
 
