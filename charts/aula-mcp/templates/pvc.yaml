@@ -1,0 +1,21 @@
+{{- if and .Values.persistence.enabled (not .Values.persistence.existingClaim) }}
+# Aula tokens (per parent under parents/<id>/ in multi-parent mode). Kept on
+# uninstall so a reinstall doesn't need every parent to log in again.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "aula-mcp.fullname" . }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.accessModes | nindent 4 }}
+  {{- with .Values.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}

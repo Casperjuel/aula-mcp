@@ -1,0 +1,28 @@
+{{- include "aula-mcp.validate" . }}
+{{- range $name, $route := .Values.httpRoute }}
+{{- if $route.enabled }}
+{{- if not $route.parentRefs }}{{ fail (printf "httpRoute.%s needs parentRefs" $name) }}{{ end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "aula-mcp.fullname" $ }}-{{ $name | kebabcase }}
+  labels:
+    {{- include "aula-mcp.labels" $ | nindent 4 }}
+  {{- with $route.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- toYaml $route.parentRefs | nindent 4 }}
+  {{- with $route.hostnames }}
+  hostnames:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - backendRefs:
+        - name: {{ include "aula-mcp.fullname" $ }}
+          port: {{ if eq $name "setupUi" }}{{ $.Values.setupUi.port }}{{ else }}{{ $.Values.service.port }}{{ end }}
+{{- end }}
+{{- end }}

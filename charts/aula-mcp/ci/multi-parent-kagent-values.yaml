@@ -1,0 +1,12 @@
+image:
+  repository: localhost/aula-mcp
+  tag: dev
+  pullPolicy: Never
+mode: multi-parent
+oidc:
+  issuer: https://keycloak.example.com/realms/kagent
+  acceptIdToken: true
+kagent:
+  enabled: true
+  agent:
+    enabled: true

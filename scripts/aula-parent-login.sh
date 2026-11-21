@@ -1,7 +1,7 @@
 #!/bin/sh
 # Log one parent into Aula with MitID, into that parent's own token directory.
 #
-#   kubectl -n aula-mcp exec -it deploy/aula-mcp -- aula-parent-login <sub>
+#   kubectl -n <namespace> exec -it deploy/<release> -- aula-parent-login <sub>
 #
 # <sub> is the parent's user ID in the identity provider (in Keycloak: Users,
 # then the user, then "ID"). The directory is derived the same way the server
