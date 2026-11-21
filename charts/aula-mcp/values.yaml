@@ -48,14 +48,27 @@ service:
   type: ClusterIP
   port: 7878
 
-# Browser login UI from the Home Assistant add-on. It has no login of its own:
-# whoever reaches it can log their MitID in as *the* parent of this server.
-# single-parent mode only.
+# Browser login UI from the Home Assistant add-on.
+# single-parent: it has no login of its own; whoever reaches it can log their
+#   MitID in as *the* parent of this server.
+# multi-parent: each parent first signs in with oidc.issuer (setupUi.login)
+#   and logs in to Aula for themselves only.
 setupUi:
   enabled: false
   port: 8099
-  # Must be set to true to enable setupUi; acknowledges the above.
+  # single-parent only: must be true to enable setupUi; acknowledges the above.
   iUnderstandItHasNoAuth: false
+  # multi-parent only, and required there.
+  login:
+    # Origin browsers open the UI on, e.g. https://aula-setup.example.com.
+    # The IdP client's redirect URI is <url>/auth/callback.
+    url: ""
+    clientId: aula-mcp-setup
+    # Secret holding the client secret of a confidential client. Leave empty
+    # for a public client (PKCE only).
+    clientSecret:
+      existingSecret: ""
+      secretKey: client-secret
 
 # Gateway API routes. Each needs at least one parentRef.
 httpRoute:

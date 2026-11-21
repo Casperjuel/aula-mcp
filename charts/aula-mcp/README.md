@@ -11,7 +11,8 @@ Runs aula-mcp on Kubernetes, alone or as a tool server for
 The chart refuses setups that would expose a parent's Aula session:
 
 - `httpRoute.mcp` without `multi-parent` mode;
-- `setupUi` in `multi-parent` mode, or without `setupUi.iUnderstandItHasNoAuth`;
+- `setupUi` in `single-parent` mode without `setupUi.iUnderstandItHasNoAuth`;
+- `setupUi` in `multi-parent` mode without `setupUi.login` (its sign-in);
 - `oidc.acceptIdToken` without `multi-parent` mode.
 
 ## Image
@@ -46,7 +47,8 @@ kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
 | `writeTools` | `false` | Enable write tools (`AULA_MCP_WRITE=1`). |
 | `encryptionKey.existingSecret` | `""` | Secret with `AULA_MCP_KEY` for the token store. |
 | `persistence.*` | 1Gi PVC | Token store. Kept on uninstall. |
-| `setupUi.enabled` | `false` | Browser login UI on port 8099. **No authentication.** |
+| `setupUi.enabled` | `false` | Browser login UI on port 8099. **No authentication** in single-parent mode. |
+| `setupUi.login.url` / `.clientId` / `.clientSecret` | `""` / `aula-mcp-setup` / none | Multi-parent: the UI's public origin and its OIDC client. |
 | `httpRoute.mcp` / `httpRoute.setupUi` | off | Gateway API routes; need `parentRefs`. |
 | `networkPolicy.enabled` / `.from` | on / `[]` | Allowed peers. kagent's namespace is added when `kagent.enabled`. |
 | `kagent.enabled` | `false` | Create a `RemoteMCPServer` in `kagent.namespace`. |
@@ -109,10 +111,50 @@ browser ── oauth2-proxy ── kagent UI ── agent ──(parent's ID tok
    kubectl -n aula-mcp exec -it deploy/aula-mcp -- aula-parent-login <sub>
    ```
 
+   Or let parents do it themselves in the browser, see below.
+
    The login is stored under `/data/parents/<id>/`. The `<id>` comes from the
    issuer and `sub`, the same way the server derives it. No restart needed.
    A parent who hasn't logged in gets "No tokens on disk", never someone
    else's data.
+
+### Setup UI per parent (optional)
+
+In multi-parent mode the setup UI signs each parent in with Keycloak first,
+then shows only that parent's status and MitID login, saved to their own
+directory. A parent can't see or change another parent's login.
+
+1. **Clients → Import client** with `examples/keycloak-setup-client.json`.
+   Set the redirect URI to `<setup url>/auth/callback` and copy the secret:
+
+   ```sh
+   kubectl -n aula-mcp create secret generic aula-mcp-setup \
+     --from-literal=client-secret='<client secret>'
+   ```
+
+2. Values:
+
+   ```yaml
+   setupUi:
+     enabled: true
+     login:
+       url: https://aula-setup.example.com
+       clientSecret:
+         existingSecret: aula-mcp-setup
+   httpRoute:
+     setupUi:
+       enabled: true
+       parentRefs: [{ name: gateway, namespace: gateway }]
+       hostnames: [aula-setup.example.com]
+   networkPolicy:
+     from:
+       - namespaceSelector:
+           matchLabels:
+             kubernetes.io/metadata.name: gateway
+   ```
+
+   `url` must be https (http only for localhost). Sessions live in memory, so
+   a restart asks parents to sign in again.
 
 The `RemoteMCPServer` gets the label `kagent.dev/discovery: disabled`, because
 aula-mcp refuses the controller's tool listing, which carries no token. Agents

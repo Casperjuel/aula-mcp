@@ -43,15 +43,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if include "aula-mcp.multiParent" . }}
 {{- if not .Values.oidc.issuer }}{{ fail "multi-parent mode needs oidc.issuer" }}{{ end }}
 {{- if not .Values.oidc.audience }}{{ fail "multi-parent mode needs oidc.audience" }}{{ end }}
-{{- if .Values.setupUi.enabled }}{{ fail "setupUi only works in single-parent mode: it cannot tell which parent is logging in" }}{{ end }}
+{{- if .Values.setupUi.enabled }}
+{{- if not .Values.setupUi.login.url }}{{ fail "setupUi in multi-parent mode needs setupUi.login.url: it signs each parent in first" }}{{ end }}
+{{- if not .Values.setupUi.login.clientId }}{{ fail "setupUi in multi-parent mode needs setupUi.login.clientId" }}{{ end }}
+{{- end }}
 {{- else }}
 {{- if .Values.oidc.acceptIdToken }}{{ fail "oidc.acceptIdToken needs mode: multi-parent" }}{{ end }}
 {{- if .Values.httpRoute.mcp.enabled }}
 {{- fail "httpRoute.mcp needs mode: multi-parent; in single-parent mode anyone who reaches /mcp acts as the parent" }}
 {{- end }}
-{{- end }}
 {{- if and .Values.setupUi.enabled (not .Values.setupUi.iUnderstandItHasNoAuth) }}
-{{- fail "setupUi has no authentication; set setupUi.iUnderstandItHasNoAuth=true to enable it" }}
+{{- fail "setupUi has no authentication in single-parent mode; set setupUi.iUnderstandItHasNoAuth=true to enable it" }}
+{{- end }}
+{{- if or .Values.setupUi.login.url .Values.setupUi.login.clientSecret.existingSecret }}
+{{- fail "setupUi.login needs mode: multi-parent" }}
+{{- end }}
 {{- end }}
 {{- if and .Values.httpRoute.setupUi.enabled (not .Values.setupUi.enabled) }}
 {{- fail "httpRoute.setupUi needs setupUi.enabled" }}
