@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { AulaStepUpRequiredError } from '@aula-mcp/aula-client';
+import { AulaApiError, AulaStepUpRequiredError } from '@aula-mcp/aula-client';
 import { createStorage, type Storage } from './storage.ts';
 import { sqliteDriver } from './storage-sql.ts';
 import {
@@ -153,6 +153,20 @@ describe('other jobs', () => {
     });
     const presence = await storage.forParent('p').get('presence', '11:2026-11-20');
     expect(presence?.childId).toBe('11');
+  });
+
+  test('directory skips a group without a contact list', async () => {
+    const client = fakeClient({
+      getGroups: async () => [{ id: 40 }, { id: 41 }],
+      getContactList: async ({ groupId, page }) => {
+        if (groupId === 40) throw new AulaApiError('API returned status 404', 404, 'https://x');
+        return page === 1 ? { results: [{ id: 1 }] } : { results: [] };
+      },
+    });
+    await SYNC_JOB_RUNNERS.directory(input(client));
+    expect((await storage.forParent('p').list({ kind: 'contact' })).map((c) => c.id)).toEqual([
+      '41:1',
+    ]);
   });
 });
 
