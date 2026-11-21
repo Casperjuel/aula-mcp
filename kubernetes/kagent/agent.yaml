@@ -1,0 +1,22 @@
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: aula-assistant
+spec:
+  harnessRef:
+    name: kagent-default
+  template:
+    inline:
+      description: Answers questions about the signed-in parent's Aula messages, posts and calendar.
+      modelConfig:
+        name: default-model-config
+      systemPrompt: |
+        You help a parent with Aula, the Danish school platform. You only see
+        the Aula data of the parent who is signed in. Answer in the language
+        the parent writes in. Never send a message unless the parent has seen
+        the exact text and asked you to send it.
+      tools:
+        - mcp:
+            server:
+              kind: RemoteMCPServer
+              name: aula-mcp

@@ -1,0 +1,7 @@
+# Build context for kubernetes/Dockerfile (built from the repo root).
+**/node_modules
+.git
+.github
+**/*.test.ts
+homeassistant-addon
+apps/cli/bin
