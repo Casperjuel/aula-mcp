@@ -17,6 +17,7 @@ describe('resolveServerMode', () => {
     expect(resolveServerMode({ AULA_MCP_MULTI_PARENT: '1', ...OIDC })).toEqual({
       kind: 'multi-parent',
       oidc: { issuer: OIDC.AULA_MCP_OIDC_ISSUER, audience: 'aula-mcp', acceptIdTokens: false },
+      setupLogin: null,
     });
   });
 
@@ -76,5 +77,71 @@ describe('resolveServerMode', () => {
     expect(() => withIssuer('not a url')).toThrow(/not a valid URL/);
     expect(withIssuer('http://localhost:8080/realms/home').kind).toBe('multi-parent');
     expect(withIssuer('http://127.0.0.1:8080/realms/home').kind).toBe('multi-parent');
+  });
+
+  describe('setup UI sign-in', () => {
+    const SETUP = {
+      AULA_MCP_MULTI_PARENT: '1',
+      AULA_MCP_INGRESS_PORT: '8099',
+      AULA_MCP_SETUP_URL: 'https://aula-setup.example.com',
+      AULA_MCP_SETUP_CLIENT_ID: 'aula-mcp-setup',
+      ...OIDC,
+    };
+    const setupLogin = (env: Record<string, string | undefined>) => {
+      const mode = resolveServerMode(env);
+      return mode.kind === 'multi-parent' ? mode.setupLogin : undefined;
+    };
+
+    test('the setup UI in multi-parent mode gets its sign-in config', () => {
+      expect(setupLogin(SETUP)).toEqual({
+        publicUrl: 'https://aula-setup.example.com',
+        clientId: 'aula-mcp-setup',
+      });
+      expect(setupLogin({ ...SETUP, AULA_MCP_SETUP_CLIENT_SECRET: 's3cret' })?.clientSecret).toBe(
+        's3cret',
+      );
+      expect(
+        setupLogin({ ...SETUP, AULA_MCP_SETUP_URL: 'https://aula-setup.example.com/' }),
+      ).toEqual({ publicUrl: 'https://aula-setup.example.com', clientId: 'aula-mcp-setup' });
+    });
+
+    test('refuses the setup UI in multi-parent mode without a sign-in', () => {
+      expect(() => resolveServerMode({ ...SETUP, AULA_MCP_SETUP_URL: undefined })).toThrow(
+        /requires AULA_MCP_SETUP_URL/,
+      );
+      expect(() => resolveServerMode({ ...SETUP, AULA_MCP_SETUP_CLIENT_ID: '' })).toThrow(
+        /requires AULA_MCP_SETUP_CLIENT_ID/,
+      );
+    });
+
+    test('refuses an insecure or non-origin setup URL', () => {
+      expect(() =>
+        resolveServerMode({ ...SETUP, AULA_MCP_SETUP_URL: 'http://aula-setup.lan' }),
+      ).toThrow(/must use https/);
+      expect(() =>
+        resolveServerMode({ ...SETUP, AULA_MCP_SETUP_URL: 'https://example.com/aula' }),
+      ).toThrow(/without a path/);
+      expect(setupLogin({ ...SETUP, AULA_MCP_SETUP_URL: 'http://localhost:8099' })?.publicUrl).toBe(
+        'http://localhost:8099',
+      );
+    });
+
+    test('refuses setup settings that would do nothing', () => {
+      expect(() => resolveServerMode({ ...SETUP, AULA_MCP_INGRESS_PORT: undefined })).toThrow(
+        /setup UI is off/,
+      );
+      expect(() =>
+        resolveServerMode({
+          AULA_MCP_SETUP_CLIENT_ID: 'aula-mcp-setup',
+          AULA_MCP_INGRESS_PORT: '8099',
+        }),
+      ).toThrow(/multi-parent mode is off/);
+    });
+
+    test('single-parent mode keeps its setup UI without a sign-in', () => {
+      expect(resolveServerMode({ AULA_MCP_INGRESS_PORT: '8099' })).toEqual({
+        kind: 'single-parent',
+      });
+    });
   });
 });

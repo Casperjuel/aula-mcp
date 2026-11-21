@@ -24,6 +24,11 @@
  * writer, the in-flight selectIdentity resolver, and the abort signal. A
  * single user (single household) is the design point; concurrent logins
  * aren't useful and aren't supported.
+ *
+ * Multi-parent mode (`parents` set): every route but /auth/* needs a parent
+ * signed in through setup-login.ts, and works on that parent's own token
+ * store only. A login session belongs to the parent who started it; another
+ * parent gets the same 404 as for an unknown session id.
  */
 
 import { homedir } from 'node:os';
@@ -38,9 +43,11 @@ import {
   silentLogger,
   type TokenStore,
 } from '@aula-mcp/aula-auth';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
+import { type Caller, callerId } from './oidc.ts';
+import type { SetupLogin } from './setup-login.ts';
 
 /** Max time we'll hold a login session waiting on the user to pick their
  *  MitID identity after the picker is shown. After this the login rejects
@@ -52,11 +59,23 @@ export interface SetupAppOptions {
   /** Override the token store (tests). Production uses the addon's
    *  EncryptedFileTokenStore under `AULA_MCP_DIR`. */
   store?: TokenStore;
+  /** Multi-parent mode: the sign-in, and each parent's own token store. */
+  parents?: {
+    login: SetupLogin;
+    storeFor(caller: Caller): TokenStore;
+    /** After a parent's tokens were saved or cleared. */
+    changed?(caller: Caller): void;
+  };
 }
 
 interface LoginSession {
   sessionId: string;
   username: string;
+  /** callerId of the parent who started it; '' in single-parent mode. */
+  owner: string;
+  store: TokenStore;
+  /** Called after the tokens were saved. */
+  onSaved?: () => void;
   stream?: SSEStreamingApi;
   /** Resolver waiting on user identity choice; null when no pending pick. */
   pendingIdentity: ((index: number) => void) | null;
@@ -78,15 +97,48 @@ const ICON_SVG = `<svg viewBox="0 0 24 24" width="24" height="24" fill="currentC
 
 export function createSetupApp(options: SetupAppOptions = {}): Hono {
   const logger = options.logger ?? silentLogger;
-  const store = options.store ?? defaultAddonStore();
+  const parents = options.parents;
+  const sharedStore = parents ? null : (options.store ?? defaultAddonStore());
   const loginSessions = new Map<string, LoginSession>();
 
   const app = new Hono();
 
-  app.get('/', (c) => c.html(renderSetupPage()));
+  // Signed-in parent for this request; the middleware below guarantees one.
+  const parentOf = (c: Context) => parents?.login.parent(c) ?? null;
+  const ownerOf = (c: Context): string => {
+    const parent = parentOf(c);
+    return parent ? callerId(parent.caller) : '';
+  };
+  const storeOf = (c: Context): TokenStore => {
+    const parent = parentOf(c);
+    if (sharedStore) return sharedStore;
+    if (!parents || !parent) throw new Error('No signed-in parent to pick a token store for.');
+    return parents.storeFor(parent.caller);
+  };
+  const changedFor = (c: Context): (() => void) | undefined => {
+    const parent = parentOf(c);
+    const changed = parents?.changed;
+    return parent && changed ? () => changed(parent.caller) : undefined;
+  };
+
+  if (parents) {
+    parents.login.mount(app);
+    app.use('*', async (c, next) => {
+      if (!parents.login.parent(c)) {
+        if (c.req.method === 'GET' && c.req.path === '/') return c.redirect('/auth/login', 302);
+        return c.json({ error: 'not signed in' }, 401);
+      }
+      if (c.req.method !== 'GET' && !parents.login.sameOrigin(c)) {
+        return c.json({ error: 'cross-origin request refused' }, 403);
+      }
+      await next();
+    });
+  }
+
+  app.get('/', (c) => c.html(renderSetupPage(parentOf(c)?.name)));
 
   app.get('/status', async (c) => {
-    const record = await store.load();
+    const record = await storeOf(c).load();
     if (!record) return c.json({ logged_in: false });
     const now = Math.floor(Date.now() / 1000);
     return c.json({
@@ -114,9 +166,13 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const done = new Promise<void>((resolve) => {
       signalDone = resolve;
     });
+    const onSaved = changedFor(c);
     const session: LoginSession = {
       sessionId,
       username,
+      owner: ownerOf(c),
+      store: storeOf(c),
+      ...(onSaved ? { onSaved } : {}),
       pendingIdentity: null,
       bufferedEvents: [],
       abort: new AbortController(),
@@ -127,7 +183,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
 
     // Fire the login in the background; the route returns the sessionId
     // immediately so the browser can subscribe to /login/events.
-    runLogin(session, store, logger).catch((err) => {
+    runLogin(session, logger).catch((err) => {
       logger.error('setup.login.unexpected_error', { error: (err as Error).message });
     });
 
@@ -138,7 +194,9 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const sessionId = c.req.query('sessionId');
     if (!sessionId) return c.json({ error: 'missing sessionId' }, 400);
     const session = loginSessions.get(sessionId);
-    if (!session) return c.json({ error: 'unknown sessionId' }, 404);
+    if (!session || session.owner !== ownerOf(c)) {
+      return c.json({ error: 'unknown sessionId' }, 404);
+    }
 
     return streamSSE(c, async (stream) => {
       session.stream = stream;
@@ -170,7 +228,9 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const sessionId = c.req.query('sessionId');
     if (!sessionId) return c.json({ error: 'missing sessionId' }, 400);
     const session = loginSessions.get(sessionId);
-    if (!session) return c.json({ error: 'unknown sessionId' }, 404);
+    if (!session || session.owner !== ownerOf(c)) {
+      return c.json({ error: 'unknown sessionId' }, 404);
+    }
     if (!session.pendingIdentity) return c.json({ error: 'no pending identity choice' }, 409);
     let body: { index?: number };
     try {
@@ -190,14 +250,15 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
   });
 
   app.post('/logout', async (c) => {
-    await store.clear();
+    await storeOf(c).clear();
+    changedFor(c)?.();
     return c.json({ ok: true });
   });
 
   return app;
 }
 
-async function runLogin(session: LoginSession, store: TokenStore, logger: Logger): Promise<void> {
+async function runLogin(session: LoginSession, logger: Logger): Promise<void> {
   const http = new AulaHttpClient({ logger });
   const client = new AulaLoginClient({ http, logger });
   let lastQrCount = -1;
@@ -281,7 +342,8 @@ async function runLogin(session: LoginSession, store: TokenStore, logger: Logger
       ...(identityIndex !== undefined ? { identityIndex } : {}),
       ...(identityName ? { identityName } : {}),
     };
-    await store.save(record);
+    await session.store.save(record);
+    session.onSaved?.();
 
     const terminal = {
       event: 'success' as const,
@@ -326,7 +388,21 @@ function defaultAddonStore(): TokenStore {
   });
 }
 
-function renderSetupPage(): string {
+function escapeHtml(text: string): string {
+  return text.replace(
+    /[&<>"']/g,
+    (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] as string,
+  );
+}
+
+/** `signedInAs` is set in multi-parent mode, for the sign-out bar. */
+function renderSetupPage(signedInAs?: string): string {
+  const account = signedInAs
+    ? `<form class="account" method="post" action="/auth/logout">
+    <span>Logget ind som <strong>${escapeHtml(signedInAs)}</strong></span>
+    <button type="submit" class="secondary">Log af</button>
+  </form>`
+    : '';
   // Inline single-page UI. Vanilla JS + EventSource so it works without a
   // build step inside the addon. Styling kept minimal to match HA's frame.
   return `<!doctype html>
@@ -365,12 +441,14 @@ function renderSetupPage(): string {
   .muted { color: var(--muted); font-size: 0.85rem; }
   details { margin-top: 1rem; }
   summary { cursor: pointer; color: var(--muted); }
+  .account { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; color: var(--muted); }
   code { background: var(--card); border: 1px solid var(--border); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.9em; }
 </style>
 </head>
 <body>
 <main>
   <h1>${ICON_SVG} aula-mcp</h1>
+  ${account}
   <p>Log ind med MitID, så HA's Assist + Voice kan tale med Aula.</p>
 
   <div class="card" id="status-card">

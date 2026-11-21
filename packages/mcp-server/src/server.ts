@@ -45,6 +45,11 @@
  *   AULA_MCP_OIDC_AUDIENCE    — the audience aula-mcp's tokens carry (`aud`)
  *   AULA_MCP_OIDC_ACCEPT_ID_TOKEN — 1 to also accept ID tokens (kagent behind
  *                               oauth2-proxy forwards only those). Default 0.
+ *   AULA_MCP_SETUP_URL        — multi-parent setup UI: the origin browsers open
+ *                               it on. Required with AULA_MCP_INGRESS_PORT.
+ *   AULA_MCP_SETUP_CLIENT_ID  — the setup UI's OIDC client; it signs each
+ *                               parent in before their Aula login. Required too.
+ *   AULA_MCP_SETUP_CLIENT_SECRET — for a confidential client. Optional.
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
@@ -62,6 +67,7 @@ import {
 import { ParentContexts } from './parent-contexts.ts';
 import { resolveServerMode, ServerModeError } from './server-mode.ts';
 import { createMcpApp, type McpApp } from './setup.ts';
+import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
 import { startTokenKeepAlive } from './token-keepalive.ts';
@@ -86,17 +92,11 @@ const multiParent =
   mode.kind === 'multi-parent'
     ? {
         oidc: mode.oidc,
+        setupLogin: mode.setupLogin,
         verify: createOidcVerifier(mode.oidc),
         contexts: new ParentContexts({ logger }),
       }
     : null;
-
-// The setup UI logs in to the single-parent token store and has no IdP login
-// yet, so it can't tell which parent it is logging in.
-if (multiParent && process.env.AULA_MCP_INGRESS_PORT) {
-  process.stderr.write('AULA_MCP_INGRESS_PORT (setup UI) is not supported in multi-parent mode.\n');
-  process.exit(2);
-}
 
 // In multi-parent mode every request is authenticated, so the server is no
 // longer "anyone who reaches /mcp is the user" and may bind remotely.
@@ -541,7 +541,21 @@ if (INGRESS_PORT_RAW) {
     process.stderr.write(`AULA_MCP_INGRESS_PORT="${INGRESS_PORT_RAW}" is not a valid port.\n`);
     process.exit(2);
   }
-  const setupApp = createSetupApp({ logger });
+  // Multi-parent: each parent signs in with the identity provider first and
+  // logs in to Aula for themselves only.
+  const setupLogin = multiParent?.setupLogin;
+  const setupApp = createSetupApp(
+    multiParent && setupLogin
+      ? {
+          logger,
+          parents: {
+            login: createSetupLogin({ ...setupLogin, issuer: multiParent.oidc.issuer, logger }),
+            storeFor: (caller) => multiParent.contexts.store(caller),
+            changed: (caller) => multiParent.contexts.invalidate(caller),
+          },
+        }
+      : { logger },
+  );
   setupServer = Bun.serve({
     port: ingressPort,
     // HA Ingress proxies from the Supervisor host *to* this port, so bind on
