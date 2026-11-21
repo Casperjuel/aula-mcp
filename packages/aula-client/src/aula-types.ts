@@ -342,6 +342,121 @@ export interface GetPostsArgs {
 }
 
 // --------------------------------------------------------------------------
+// gallery.*
+//
+// Shapes measured on a live guardian account (2026-11-21). Only images were
+// present there, so video fields (`duration`, `hasVideoThumbnail`) are typed
+// from the response keys but their video values are unverified.
+// --------------------------------------------------------------------------
+
+/** An institution profile as Aula embeds it in gallery responses (creator, tag). */
+export interface GalleryProfile {
+  id: number;
+  profileId?: number;
+  name?: string;
+  shortName?: string;
+  /** e.g. `employee`, `child`, `guardian`. */
+  role?: string;
+  institutionRole?: string;
+  institutionCode?: string;
+  institutionName?: string;
+}
+
+export interface GalleryGroup {
+  id: number;
+  name?: string;
+  shortName?: string;
+  institutionCode?: string;
+  institutionName?: string;
+  mainGroup?: boolean;
+  isDeactivated?: boolean;
+}
+
+export interface GalleryAlbum {
+  id: number;
+  title?: string;
+  description?: string;
+  creator?: GalleryProfile;
+  /** ISO 8601 with offset, e.g. `2026-11-18T09:12:00+01:00`. */
+  creationDate?: string;
+  sharedWithGroups?: GalleryGroup[];
+  /** Signed cover URLs; they expire like media URLs (see GalleryMedia). */
+  thumbnailsUrls?: string[];
+  regardingInstitutionProfileId?: number | null;
+}
+
+export interface GalleryMediaFile {
+  id: number;
+  /** Original file name, e.g. `IMG_1234.jpeg`. */
+  name?: string;
+  /**
+   * Signed CloudFront URL on media-prod.aula.dk (`Expires`, `Signature`,
+   * `Key-Pair-Id`), valid for about 30 minutes and fetchable without the
+   * Aula token. Served as `application/octet-stream` with
+   * `content-disposition: attachment`, so the type comes from `name`.
+   */
+  url?: string;
+  bucket?: string;
+  key?: string;
+  created?: string;
+  /** Seen: `bypassed`. */
+  scanningStatus?: string;
+}
+
+export interface GalleryMedia {
+  id: number;
+  /** Seen: `image`. Videos are expected as `video`. */
+  mediaType?: string;
+  title?: string | null;
+  description?: string | null;
+  /** Profiles tagged in the media; a child's tag carries their institution profile id. */
+  tags?: GalleryProfile[];
+  creator?: GalleryProfile;
+  file?: GalleryMediaFile;
+  /** Seconds, for video; null for images. */
+  duration?: number | null;
+  /** Seen: `completed`. Anything else is not ready to download yet. */
+  conversionStatus?: string;
+  hasVideoThumbnail?: boolean;
+  isDeleted?: boolean;
+  commentCount?: number;
+  /**
+   * Signed thumbnail URLs, same expiry as `file.url`. Measured sizes for one
+   * photo: extraSmall 19 KB, small 52 KB, medium = thumbnail 170 KB,
+   * large 351 KB, original 599 KB.
+   */
+  thumbnailUrl?: string;
+  extraSmallThumbnailUrl?: string;
+  smallThumbnailUrl?: string;
+  mediumThumbnailUrl?: string;
+  largeThumbnailUrl?: string;
+}
+
+export interface GalleryMediaPage {
+  album?: GalleryAlbum;
+  /** Media in the album; equals `totalSize` on every album measured. */
+  mediaCount?: number;
+  totalSize?: number;
+  startIndex?: number;
+  limit?: number;
+  results?: GalleryMedia[];
+}
+
+export interface GetAlbumsArgs {
+  /** Guardian + child institution-profile ids, as for posts. */
+  institutionProfileIds: readonly number[];
+  /** 0-based offset. Defaults to 0. */
+  index?: number;
+  /** Defaults to 100. */
+  limit?: number;
+}
+
+export interface GetAlbumMediaArgs extends GetAlbumsArgs {
+  /** Required: Aula answers 400 to gallery.getMedia without an album. */
+  albumId: number;
+}
+
+// --------------------------------------------------------------------------
 // messaging.*
 // --------------------------------------------------------------------------
 

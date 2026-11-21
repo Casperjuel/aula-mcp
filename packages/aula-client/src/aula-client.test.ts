@@ -671,3 +671,44 @@ describe('AulaClient.getPosts', () => {
     expect(http.requested.at(-1)?.url).toContain('isUnread=true');
   });
 });
+
+describe('AulaClient gallery', () => {
+  test('getAlbums sends the family filter, paging and sort', async () => {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({ profiles: [] }) }); // version probe
+    http.enqueue({ status: 200, body: envelope({}) }); // profile-context bootstrap
+    http.enqueue({ status: 200, body: envelope([{ id: 7, title: 'Skovtur' }]) });
+    const c = makeClient(http);
+
+    expect(await c.getAlbums({ institutionProfileIds: [11, 12], index: 100 })).toEqual([
+      { id: 7, title: 'Skovtur' },
+    ]);
+    const url = new URL(http.requested.at(-1)?.url ?? '');
+    expect(url.searchParams.get('method')).toBe('gallery.getAlbums');
+    expect(url.searchParams.get('filterInstProfileIds[0]')).toBe('11');
+    expect(url.searchParams.get('filterInstProfileIds[1]')).toBe('12');
+    expect(url.searchParams.get('filterBy')).toBe('all');
+    expect(url.searchParams.get('sortOn')).toBe('createdAt');
+    expect(url.searchParams.get('index')).toBe('100');
+    expect(url.searchParams.get('limit')).toBe('100');
+  });
+
+  test('getAlbumMedia scopes to one album', async () => {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({ profiles: [] }) });
+    http.enqueue({ status: 200, body: envelope({}) });
+    http.enqueue({
+      status: 200,
+      body: envelope({ mediaCount: 1, totalSize: 1, results: [{ id: 3, mediaType: 'image' }] }),
+    });
+    const c = makeClient(http);
+
+    const page = await c.getAlbumMedia({ institutionProfileIds: [11], albumId: 7, limit: 50 });
+    expect(page.results?.[0]?.id).toBe(3);
+    const url = new URL(http.requested.at(-1)?.url ?? '');
+    expect(url.searchParams.get('method')).toBe('gallery.getMedia');
+    expect(url.searchParams.get('albumId')).toBe('7');
+    expect(url.searchParams.get('sortOn')).toBe('uploadedAt');
+    expect(url.searchParams.get('limit')).toBe('50');
+  });
+});

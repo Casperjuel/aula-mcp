@@ -28,6 +28,10 @@ import type {
   AulaEnvelope,
   CalendarEvent,
   DailyOverviewEntry,
+  GalleryAlbum,
+  GalleryMediaPage,
+  GetAlbumMediaArgs,
+  GetAlbumsArgs,
   GetCalendarEventsArgs,
   GetPostsArgs,
   GetPresenceTemplatesArgs,
@@ -65,8 +69,9 @@ const DEFAULT_API_BASE_HOST = 'https://www.aula.dk';
 
 /** GET methods that Aula refuses (HTTP 403) until the profile context is set
  *  — see ensureProfileContext. Measured for messaging.*; posts.* and
- *  notifications.* as reported in upstream #109. */
-const NEEDS_PROFILE_CONTEXT = /^(messaging|posts|notifications)\./;
+ *  notifications.* as reported in upstream #109. gallery.* is included
+ *  defensively: it was only measured on a session that already had one. */
+const NEEDS_PROFILE_CONTEXT = /^(messaging|posts|notifications|gallery)\./;
 
 export class AulaClient {
   readonly http: AulaHttpClient;
@@ -408,6 +413,23 @@ export class AulaClient {
   }
 
   /**
+   * `gallery.getAlbums` — albums shared with the family, newest first. Returns
+   * the array itself; page with `index` until a page comes back shorter than
+   * `limit`.
+   */
+  async getAlbums(args: GetAlbumsArgs): Promise<GalleryAlbum[]> {
+    const params = galleryParams('gallery.getAlbums', args, 'createdAt');
+    return (await this.getJsonRaw<GalleryAlbum[]>(params)) ?? [];
+  }
+
+  /** `gallery.getMedia` for one album, newest upload first. */
+  async getAlbumMedia(args: GetAlbumMediaArgs): Promise<GalleryMediaPage> {
+    const params = galleryParams('gallery.getMedia', args, 'uploadedAt');
+    params.set('albumId', String(args.albumId));
+    return (await this.getJsonRaw<GalleryMediaPage>(params)) ?? {};
+  }
+
+  /**
    * Generic escape hatch for endpoints we haven't typed wrappers for.
    * The MCP server gates this behind AULA_MCP_RAW=1.
    *
@@ -621,3 +643,20 @@ function buildPresenceTemplateBody(args: UpdatePresenceTemplateArgs): Record<str
 
 // Avoid unused-import lint when using AulaCookieJar transitively.
 void AulaCookieJar;
+
+/** The query both gallery reads share; `filterBy=all` includes untagged media. */
+function galleryParams(method: string, args: GetAlbumsArgs, sortOn: string): URLSearchParams {
+  const params = new URLSearchParams({
+    method,
+    index: String(args.index ?? 0),
+    limit: String(args.limit ?? 100),
+    sortOn,
+    orderDirection: 'desc',
+    filterBy: 'all',
+  });
+  // Indexed keys (`filterInstProfileIds[0]`), as measured on a live account.
+  args.institutionProfileIds.forEach((id, i) => {
+    params.set(`filterInstProfileIds[${i}]`, String(id));
+  });
+  return params;
+}
