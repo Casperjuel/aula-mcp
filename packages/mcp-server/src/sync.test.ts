@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { AulaApiError, AulaStepUpRequiredError } from '@aula-mcp/aula-client';
+import { AulaApiError, AulaStepUpRequiredError, type CalendarEvent } from '@aula-mcp/aula-client';
 import { createStorage, type Storage } from './storage.ts';
 import { sqliteDriver } from './storage-sql.ts';
 import {
@@ -169,6 +169,30 @@ describe('other jobs', () => {
       expect(Date.parse(end) - Date.parse(start)).toBeLessThanOrEqual(22 * 86_400_000);
     }
     expect(windows[1]?.[0]).toBe(windows[0]?.[1] as string);
+  });
+
+  test('calendar drops stored events Aula no longer has in the window', async () => {
+    const store = storage.forParent('p');
+    await store.put([
+      { kind: 'calendar_event', id: '901', occurredAt: '2026-12-21T00:00:00+01:00', data: {} },
+      { kind: 'calendar_event', id: '902', occurredAt: '2026-11-25T08:00:00+01:00', data: {} },
+      // Outside the window: kept, Aula was not asked about it.
+      { kind: 'calendar_event', id: '903', occurredAt: '2026-09-01T08:00:00+02:00', data: {} },
+    ]);
+    let answer: CalendarEvent[] = [];
+    const client = fakeClient({
+      rawRequest: async () => [{ institutionProfile: { id: 5, role: 'guardian' } }],
+      getCalendarEvents: async ({ start }) =>
+        start.startsWith('2026-11-13') ? answer : ([] as CalendarEvent[]),
+    });
+    // An empty answer drops nothing.
+    await SYNC_JOB_RUNNERS.calendar(input(client));
+    expect(await store.get('calendar_event', '901')).not.toBeNull();
+    answer = [{ id: 902, startDateTime: '2026-11-25T08:00:00+01:00' } as unknown as CalendarEvent];
+    await SYNC_JOB_RUNNERS.calendar(input(client));
+    expect(await store.get('calendar_event', '901')).toBeNull();
+    expect(await store.get('calendar_event', '902')).not.toBeNull();
+    expect(await store.get('calendar_event', '903')).not.toBeNull();
   });
 
   test("calendar also stores Aula's important dates, once each", async () => {

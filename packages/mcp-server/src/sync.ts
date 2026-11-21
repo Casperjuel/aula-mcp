@@ -266,7 +266,22 @@ const syncCalendar: SyncJob = async ({ client, store, now }) => {
     });
   }
   const result = await store.put([...byId.values()]);
-  return { fetched: events.length, changed: result.changed };
+  // Events Aula no longer has inside the window it just answered for all of
+  // (a removed ferie, a cancelled meeting) are dropped. An empty answer is
+  // not trusted to mean an empty calendar, so nothing is dropped then.
+  let removed = 0;
+  if (events.length > 0) {
+    const since = Math.floor(addDays(today, -7).getTime() / 1000);
+    const until = Math.floor(addDays(today, 56).getTime() / 1000) - 1;
+    const gone: string[] = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = await store.list({ kind: 'calendar_event', since, until, limit: 500, offset });
+      for (const item of page) if (!byId.has(item.id)) gone.push(item.id);
+      if (page.length < 500) break;
+    }
+    for (const id of gone) removed += await store.delete({ kind: 'calendar_event', id });
+  }
+  return { fetched: events.length, changed: result.changed + removed };
 };
 
 const syncDirectory: SyncJob = async ({ client, store, childIds }) => {
