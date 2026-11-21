@@ -13,7 +13,7 @@ import { createRemoteJWKSet, errors, type JWTVerifyGetKey, jwtVerify } from 'jos
 import type { OidcConfig } from './server-mode.ts';
 
 /** Asymmetric algorithms only; an HMAC token would mean a shared secret. */
-const ALGORITHMS = [
+export const ALGORITHMS = [
   'RS256',
   'RS384',
   'RS512',

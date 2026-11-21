@@ -24,6 +24,15 @@ export function parentDirectory(baseDir: string, caller: Caller): string {
   return join(baseDir, 'parents', callerId(caller));
 }
 
+/** The parent's own token store; the setup UI's MitID login writes to it. */
+export function parentStore(baseDir: string, caller: Caller): EncryptedFileTokenStore {
+  const dir = parentDirectory(baseDir, caller);
+  return new EncryptedFileTokenStore({
+    filePath: join(dir, 'tokens.json'),
+    keyFilePath: join(dir, '.key'),
+  });
+}
+
 export interface ParentContextsOptions {
   logger: Logger;
   /** Defaults to AULA_MCP_DIR, then ~/.config/aula-mcp. */
@@ -46,18 +55,20 @@ export class ParentContexts {
     const id = callerId(caller);
     let context = this.contexts.get(id);
     if (!context) {
-      const dir = parentDirectory(this.baseDir, caller);
-      context = new AulaContext({
-        logger: this.logger,
-        store: new EncryptedFileTokenStore({
-          filePath: join(dir, 'tokens.json'),
-          keyFilePath: join(dir, '.key'),
-        }),
-      });
+      context = new AulaContext({ logger: this.logger, store: this.store(caller) });
       this.contexts.set(id, context);
       this.logger.info('aula-mcp.parent_context_created', { parent: id });
     }
     return context;
+  }
+
+  store(caller: Caller): EncryptedFileTokenStore {
+    return parentStore(this.baseDir, caller);
+  }
+
+  /** Drop the caller's cached client, so the next call reads their tokens again. */
+  invalidate(caller: Caller): void {
+    this.contexts.get(callerId(caller))?.invalidate();
   }
 
   dispose(): void {
