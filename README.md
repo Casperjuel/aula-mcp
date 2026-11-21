@@ -279,6 +279,33 @@ Korte stik:
 
 Hvis du allerede har en europæisk VPS (Hetzner, Scaleway, OVH) og en domæne — så er det bare en `git clone` + `bun install` + systemd-unit som mulighed 1.
 
+### Mulighed 5: Kubernetes med Helm (evt. sammen med kagent)
+
+Helm-chartet ligger i [`charts/aula-mcp`](./charts/aula-mcp/README.md). Det kører én pod (sessioner og token-store bor i poden) med en PVC til tokens og den lokale database, og en separat PVC (eller en S3-bucket) til galleriet.
+
+To modes:
+
+- **`single-parent`** (standard): én Aula-login, og alle der kan nå `/mcp`, er den forælder. Kun til brug inde i clusteret; NetworkPolicy'en lukker for alt andet.
+- **`multi-parent`**: hvert kald skal have et OIDC-token (fx Keycloak), og hver forælder bruger kun sin egen Aula-session. Setup-UI'et logger forælderen ind med OIDC først, så hver forælder kun ser og logger sig selv ind i Aula.
+
+Chartet nægter opsætninger, der ville eksponere en forælders Aula-session: en offentlig `/mcp`-route uden `multi-parent`, eller setup-UI'et uden login.
+
+```sh
+podman build --platform linux/amd64 -t registry.example.com/aula-mcp:dev .
+podman push registry.example.com/aula-mcp:dev
+helm upgrade --install aula-mcp charts/aula-mcp -n aula-mcp --create-namespace \
+  --set image.repository=registry.example.com/aula-mcp --set image.tag=dev
+```
+
+Med `kagent.enabled: true` laves en `RemoteMCPServer` (og evt. en eksempel-`Agent`) i kagent, med token passthrough, så agenten kalder aula-mcp med den indloggede forælders token. Hele opsætningen med Keycloak, oauth2-proxy og Gateway API-routes står i [chartets README](./charts/aula-mcp/README.md).
+
+Test chartet lokalt i [kind](https://kind.sigs.k8s.io/) (kræver kind, helm, kubectl og podman eller docker):
+
+```sh
+scripts/kind-test.sh          # bygger imaget, installerer begge modes og kører helm test
+scripts/kind-test.sh delete   # sletter clusteret igen
+```
+
 ### Backup & nøgle-håndtering
 
 - **Token-store**: gem en kryptert kopi af `~/.config/aula-mcp/tokens.json` + `.key` (eller Keychain-eksport på macOS). Mister du dem, skal du logge ind igen — ingen panik, men irriterende.
