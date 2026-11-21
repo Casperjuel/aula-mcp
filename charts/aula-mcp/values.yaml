@@ -105,7 +105,6 @@ networkPolicy:
   #  - namespaceSelector:
   #      matchLabels:
   #        kubernetes.io/metadata.name: gateway
-
 # kagent integration (needs the kagent CRDs, api.kagent.dev/v1alpha3).
 kagent:
   enabled: false

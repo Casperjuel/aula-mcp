@@ -292,6 +292,8 @@ Agenter kalder `aula.discover` én gang og genbruger resultatet resten af sessio
 
 ![aula.discover-manifest pretty-printet](./docs/demos/discover.gif)
 
+Den fulde liste over værktøjer, med beskrivelse og parametre, står i [docs/tools.md](./docs/tools.md) (genereres med `bun run docs:tools`). Setup-UI'ets side **Mine data** (`/data`) viser den samme liste, hvad aula-mcp gemmer om dig, og hvad den kan læse live fra Aula.
+
 Form:
 
 ```ts
