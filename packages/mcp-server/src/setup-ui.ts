@@ -58,7 +58,15 @@ import QRCode from 'qrcode';
 import type { AulaContext } from './aula-context.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
-import { detail, searchText, summarize, threadMessage } from './item-view.ts';
+import {
+  detail,
+  SENDER_ROLES,
+  type SenderRole,
+  searchText,
+  senderRole,
+  summarize,
+  threadMessage,
+} from './item-view.ts';
 import { type Caller, callerId } from './oidc.ts';
 import { renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
@@ -255,6 +263,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       return c.json({
         user: manifest.user,
         children: manifest.children.map((child) => ({
+          id: child.id,
           name: child.name,
           institution: child.institution?.name ?? null,
         })),
@@ -291,8 +300,9 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       : null;
   };
 
-  // Newest first, a page at a time. `q` searches the text the parent sees;
-  // the stored data is encrypted, so that happens here and not in SQL.
+  // Newest first, a page at a time. `q` searches the text the parent sees and
+  // `role` (messages and threads) picks who sent it; the stored data is
+  // encrypted, so both filters run here and not in SQL.
   app.get('/data/items', async (c) => {
     const store = storageOf(c);
     if (!store) return c.json({ error: 'local storage is off' }, 404);
@@ -313,7 +323,16 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       ...(until !== undefined ? { until } : {}),
     };
     const q = (c.req.query('q') ?? '').trim().slice(0, 200).toLocaleLowerCase('da-DK');
-    if (!q) {
+    const role = c.req.query('role') || undefined;
+    if (role) {
+      if (!(SENDER_ROLES as readonly string[]).includes(role)) {
+        return c.json({ error: 'role must be guardian, employee, child or other' }, 400);
+      }
+      if (kind !== 'message' && kind !== 'message_thread') {
+        return c.json({ error: 'role needs kind=message or kind=message_thread' }, 400);
+      }
+    }
+    if (!q && !role) {
       const rows = await store.list({ ...query, offset: page.offset, limit: page.limit + 1 });
       return c.json({
         items: rows.slice(0, page.limit).map(summarize),
@@ -328,7 +347,8 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       const rows = await store.list({ ...query, offset: scanned, limit: 500 });
       scanned += rows.length;
       for (const row of rows) {
-        if (!searchText(row).includes(q)) continue;
+        if (role && senderRole(row) !== role) continue;
+        if (q && !searchText(row).includes(q)) continue;
         if (skip > 0) skip--;
         else matches.push(row);
       }
@@ -342,6 +362,32 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
         });
       }
     }
+  });
+
+  // How many threads and messages each kind of sender wrote, for this parent.
+  app.get('/data/messages/roles', async (c) => {
+    const store = storageOf(c);
+    if (!store) return c.json({ error: 'local storage is off' }, 404);
+    const count = async (kind: 'message' | 'message_thread') => {
+      const counts: Record<SenderRole, number> = { guardian: 0, employee: 0, child: 0, other: 0 };
+      let scanned = 0;
+      for (;;) {
+        const rows = await store.list({ kind, offset: scanned, limit: 500 });
+        scanned += rows.length;
+        for (const row of rows) {
+          const role = senderRole(row);
+          if (role) counts[role]++;
+        }
+        if (rows.length < 500) return { counts, truncated: false };
+        if (scanned >= SEARCH_SCAN_LIMIT) return { counts, truncated: true };
+      }
+    };
+    const [threads, messages] = await Promise.all([count('message_thread'), count('message')]);
+    return c.json({
+      threads: threads.counts,
+      messages: messages.counts,
+      ...(threads.truncated || messages.truncated ? { truncated: true } : {}),
+    });
   });
 
   app.get('/data/items/:kind/:id', async (c) => {

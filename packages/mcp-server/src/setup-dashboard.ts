@@ -353,6 +353,120 @@ button.li { width: 100%; background: none; border-left: 0; border-right: 0; bord
 .empty-icon svg { width: 26px; height: 26px; }
 .error-text { color: var(--err); }
 
+/* kalender and sender roles: a calm hue per event type and per role */
+:root {
+  --hue-blue: #2f5f9e; --hue-blue-soft: #e2ebf7; --hue-teal: #1f7373; --hue-teal-soft: #dbefee;
+  --hue-violet: #6b4fa0; --hue-violet-soft: #ece6f5; --hue-rose: #a83b56; --hue-rose-soft: #f6e1e7;
+  --hue-sand: #76603c; --hue-sand-soft: #efe8db;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --hue-blue: #8fb4e8; --hue-blue-soft: #1c2a3d; --hue-teal: #6cc8c4; --hue-teal-soft: #15302f;
+    --hue-violet: #b9a3e3; --hue-violet-soft: #2a2240; --hue-rose: #ec8fa6; --hue-rose-soft: #3b1c25;
+    --hue-sand: #cdb88f; --hue-sand-soft: #2f281c;
+  }
+}
+:root[data-theme="dark"] {
+  --hue-blue: #8fb4e8; --hue-blue-soft: #1c2a3d; --hue-teal: #6cc8c4; --hue-teal-soft: #15302f;
+  --hue-violet: #b9a3e3; --hue-violet-soft: #2a2240; --hue-rose: #ec8fa6; --hue-rose-soft: #3b1c25;
+  --hue-sand: #cdb88f; --hue-sand-soft: #2f281c;
+}
+.ev-blue { --c: var(--hue-blue); --cs: var(--hue-blue-soft); }
+.ev-teal { --c: var(--hue-teal); --cs: var(--hue-teal-soft); }
+.ev-violet { --c: var(--hue-violet); --cs: var(--hue-violet-soft); }
+.ev-rose { --c: var(--hue-rose); --cs: var(--hue-rose-soft); }
+.ev-sand { --c: var(--hue-sand); --cs: var(--hue-sand-soft); }
+.ev-amber { --c: var(--warn); --cs: var(--warn-soft); }
+.ev-green { --c: var(--accent); --cs: var(--accent-soft); }
+.ev-grey { --c: var(--muted); --cs: var(--surface-2); }
+.ev-pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: .76rem; font-weight: 700; white-space: nowrap; background: var(--cs); color: var(--c); }
+.ev-pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.chip.ev-chip { display: inline-flex; align-items: center; gap: 6px; }
+.chip.ev-chip::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--c); }
+.chip.ev-chip[aria-pressed="true"] { background: var(--cs); border-color: transparent; color: var(--ink); }
+.chip.ev-chip[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
+.cal-tools { display: grid; gap: 12px; }
+.cal-bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+.cal-nav { display: flex; gap: 6px; align-items: center; }
+.cal-filters { display: grid; gap: 8px; }
+.cal-filters[hidden] { display: none; }
+.cal-body { display: grid; gap: 14px; min-width: 0; }
+.cal-title { font-size: 1.15rem; }
+.cal-empty { padding-block: 40px; }
+.ev-row { width: 100%; display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: start; padding: 10px 0; background: none; border: 0; text-align: left; cursor: pointer; color: var(--ink); }
+.list > .ev-row + .ev-row { border-top: 1px solid var(--line); }
+.ev-row:hover .li-title { text-decoration: underline; }
+.ev-bar { width: 4px; align-self: stretch; border-radius: 4px; background: var(--c); min-height: 34px; }
+.date-tile { width: 46px; border-radius: 12px; background: var(--cs, var(--surface-2)); color: var(--c, var(--ink)); display: grid; justify-items: center; padding: 5px 0 6px; line-height: 1.1; flex: none; }
+.date-tile b { font-family: var(--font-display); font-size: 1.25rem; font-variant-numeric: tabular-nums; }
+.date-tile span { font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.ev-cards { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+.ev-cards .ev-row { border: 1px solid var(--line); border-radius: var(--r-sm); padding: 10px 12px; }
+.ag-day { display: grid; grid-template-columns: auto 1fr; gap: 14px; padding: 12px 0; align-items: start; }
+.ag-day .date-tile { background: var(--surface-2); color: var(--ink); }
+.ag-day .ev-row { padding: 8px 0; }
+
+.wk-panel { padding: 0; overflow: hidden; }
+.wk { display: grid; grid-template-columns: 52px repeat(7, minmax(0, 1fr)); }
+.wk-corner, .wk-head { border-bottom: 1px solid var(--line); }
+.wk-head { padding: 10px 6px 8px; display: grid; justify-items: center; gap: 2px; font-size: .78rem; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; border-left: 1px solid var(--line); }
+.wk-head b { font-family: var(--font-display); font-size: 1.2rem; color: var(--ink); width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.wk-head.today b { background: var(--accent); color: var(--accent-ink); }
+.wk-gut { font-size: .72rem; color: var(--muted); text-align: right; padding-right: 6px; }
+.wk-adl { padding-top: 8px; line-height: 1.2; border-bottom: 1px solid var(--line); }
+.wk-ad { border-left: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 4px 3px; display: grid; gap: 3px; align-content: start; min-width: 0; }
+.wk-chip, .mo-chip { display: block; width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: .74rem; font-weight: 700; padding: 2px 6px; border-radius: 6px; border: 0; background: var(--cs); color: var(--c); cursor: pointer; }
+.wk-hours { position: relative; }
+.wk-hours span { position: absolute; right: 6px; transform: translateY(-50%); font-variant-numeric: tabular-nums; }
+.wk-hours span:first-child { transform: none; }
+.wk-col { position: relative; border-left: 1px solid var(--line); background-image: linear-gradient(to bottom, var(--line) 1px, transparent 1px); background-size: 100% 44px; min-width: 0; }
+.wk-col.today { background-color: var(--accent-soft); }
+.wk-ev { position: absolute; overflow: hidden; display: grid; align-content: start; gap: 1px; padding: 3px 6px; border: 0; border-left: 3px solid var(--c); border-radius: 6px; background: var(--cs); color: var(--ink); text-align: left; cursor: pointer; font-size: .74rem; line-height: 1.25; }
+.wk-ev strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wk-ev.short { display: flex; align-items: center; gap: 6px; padding-block: 0; }
+.wk-ev.short strong { flex: 1 1 auto; min-width: 0; }
+.wk-ev.short span { flex: none; }
+.wk-ev span { color: var(--muted); font-variant-numeric: tabular-nums; }
+.wk-now { position: absolute; left: 0; right: 0; height: 2px; background: var(--err); z-index: 1; }
+.wk-none { grid-column: 1 / -1; padding: 16px; text-align: center; }
+.wk-list { display: none; }
+.wk-day { padding: 10px 0; display: grid; gap: 2px; }
+.wk-day-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.wk-day-head strong::first-letter { text-transform: uppercase; }
+@media (max-width: 699px) {
+  .wk-panel { display: none; }
+  .wk-list { display: block; padding-block: 6px; }
+}
+
+.mo-panel { padding: 0; overflow: hidden; }
+.mo { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px; background: var(--line); }
+.mo-dow { background: var(--surface); padding: 8px 6px; font-size: .72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; text-align: center; }
+.mo-day { background: var(--surface); border: 0; min-height: 104px; padding: 6px; display: grid; align-content: start; gap: 3px; text-align: left; cursor: pointer; color: var(--ink); min-width: 0; }
+.mo-day:hover { background: var(--surface-2); }
+.mo-day.out { background: var(--bg); color: var(--muted); }
+.mo-day[aria-pressed="true"] { box-shadow: inset 0 0 0 2px var(--accent); }
+.mo-num { font-weight: 700; font-size: .86rem; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.mo-day.today .mo-num { background: var(--accent); color: var(--accent-ink); }
+.mo-more { font-size: .72rem; color: var(--muted); padding-left: 6px; }
+.mo-dots { display: none; gap: 3px; flex-wrap: wrap; justify-content: center; }
+.mo-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.mo-note { padding: 12px 16px; border-top: 1px solid var(--line); }
+@media (max-width: 699px) {
+  .mo-day { min-height: 52px; padding: 4px 2px; justify-items: center; }
+  .mo-chip, .mo-more { display: none; }
+  .mo-dots { display: flex; }
+  .mo-dow { padding: 6px 2px; font-size: .66rem; }
+}
+
+.role-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 6px; font-size: .74rem; font-weight: 700; white-space: nowrap; border: 0; background: var(--surface-2); color: var(--muted); }
+.role-guardian { background: var(--hue-blue-soft); color: var(--hue-blue); }
+.role-employee { background: var(--accent-soft); color: var(--accent); }
+.role-child { background: var(--hue-violet-soft); color: var(--hue-violet); }
+button.role-badge { cursor: pointer; }
+button.role-badge:hover { text-decoration: underline; }
+.role-counts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+#roleChips[hidden] { display: none; }
+
 .jobs { display: grid; }
 .job { border-top: 1px solid var(--line); }
 .job:first-child { border-top: 0; }
@@ -604,6 +718,7 @@ const VIEWS = [
   { id: 'oversigt', label: 'Oversigt', icon: 'home', bottom: true },
   { id: 'gemt', label: 'Gemt om dig', icon: 'db' },
   { id: 'gennemse', label: 'Gennemse', icon: 'search', bottom: true },
+  { id: 'kalender', label: 'Kalender', icon: 'cal' },
   { id: 'sync', label: 'Synkronisering', short: 'Sync', icon: 'sync', bottom: true },
   { id: 'galleri', label: 'Galleri', icon: 'image', bottom: true },
   { id: 'vaerktoejer', label: 'Værktøjer', icon: 'tools' },
@@ -799,13 +914,14 @@ R.oversigt = () => {
     kidsPanel(),
     db ? el('div', { class: 'stats' },
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Gemt i alt'), el('span', { class: 'v' }, fmt(totalCount())), el('button', { class: 'linkish', 'data-go': 'gemt' }, 'Se hvad')),
-      el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Beskedtråde'), el('span', { class: 'v' }, fmt(countOf('message_thread'))), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Gennemse')),
+      el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Beskedtråde'), el('span', { class: 'v' }, fmt(countOf('message_thread'))), roleCounts(), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Gennemse')),
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Synkronisering'), el('span', { class: 'v small-v' }, syncPill()), el('button', { class: 'linkish', 'data-go': 'sync' }, 'Se jobs')),
       galleryStat())
       : state.summary ? storageOff() : null,
     db ? el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, 'Senest gemt'), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Se alt')),
       recent) : null,
+    nextEventsPanel(),
   ];
 };
 
@@ -868,6 +984,7 @@ function browseQuery(offset) {
   const p = new URLSearchParams({ offset: String(offset), limit: '30' });
   if (b.kind) p.set('kind', b.kind);
   if (b.q.trim()) p.set('q', b.q.trim());
+  if (b.role && isMsgKind(b.kind)) p.set('role', b.role);
   const now = Math.floor(Date.now() / 1000);
   if (b.range === '7') { p.set('since', String(now - 7 * 86400)); p.set('until', String(now)); }
   if (b.range === '30') { p.set('since', String(now - 30 * 86400)); p.set('until', String(now)); }
@@ -931,7 +1048,8 @@ R.gennemse = () => {
         el('div', { class: 'field' }, el('label', { for: 'q' }, 'Søg'), search),
         el('div', { class: 'field' }, el('label', { for: 'frange' }, 'Dato'), range)),
       el('div', { class: 'chips', role: 'group', 'aria-label': 'Type' },
-        chip('', 'Alle', totalCount()), kinds.map((k) => chip(k, KINDS[k].label, countOf(k))))),
+        chip('', 'Alle', totalCount()), kinds.map((k) => chip(k, KINDS[k].label, countOf(k)))),
+      el('div', { class: 'chips', id: 'roleChips', role: 'group', 'aria-label': 'Afsender', hidden: true })),
     el('div', { class: 'browse', id: 'browse' },
       el('section', { class: 'panel result-panel', style: 'padding:0', id: 'results' }),
       el('section', { class: 'panel detail', id: 'detail' })),
@@ -940,6 +1058,7 @@ R.gennemse = () => {
 function renderResults() {
   const box = $('results'); if (!box) return;
   const b = state.browse;
+  renderRoleChips();
   const title = b.loading && !b.items.length ? 'Henter…' : b.items.length ? 'Viser ' + fmt(b.items.length) + (b.more ? '+' : '') : 'Ingen resultater';
   const rows = b.items.map((it) => {
     const key = it.kind + '/' + it.id;
@@ -948,7 +1067,7 @@ function renderResults() {
       el('span', { style: 'min-width:0;display:block' },
         el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, it.unread ? el('span', { class: 'unread-dot' }, '● ') : null, it.title), el('span', { class: 'result-date' }, rel(it.occurredAt || it.updatedAt))),
         it.subtitle ? el('span', { class: 'li-sub', style: 'display:block' }, it.subtitle) : null,
-        el('span', { class: 'result-foot' }, el('span', { class: 'tag' }, kindOf(it.kind).one))));
+        el('span', { class: 'result-foot' }, el('span', { class: 'tag' }, kindOf(it.kind).one), roleBadge(it.senderRole))));
   });
   fill(box, 
     el('div', { class: 'panel-head', style: 'padding:14px 16px 0;margin-bottom:6px' }, el('h2', {}, title)),
@@ -987,7 +1106,7 @@ function renderDetail() {
     back,
     el('p', { class: 'eyebrow' }, k.one),
     el('h2', { style: 'font-size:1.35rem;margin-top:4px;overflow-wrap:anywhere' }, it.title),
-    el('div', { class: 'detail-meta' }, it.subtitle ? el('span', {}, it.subtitle) : null, el('span', {}, longDate(it.occurredAt || it.updatedAt))),
+    el('div', { class: 'detail-meta' }, it.subtitle ? el('span', {}, it.subtitle) : null, roleBadge(it.senderRole), el('span', {}, longDate(it.occurredAt || it.updatedAt))),
     it.fields.length ? el('dl', { class: 'kv' }, it.fields.map(([key, value]) => [el('dt', {}, key), el('dd', {}, value)])) : null,
     it.body ? el('p', { class: 'pre', style: 'max-width:65ch' }, it.body) : null,
     attachList(it.attachments),
@@ -995,12 +1114,433 @@ function renderDetail() {
       ? el('div', {}, msgs.map((m) => el('div', { class: 'msg' },
           el('div', { class: 'avatar', 'aria-hidden': 'true' }, (m.from || '?').split(' ').map((w) => w.slice(0, 1)).join('').slice(0, 2)),
           el('div', { style: 'min-width:0' },
-            el('div', { class: 'msg-head' }, el('strong', {}, m.from || 'Ukendt afsender'), el('span', { class: 'muted num' }, rel(m.at))),
+            el('div', { class: 'msg-head' }, el('span', { style: 'display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('strong', {}, m.from || 'Ukendt afsender'), roleBadge(m.role)), el('span', { class: 'muted num' }, rel(m.at))),
             el('p', { class: 'msg-body pre' }, m.body),
             attachList(m.attachments)))))
       : el('p', { class: 'muted small' }, 'Beskederne i tråden er ikke hentet endnu. De kommer med næste synkronisering.')) : null,
     it.unread ? el('p', { class: 'muted small', style: 'margin-top:6px' }, 'Tråden står stadig som ulæst i Aula. aula-mcp ændrer det ikke.') : null,
     el('p', { class: 'muted small mono', style: 'margin-top:16px;overflow-wrap:anywhere' }, 'Opdateret ' + rel(it.updatedAt) + ' · id ' + it.kind + ':' + it.id));
+}
+
+/* ---------- kalender ---------- */
+// Times are Danish wall time whatever the browser's zone is; days are
+// 'YYYY-MM-DD' keys, which also sort as strings.
+const CPH = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Copenhagen', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+const cphParts = (ms) => { const o = {}; for (const p of CPH.formatToParts(new Date(ms))) o[p.type] = p.value; return { y: +o.year, m: +o.month, d: +o.day, h: +o.hour % 24, min: +o.minute }; };
+const keyOf = (y, m, d) => y + '-' + pad(m) + '-' + pad(d);
+const dayKey = (ms) => { const p = cphParts(ms); return keyOf(p.y, p.m, p.d); };
+const keyUtc = (k) => Date.UTC(+k.slice(0, 4), +k.slice(5, 7) - 1, +k.slice(8, 10));
+const addDays = (k, n) => { const t = new Date(keyUtc(k) + n * 864e5); return keyOf(t.getUTCFullYear(), t.getUTCMonth() + 1, t.getUTCDate()); };
+const dow = (k) => new Date(keyUtc(k)).getUTCDay();
+const weekStart = (k) => addDays(k, -((dow(k) + 6) % 7));
+function cphWall(y, m, d, h, min) {
+  const want = Date.UTC(y, m - 1, d, h, min);
+  let t = want;
+  for (let i = 0; i < 2; i++) { const p = cphParts(t); t = want - (Date.UTC(p.y, p.m - 1, p.d, p.h, p.min) - t); }
+  return t;
+}
+const midnight = (k) => cphWall(+k.slice(0, 4), +k.slice(5, 7), +k.slice(8, 10), 0, 0);
+function evMs(s) {
+  if (typeof s !== 'string' || s.length < 10) return null;
+  if (/(Z|[+-][0-9]{2}:?[0-9]{2})$/i.test(s)) { const t = Date.parse(s); return Number.isNaN(t) ? null : t; }
+  const n = (a, b) => +s.slice(a, b) || 0;
+  return cphWall(n(0, 4), n(5, 7), n(8, 10), n(11, 13), n(14, 16));
+}
+const cphHm = (ms) => { const p = cphParts(ms); return pad(p.h) + ':' + pad(p.min); };
+const MONTH = ['januar', 'februar', 'marts', 'april', 'maj', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'december'];
+const WEEKDAY = ['søndag', 'mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag'];
+const shortDay = (k) => DAY[dow(k)] + ' ' + +k.slice(8, 10) + '. ' + MON[+k.slice(5, 7) - 1];
+const longDay = (k) => WEEKDAY[dow(k)] + ' ' + +k.slice(8, 10) + '. ' + MONTH[+k.slice(5, 7) - 1];
+function isoWeek(k) {
+  const t = new Date(keyUtc(k));
+  t.setUTCDate(t.getUTCDate() + 3 - ((t.getUTCDay() + 6) % 7));
+  const jan4 = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));
+  return 1 + Math.round(((t - jan4) / 864e5 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);
+}
+
+// Aula's event types: a Danish label and a colour each.
+const EV_TYPES = {
+  event: ['Begivenhed', 'blue'],
+  excursion: ['Udflugt', 'teal'],
+  birthday: ['Fødselsdag', 'green'],
+  school_home_meeting: ['Skole-hjem-samtale', 'violet'],
+  parental_meeting: ['Forældremøde', 'violet'],
+  performance_meeting: ['Udviklingssamtale', 'violet'],
+  holiday: ['Helligdag/fridag', 'rose'],
+  presence_holiday: ['Ferie/fri (fremmøde)', 'amber'],
+  vacation_registration: ['Ferieregistrering', 'sand'],
+  lesson: ['Lektion', 'grey'],
+  other: ['Andet', 'grey'],
+};
+const NOT_IN_AGENDA = ['lesson', 'holiday', 'presence_holiday'];
+const evHue = (type) => (EV_TYPES[type] ? EV_TYPES[type][1] : 'grey');
+const typePill = (e) => el('span', { class: 'ev-pill ev-' + evHue(e.type) }, e.label);
+
+/** A stored calendar_event summary as something the views can place. */
+function calEv(it) {
+  const e = it.event || {};
+  let start = evMs(e.start);
+  if (start === null && it.occurredAt) start = it.occurredAt * 1000;
+  if (start === null) return null;
+  let end = evMs(e.end);
+  if (end === null || end < start) end = start;
+  const sk = dayKey(start);
+  const ek = end > start ? dayKey(end - 1) : sk;
+  const type = e.type || 'event';
+  return {
+    id: it.id, title: it.title || 'Begivenhed', type, label: (EV_TYPES[type] && EV_TYPES[type][0]) || e.typeLabel || type,
+    start, end, sk, ek, allDay: Boolean(e.allDay) || sk !== ek, place: e.place || '',
+    profiles: Array.isArray(e.profiles) ? e.profiles : [], rr: Boolean(e.responseRequired), resp: e.response || '', deadline: e.responseDeadline || '',
+  };
+}
+const byStart = (a, b) => a.start - b.start || a.title.localeCompare(b.title, 'da');
+function evTime(e) {
+  if (!e.allDay) return cphHm(e.start) + (e.end > e.start ? '–' + cphHm(e.end) : '');
+  return e.sk === e.ek ? 'Hele dagen' : shortDay(e.sk) + ' til ' + shortDay(e.ek);
+}
+function responseBadges(e) {
+  if (!e.rr) return null;
+  const open = !e.resp || e.resp === 'Ikke besvaret';
+  const dl = evMs(e.deadline);
+  return [
+    open ? el('span', { class: 'pill warn' }, 'Svar påkrævet')
+      : el('span', { class: 'pill ' + (e.resp === 'Deltager' ? 'ok' : e.resp === 'Deltager ikke' ? 'err' : 'neutral') }, e.resp),
+    dl ? el('span', { class: 'tag' + (open && dl < Date.now() ? ' raw' : '') }, 'Svarfrist ' + shortDay(dayKey(dl))) : null,
+  ];
+}
+const dateTile = (k) => el('span', { class: 'date-tile', 'aria-hidden': 'true' }, el('b', {}, +k.slice(8, 10)), el('span', {}, DAY[dow(k)]));
+function evRow(e, withDate) {
+  return el('button', { class: 'ev-row ev-' + evHue(e.type), onclick: () => openEvent(e) },
+    withDate ? dateTile(e.sk) : el('span', { class: 'ev-bar', 'aria-hidden': 'true' }),
+    el('span', { style: 'min-width:0;display:grid;gap:2px' },
+      el('span', { class: 'li-title' }, e.title),
+      el('span', { class: 'li-sub' }, [withDate ? shortDay(e.sk) : null, evTime(e), e.place].filter(Boolean).join(' · ')),
+      el('span', { class: 'result-foot', style: 'margin-top:3px' }, typePill(e), responseBadges(e))));
+}
+
+/** Every stored event that starts in [since, until], 100 at a time. */
+async function calFetch(since, until) {
+  const out = [];
+  for (let offset = 0; offset < 5000; offset += 100) {
+    const p = new URLSearchParams({ kind: 'calendar_event', since: String(since), until: String(until), offset: String(offset), limit: '100' });
+    const d = await getJson('data/items?' + p.toString());
+    out.push(...d.items);
+    if (d.items.length < 100 || d.more === false) break;
+  }
+  return out;
+}
+
+state.cal = { view: 'uge', anchor: '', hidden: new Set(), child: '', key: '', items: null, error: null, day: '' };
+const CAL_VIEWS = [['uge', 'Uge'], ['maaned', 'Måned'], ['liste', 'Begivenheder']];
+function calRange(c) {
+  if (c.view === 'maaned') {
+    const from = weekStart(c.anchor.slice(0, 8) + '01');
+    const next = addDays(c.anchor.slice(0, 8) + '28', 4).slice(0, 8) + '01';
+    return [from, addDays(weekStart(addDays(next, -1)), 7)];
+  }
+  if (c.view === 'liste') return [c.anchor, addDays(c.anchor, 56)];
+  const from = weekStart(c.anchor);
+  return [from, addDays(from, 7)];
+}
+function calStep(dir) {
+  const c = state.cal;
+  if (c.view === 'maaned') {
+    const first = c.anchor.slice(0, 8) + '01';
+    c.anchor = dir > 0 ? addDays(first, 32).slice(0, 8) + '01' : addDays(first, -1).slice(0, 8) + '01';
+    c.day = '';
+  } else c.anchor = addDays(c.anchor, dir * (c.view === 'liste' ? 28 : 7));
+  calLoad();
+}
+function calTitle(c) {
+  const [from, to] = calRange(c);
+  if (c.view === 'maaned') return MONTH[+c.anchor.slice(5, 7) - 1] + ' ' + c.anchor.slice(0, 4);
+  const last = addDays(to, -1);
+  const span = +from.slice(8, 10) + '. ' + (from.slice(5, 7) !== last.slice(5, 7) ? MON[+from.slice(5, 7) - 1] + ' ' : '') + '– ' + +last.slice(8, 10) + '. ' + MON[+last.slice(5, 7) - 1] + ' ' + last.slice(0, 4);
+  return c.view === 'uge' ? 'Uge ' + isoWeek(from) + ' · ' + span : span;
+}
+let calSeq = 0;
+async function calLoad() {
+  const c = state.cal;
+  const [from, to] = calRange(c);
+  const key = c.view + '|' + from;
+  if (c.key !== key) {
+    c.key = key; c.items = null; c.error = null;
+    renderCal();
+    const seq = ++calSeq;
+    try {
+      // Starts up to two weeks earlier, so a holiday that began before still shows.
+      const rows = await calFetch(Math.floor(midnight(addDays(from, -14)) / 1000), Math.floor(midnight(to) / 1000) - 1);
+      if (seq !== calSeq) return;
+      c.items = rows.map(calEv).filter((e) => e && e.ek >= from && e.sk < to).sort(byStart);
+    } catch (err) {
+      if (seq !== calSeq) return;
+      c.items = []; c.error = err.message;
+    }
+  }
+  renderCal();
+}
+const childNames = () => {
+  const m = new Map();
+  for (const ch of (state.live && state.live.children) || []) if (typeof ch.id === 'number') m.set(String(ch.id), ch.name);
+  return m;
+};
+function calVisible(c) {
+  return (c.items || []).filter((e) => !c.hidden.has(e.type) &&
+    (!c.child || !e.profiles.length || e.profiles.some((p) => String(p) === c.child)) &&
+    (c.view !== 'liste' || !NOT_IN_AGENDA.includes(e.type)));
+}
+
+R.kalender = () => {
+  if (state.summary && !database()) return [head('Kalender'), storageOff()];
+  const c = state.cal;
+  if (!c.anchor) c.anchor = dayKey(Date.now());
+  queueMicrotask(calLoad);
+  return [
+    head('Kalender', 'Begivenheder, ferie og fridage fra Aula, gemt af synkroniseringen. Tiderne er dansk tid.'),
+    el('section', { class: 'panel cal-tools' },
+      el('div', { class: 'cal-bar' },
+        el('div', { class: 'seg', role: 'group', 'aria-label': 'Visning' }, CAL_VIEWS.map(([v, l]) => el('button', { 'aria-pressed': String(c.view === v),
+          onclick: () => { c.view = v; c.day = ''; if (v === 'liste') c.anchor = dayKey(Date.now()); route(); } }, l))),
+        el('div', { class: 'cal-nav' },
+          el('button', { class: 'icon-btn', 'aria-label': 'Forrige', onclick: () => calStep(-1) }, icon('left')),
+          el('button', { class: 'btn btn-sm', onclick: () => { c.anchor = dayKey(Date.now()); c.day = ''; calLoad(); } }, 'I dag'),
+          el('button', { class: 'icon-btn', 'aria-label': 'Næste', onclick: () => calStep(1) }, icon('chev')))),
+      el('div', { id: 'calFilters', class: 'cal-filters' })),
+    el('div', { id: 'calBody', class: 'cal-body' }),
+  ];
+};
+function renderCalFilters(c) {
+  const box = $('calFilters'); if (!box) return;
+  const present = new Set((c.items || []).map((e) => e.type));
+  const types = Object.keys(EV_TYPES).filter((t) => (present.has(t) || c.hidden.has(t)) && (c.view !== 'liste' || !NOT_IN_AGENDA.includes(t)));
+  for (const t of present) if (!EV_TYPES[t] && !types.includes(t)) types.push(t);
+  const label = (t) => (EV_TYPES[t] ? EV_TYPES[t][0] : ((c.items || []).find((e) => e.type === t) || {}).label || t);
+  const kids = childNames();
+  const ids = [...new Set((c.items || []).flatMap((e) => e.profiles.map(String)))].filter((id) => kids.has(id));
+  fill(box,
+    types.length ? el('div', { class: 'chips', role: 'group', 'aria-label': 'Type' },
+      el('button', { class: 'chip', 'aria-pressed': String(!c.hidden.size), onclick: () => { c.hidden.clear(); renderCal(); } }, 'Alle typer'),
+      types.map((t) => el('button', { class: 'chip ev-chip ev-' + evHue(t), 'aria-pressed': String(!c.hidden.has(t)),
+        onclick: () => { c.hidden.has(t) ? c.hidden.delete(t) : c.hidden.add(t); renderCal(); } }, label(t)))) : null,
+    ids.length > 1 || (c.child && ids.length) ? el('div', { class: 'chips', role: 'group', 'aria-label': 'Barn' },
+      el('button', { class: 'chip', 'aria-pressed': String(!c.child), onclick: () => { c.child = ''; renderCal(); } }, 'Alle børn'),
+      ids.map((id) => el('button', { class: 'chip', 'aria-pressed': String(c.child === id), onclick: () => { c.child = id; renderCal(); } }, kids.get(id)))) : null);
+  box.hidden = !box.childNodes.length;
+}
+function renderCal() {
+  const box = $('calBody'); if (!box) return;
+  const c = state.cal;
+  renderCalFilters(c);
+  const title = el('h2', { class: 'cal-title' }, calTitle(c));
+  if (c.items === null) { fill(box, title, skeleton()); return; }
+  const evs = calVisible(c);
+  fill(box, title,
+    c.error ? banner('warn', 'warn', el('p', {}, 'Kunne ikke hente kalenderen: ' + c.error)) : null,
+    c.view === 'maaned' ? calMonth(c, evs) : c.view === 'liste' ? calAgenda(c, evs) : calWeek(c, evs));
+}
+function calEmpty(title, text) {
+  return el('div', { class: 'empty cal-empty' }, el('div', { class: 'empty-icon' }, icon('cal')), el('h3', {}, title),
+    el('p', { class: 'small', style: 'max-width:44ch' }, text));
+}
+const SYNC_NOTE = 'Synkroniseringen henter kalenderen fra en uge tilbage til otte uger frem.';
+
+/* uge: an all-day row, then timed events placed by the clock */
+const HOUR = 44;
+function calWeek(c, evs) {
+  const [from] = calRange(c);
+  const days = Array.from({ length: 7 }, (_, i) => addDays(from, i));
+  const today = dayKey(Date.now());
+  const allDay = new Map(days.map((k) => [k, []]));
+  const timed = new Map(days.map((k) => [k, []]));
+  for (const e of evs) {
+    if (e.allDay) { for (const k of days) if (k >= e.sk && k <= e.ek) allDay.get(k).push(e); }
+    else if (timed.has(e.sk)) timed.get(e.sk).push(e);
+  }
+  const anyAll = days.some((k) => allDay.get(k).length);
+  const anyTimed = days.some((k) => timed.get(k).length);
+  if (!anyAll && !anyTimed) {
+    return el('section', { class: 'panel' }, calEmpty('Ingen begivenheder i denne uge', 'Der er ikke gemt noget i kalenderen for uge ' + isoWeek(from) + '. ' + SYNC_NOTE));
+  }
+  const mins = (ms, k) => { const p = cphParts(ms); return dayKey(ms) === k ? p.h * 60 + p.min : 24 * 60; };
+  let h0 = 8; let h1 = 16;
+  for (const k of days) for (const e of timed.get(k)) { h0 = Math.min(h0, Math.floor(mins(e.start, k) / 60)); h1 = Math.max(h1, Math.ceil(Math.max(mins(e.end, k), mins(e.start, k) + 30) / 60)); }
+  h1 = Math.min(h1, 24);
+  const col = (k) => {
+    const list = timed.get(k).map((e) => ({ e, s: mins(e.start, k), f: Math.max(mins(e.end, k), mins(e.start, k) + 30) }));
+    // Side by side when they overlap: a lane each within a cluster.
+    let cluster = []; let lanes = []; let reach = -1;
+    const close = () => { for (const x of cluster) x.n = lanes.length; cluster = []; lanes = []; };
+    for (const x of list.sort((a, b) => a.s - b.s)) {
+      if (x.s >= reach) { close(); reach = -1; }
+      let lane = lanes.findIndex((f) => f <= x.s);
+      if (lane < 0) { lane = lanes.length; lanes.push(0); }
+      lanes[lane] = x.f; x.lane = lane; reach = Math.max(reach, x.f); cluster.push(x);
+    }
+    close();
+    const now = Date.now();
+    return el('div', { class: 'wk-col' + (k === today ? ' today' : ''), style: 'height:' + (h1 - h0) * HOUR + 'px' },
+      k === today && mins(now, k) >= h0 * 60 && mins(now, k) <= h1 * 60 ? el('span', { class: 'wk-now', style: 'top:' + ((mins(now, k) - h0 * 60) / 60) * HOUR + 'px' }) : null,
+      list.map((x) => el('button', { class: 'wk-ev ev-' + evHue(x.e.type) + (x.f - x.s < 50 ? ' short' : ''), onclick: () => openEvent(x.e), title: x.e.title + ' · ' + evTime(x.e),
+        style: 'top:' + ((x.s - h0 * 60) / 60) * HOUR + 'px;height:' + Math.max(((x.f - x.s) / 60) * HOUR - 2, 20) + 'px;left:calc(' + (x.lane * 100) / x.n + '% + 2px);width:calc(' + 100 / x.n + '% - 4px)' },
+        el('strong', {}, x.e.title), el('span', {}, cphHm(x.e.start)))));
+  };
+  const grid = el('section', { class: 'panel wk-panel' }, el('div', { class: 'wk' },
+    el('div', { class: 'wk-corner' }),
+    days.map((k) => el('div', { class: 'wk-head' + (k === today ? ' today' : '') }, el('span', {}, DAY[dow(k)]), el('b', {}, +k.slice(8, 10)))),
+    anyAll ? [el('div', { class: 'wk-gut wk-adl' }, 'Hele dagen'), days.map((k) => el('div', { class: 'wk-ad' },
+      allDay.get(k).map((e) => el('button', { class: 'wk-chip ev-' + evHue(e.type), onclick: () => openEvent(e), title: e.title }, e.title))))] : null,
+    anyTimed ? [el('div', { class: 'wk-gut wk-hours', style: 'height:' + (h1 - h0) * HOUR + 'px' },
+      Array.from({ length: h1 - h0 }, (_, i) => el('span', { style: 'top:' + i * HOUR + 'px' }, pad(h0 + i) + ':00'))), days.map(col)]
+      : el('p', { class: 'wk-none muted small' }, 'Ingen begivenheder med klokkeslæt i denne uge.')));
+  const phone = el('section', { class: 'panel wk-list' }, el('div', { class: 'list' }, days.map((k) => {
+    const list = allDay.get(k).concat(timed.get(k));
+    return el('div', { class: 'wk-day' },
+      el('div', { class: 'wk-day-head' }, el('strong', {}, longDay(k)), k === today ? el('span', { class: 'pill run' }, 'I dag') : null),
+      list.length ? list.map((e) => evRow(e, false)) : el('p', { class: 'muted small' }, 'Ingen begivenheder'));
+  })));
+  return [grid, phone];
+}
+
+/* måned: a grid of days; click one for its list */
+function calMonth(c, evs) {
+  const [from, to] = calRange(c);
+  const month = c.anchor.slice(0, 7);
+  const today = dayKey(Date.now());
+  const by = new Map();
+  for (const e of evs) {
+    for (let k = e.sk > from ? e.sk : from, i = 0; k <= e.ek && k < to && i < 62; k = addDays(k, 1), i++) {
+      if (!by.has(k)) by.set(k, []);
+      by.get(k).push(e);
+    }
+  }
+  if (!c.day && today.slice(0, 7) === month) c.day = today;
+  const days = [];
+  for (let k = from; k < to; k = addDays(k, 1)) days.push(k);
+  const cell = (k) => {
+    const list = by.get(k) || [];
+    return el('button', { class: 'mo-day' + (k.slice(0, 7) !== month ? ' out' : '') + (k === today ? ' today' : ''), 'aria-pressed': String(c.day === k),
+      'aria-label': longDay(k) + ', ' + plural(list.length, 'begivenhed', 'begivenheder'), onclick: () => { c.day = k; renderCal(); } },
+      el('span', { class: 'mo-num' }, +k.slice(8, 10)),
+      list.slice(0, 3).map((e) => el('span', { class: 'mo-chip ev-' + evHue(e.type) }, e.title)),
+      list.length > 3 ? el('span', { class: 'mo-more' }, '+' + (list.length - 3) + ' flere') : null,
+      list.length ? el('span', { class: 'mo-dots', 'aria-hidden': 'true' }, list.slice(0, 4).map((e) => el('i', { class: 'ev-' + evHue(e.type) }))) : null);
+  };
+  const sel = c.day ? (by.get(c.day) || []) : null;
+  return [
+    el('section', { class: 'panel mo-panel' }, el('div', { class: 'mo' },
+      ['man.', 'tir.', 'ons.', 'tor.', 'fre.', 'lør.', 'søn.'].map((d) => el('div', { class: 'mo-dow' }, d)),
+      days.map(cell)),
+      !evs.length ? el('p', { class: 'muted small mo-note' }, 'Ingen begivenheder i ' + MONTH[+month.slice(5, 7) - 1] + '. ' + SYNC_NOTE) : null),
+    sel ? el('section', { class: 'panel' },
+      el('div', { class: 'panel-head' }, el('h2', {}, longDay(c.day).replace(/^./, (ch) => ch.toUpperCase())), el('span', { class: 'muted small' }, plural(sel.length, 'begivenhed', 'begivenheder'))),
+      sel.length ? el('div', { class: 'list' }, sel.map((e) => evRow(e, false))) : el('p', { class: 'muted small' }, 'Ingen begivenheder denne dag.'))
+      : el('p', { class: 'muted small' }, 'Vælg en dag for at se dens begivenheder.'),
+  ];
+}
+
+/* begivenheder: what is coming, by day, with what needs an answer */
+function calAgenda(c, evs) {
+  const [from] = calRange(c);
+  if (!evs.length) {
+    return el('section', { class: 'panel' }, calEmpty('Ingen kommende begivenheder', 'Der er ingen begivenheder, møder eller udflugter de næste otte uger. Ferie, fridage og lektioner ses under Uge og Måned.'));
+  }
+  const groups = new Map();
+  for (const e of evs) { const k = e.sk > from ? e.sk : from; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(e); }
+  const open = evs.filter((e) => e.rr && (!e.resp || e.resp === 'Ikke besvaret')).length;
+  return [
+    open ? banner('warn', 'warn', el('p', {}, el('strong', {}, plural(open, 'begivenhed', 'begivenheder') + ' venter på dit svar. '), 'Svar i Aula; aula-mcp svarer ikke for dig.')) : null,
+    el('section', { class: 'panel' }, el('div', { class: 'list' }, [...groups].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([k, list]) => el('div', { class: 'ag-day' },
+      dateTile(k),
+      el('div', { style: 'min-width:0' }, el('p', { class: 'eyebrow' }, longDay(k)), el('div', { class: 'list' }, list.map((e) => evRow(e, false)))))))),
+  ];
+}
+
+function calDialog() {
+  let d = $('calDlg');
+  if (!d) {
+    d = el('dialog', { id: 'calDlg', 'aria-labelledby': 'calDlgTitle' }, el('div', { class: 'dlg', id: 'calDlgBody' }));
+    document.body.append(d);
+    d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
+  }
+  return d;
+}
+async function openEvent(e) {
+  const d = calDialog();
+  const body = $('calDlgBody');
+  const draw = (extra) => fill(body,
+    el('div', { class: 'panel-head', style: 'margin:0;align-items:flex-start' }, typePill(e), el('button', { class: 'icon-btn', 'aria-label': 'Luk', onclick: () => d.close() }, icon('x'))),
+    el('h2', { id: 'calDlgTitle', style: 'font-size:1.3rem;overflow-wrap:anywhere' }, e.title),
+    el('p', { class: 'muted' }, (e.allDay && e.sk === e.ek ? longDay(e.sk) + ', hele dagen' : e.allDay ? evTime(e) : longDay(e.sk) + ', ' + evTime(e)) + (e.place ? ' · ' + e.place : '')),
+    e.rr ? el('div', { class: 'result-foot' }, responseBadges(e)) : null,
+    extra,
+    el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => { d.close(); openItem({ kind: 'calendar_event', id: e.id }); } }, 'Åbn i Gennemse'),
+      el('button', { class: 'btn btn-primary', onclick: () => d.close() }, 'Luk')));
+  draw(skeleton());
+  if (!d.open) d.showModal();
+  try {
+    const it = (await getJson('data/items/calendar_event/' + encodeURIComponent(e.id))).item;
+    const fields = it.fields.filter(([k]) => k !== 'Starter' && k !== 'Slutter' && k !== 'Type' && k !== 'Sted' && k !== 'Svar' && k !== 'Svarfrist');
+    draw([fields.length ? el('dl', { class: 'kv' }, fields.map(([k, v]) => [el('dt', {}, k), el('dd', {}, v)])) : null,
+      it.body ? el('p', { class: 'pre', style: 'max-height:40vh;overflow:auto' }, it.body) : null]);
+  } catch (err) { draw(el('p', { class: 'error-text' }, 'Kunne ikke hente: ' + err.message)); }
+}
+
+/* oversigt: the next few things on the calendar */
+state.calNext = null;
+let calNextAt = 0;
+async function loadNextEvents() {
+  const now = Date.now();
+  try {
+    const rows = await calFetch(Math.floor(now / 1000) - 14 * 86400, Math.floor(now / 1000) + 60 * 86400);
+    state.calNext = rows.map(calEv).filter((e) => e && e.end >= now && e.type !== 'lesson').sort(byStart).slice(0, 4);
+  } catch { state.calNext = []; }
+  rerender('oversigt');
+}
+function nextEventsPanel() {
+  if (!database()) return null;
+  if (Date.now() - calNextAt > 60000) { calNextAt = Date.now(); loadNextEvents(); }
+  const list = state.calNext;
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head' }, el('h2', {}, 'Næste begivenheder'), el('button', { class: 'linkish', 'data-go': 'kalender' }, 'Åbn kalender')),
+    list === null ? el('div', { class: 'skel-panel' }, el('div', { class: 'skeleton', style: 'width:60%' }), el('div', { class: 'skeleton', style: 'width:40%' }))
+      : list.length ? el('div', { class: 'ev-cards' }, list.map((e) => evRow(e, true)))
+        : el('p', { class: 'muted small' }, 'Intet i kalenderen de næste otte uger.'));
+}
+
+/* ---------- afsendere: forælder, personale, barn eller system ---------- */
+const ROLES = [['guardian', 'Forældre', 'Forælder'], ['employee', 'Personale', 'Personale'], ['child', 'Børn', 'Barn'], ['other', 'System', 'System']];
+const roleOne = (r) => (ROLES.find((x) => x[0] === r) || [])[2];
+const roleBadge = (r) => (roleOne(r) ? el('span', { class: 'role-badge role-' + r }, roleOne(r)) : null);
+const isMsgKind = (k) => k === 'message' || k === 'message_thread';
+state.roles = null;
+let rolesAt = 0;
+function ensureRoles(after) {
+  if (!database() || Date.now() - rolesAt < 60000) return;
+  rolesAt = Date.now();
+  getJson('data/messages/roles').then((d) => { state.roles = d; after(); }).catch(() => {});
+}
+function browseRole(kind, role) {
+  state.browse = Object.assign(state.browse, { q: '', kind, range: '', role, items: [], offset: 0, more: false, sel: null, detail: null });
+  go('gennemse');
+}
+function roleCounts() {
+  ensureRoles(() => rerender('oversigt'));
+  const n = state.roles && state.roles.threads;
+  if (!n) return null;
+  return el('span', { class: 'role-counts' }, ROLES.filter(([r]) => r !== 'other' || n.other).map(([r, many]) =>
+    el('button', { class: 'role-badge role-' + r, onclick: () => browseRole('message_thread', r), title: 'Vis tråde, hvor ' + many.toLowerCase() + ' skrev sidst' }, many + ' ', el('span', { class: 'num' }, fmt(n[r])))));
+}
+function renderRoleChips() {
+  const box = $('roleChips'); if (!box) return;
+  const b = state.browse;
+  box.hidden = !isMsgKind(b.kind);
+  if (box.hidden) { fill(box); return; }
+  ensureRoles(renderRoleChips);
+  const n = state.roles && (b.kind === 'message' ? state.roles.messages : state.roles.threads);
+  const cur = b.role || '';
+  fill(box, el('span', { class: 'muted small', style: 'align-self:center;margin-right:2px' }, 'Afsender'),
+    [['', 'Alle']].concat(ROLES).map(([r, many]) => el('button', { class: 'chip', 'aria-pressed': String(cur === r),
+      onclick: () => { b.role = r; loadResults(false); } }, many, n && r ? el('span', { class: 'c' }, fmt(n[r])) : null)));
 }
 
 /* ---------- sync ---------- */
@@ -1671,7 +2211,7 @@ route();
     if (!state.gallery.data && !state.gallery.loading) loadGallery();
     getJson('data/items?limit=5').then((d) => { state.recent = d.items; }).catch(() => { state.recent = []; }).then(() => rerender('oversigt'));
   }
-  if (loggedIn()) { await loadLive(); rerender('oversigt'); }
+  if (loggedIn()) { await loadLive(); rerender('oversigt'); rerender('kalender'); }
 })();
 })();
 `;
