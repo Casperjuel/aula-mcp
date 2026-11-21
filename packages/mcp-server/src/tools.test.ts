@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
-import { AulaStepUpRequiredError, htmlToText } from '@aula-mcp/aula-client';
-import { previewMessage, registerTools, slimPost, validateSetTemplateArgs } from './tools.ts';
+import { TokenStoreError } from '@aula-mcp/aula-auth';
+import { AulaApiError, AulaStepUpRequiredError, htmlToText } from '@aula-mcp/aula-client';
+import {
+  describeReadFailure,
+  previewMessage,
+  registerTools,
+  slimPost,
+  validateSetTemplateArgs,
+} from './tools.ts';
 
 describe('validateSetTemplateArgs', () => {
   test('picked_up_by needs pickedUpBy', () => {
@@ -190,6 +197,38 @@ describe('aula.messages.mark_read', () => {
   });
 });
 
+describe('describeReadFailure', () => {
+  test('classifies step-up, expired session, network and unknown', () => {
+    expect(describeReadFailure(new AulaStepUpRequiredError('x')).error).toBe('step_up_required');
+    expect(describeReadFailure(new AulaApiError('x', 401, 'https://a/b', '')).error).toBe(
+      'session_expired',
+    );
+    const server = describeReadFailure(new AulaApiError('x', 500, 'https://a/b', ''));
+    expect(server).toMatchObject({ error: 'unreadable', retryable: true });
+    expect(describeReadFailure(new TypeError('fetch failed')).error).toBe('network');
+    expect(describeReadFailure(new Error('boom')).error).toBe('unreadable');
+  });
+
+  test('410 is a retired API version, not an expired session', () => {
+    const out = describeReadFailure(new AulaApiError('x', 410, 'https://a/b', ''));
+    expect(out).toMatchObject({ error: 'unreadable', retryable: false });
+  });
+
+  test('missing tokens on disk is session_expired; other token store errors are not', () => {
+    const missing = new TokenStoreError('No tokens on disk. Run `aula login` first.');
+    expect(describeReadFailure(missing).error).toBe('session_expired');
+    expect(describeReadFailure(new TokenStoreError('Token file is not valid JSON')).error).toBe(
+      'unreadable',
+    );
+    expect(describeReadFailure(new Error('No tokens here')).error).toBe('unreadable');
+  });
+
+  test('never echoes raw error text for non-step-up failures', () => {
+    const out = describeReadFailure(new Error('access_token=SECRET'));
+    expect(JSON.stringify(out)).not.toContain('SECRET');
+  });
+});
+
 describe('previewMessage', () => {
   test('short messages come back whole', () => {
     const p = previewMessage({
@@ -275,7 +314,16 @@ describe('aula.messages.list_threads content', () => {
       threads: Array<{ latest: Record<string, unknown> }>;
     };
     expect(out.threads[0]?.latest.text).toBe('nyeste');
-    expect(out.threads[1]?.latest).toEqual({ error: 'step_up_required' });
+    expect(out.threads[0]?.latest.readable).toBe(true);
+    const blocked = out.threads[1] as unknown as { sensitive?: boolean; id: number };
+    expect(blocked.id).toBe(2);
+    expect(blocked.sensitive).toBe(true);
+    expect(out.threads[1]?.latest).toMatchObject({
+      readable: false,
+      error: 'step_up_required',
+      retryable: true,
+    });
+    expect(String(out.threads[1]?.latest.action)).toContain('aula login');
   });
 
   test('by default only unread threads are fetched', async () => {
