@@ -26,6 +26,29 @@ export interface ItemSummary {
   event?: EventSummary;
   /** Where a photo or video sits in the gallery. */
   media?: { albumId: number; mediaId: number };
+  /** How many attached files a message or post has, by type. */
+  files?: Partial<Record<FileType, number>>;
+}
+
+export type FileType = 'image' | 'video' | 'pdf' | 'document' | 'spreadsheet' | 'other';
+
+/** A file's rough type, for counting attachments. */
+export function fileType(mediaType: string): FileType {
+  if (mediaType.startsWith('image/')) return 'image';
+  if (mediaType.startsWith('video/')) return 'video';
+  if (mediaType === 'application/pdf') return 'pdf';
+  if (/word|opendocument\.text|rtf|^text\//.test(mediaType)) return 'document';
+  if (/sheet|excel|csv/.test(mediaType)) return 'spreadsheet';
+  return 'other';
+}
+
+function fileCounts(data: Data): { files?: Partial<Record<FileType, number>> } {
+  const files: Partial<Record<FileType, number>> = {};
+  for (const view of attachmentViews(data)) {
+    const type = fileType(view.mediaType);
+    files[type] = (files[type] ?? 0) + 1;
+  }
+  return Object.keys(files).length ? { files } : {};
 }
 
 /** Aula's portalRole on a message sender; `other` is system and auto messages. */
@@ -106,6 +129,7 @@ export function summarize(item: StoredItem): ItemSummary {
         title: str(asData(d.sender).fullName) || 'Besked',
         subtitle: clip(messageText(d)),
         senderRole: personRole(d.sender) ?? 'other',
+        ...fileCounts(d),
       };
     case 'post':
       return {
@@ -117,6 +141,7 @@ export function summarize(item: StoredItem): ItemSummary {
         ]
           .filter(Boolean)
           .join(' · '),
+        ...fileCounts(d),
       };
     case 'calendar_event': {
       const time =

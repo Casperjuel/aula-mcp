@@ -186,6 +186,12 @@ main {
 .nav-item .count { margin-left: auto; font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .nav-item.danger, .nav-item.danger svg { color: var(--err); }
 .nav-sep { height: 1px; background: var(--line); margin: 10px 4px; }
+.view-pick { display: grid; gap: 4px; margin: 0 4px 12px; }
+.share-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.share-form .input { flex: 1 1 240px; }
+.share-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--line); }
+.share-row:first-child { border-top: 0; }
+.share-row .grow { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
 
 @media (min-width: 900px) {
   body::before { background: var(--bg); }
@@ -243,6 +249,8 @@ main {
 .pill.run { background: var(--accent-soft); color: var(--accent); }
 .pill.run::before { animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
+.tag.files { display: inline-flex; align-items: center; gap: 4px; }
+.tag.files svg { width: 13px; height: 13px; }
 .tag { display: inline-block; padding: 1px 8px; border-radius: 6px; font-size: .74rem; font-weight: 700; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .tag.read { background: var(--accent-soft); color: var(--accent); }
 .tag.write { background: var(--warn-soft); color: var(--warn); }
@@ -686,8 +694,12 @@ function size(bytes) {
 const pct = (x) => Math.round(Math.min(Math.max(Number(x) || 0, 0), 1) * 100) + ' %';
 
 /* ---------- server ---------- */
+// The reads that may show another parent's shared data, read-only.
+const OWNER_READS = /^data\\/(stats|items|activity|messages\\/roles|gallery|attachments)(\\/|\\?|$)/;
+const withOwner = (path) => (state.owner && OWNER_READS.test(path)
+  ? path + (path.includes('?') ? '&' : '?') + 'owner=' + encodeURIComponent(state.owner) : path);
 const getJson = async (path) => {
-  const res = await fetch(path, { headers: { accept: 'application/json' } });
+  const res = await fetch(withOwner(path), { headers: { accept: 'application/json' } });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(body.error || ('HTTP ' + res.status)), { status: res.status });
   return body;
@@ -738,16 +750,18 @@ const JOB_TEXT = {
   gallery: 'Fotoalbum med billeder og videoer i original kvalitet og et miniaturebillede, op til 300 filer pr. kørsel.',
 };
 const jobLabel = (j) => JOBS[j] || j;
+/** What can be looked at while viewing another parent's shared data. */
+const SHARED_VIEWS = ['gennemse', 'kalender', 'galleri', 'deling'];
 const VIEWS = [
   { id: 'oversigt', label: 'Oversigt', icon: 'home', bottom: true },
-  { id: 'gemt', label: 'Gemt om dig', icon: 'db' },
   { id: 'gennemse', label: 'Gennemse', icon: 'search', bottom: true },
   { id: 'kalender', label: 'Kalender', icon: 'cal' },
   { id: 'sync', label: 'Synkronisering', short: 'Sync', icon: 'sync', bottom: true },
   { id: 'galleri', label: 'Galleri', icon: 'image', bottom: true },
   { id: 'vaerktoejer', label: 'Værktøjer', icon: 'tools' },
   { id: 'live', label: 'Live fra Aula', icon: 'live' },
-  { id: 'slet', label: 'Slet data', icon: 'trash', danger: true },
+  { id: 'deling', label: 'Deling', icon: 'group' },
+  { id: 'gemt', label: 'Gemt om dig', icon: 'db' },
 ];
 
 /* ---------- dates (Aula times are Danish) ---------- */
@@ -788,9 +802,46 @@ const state = {
   syncOpen: new Set(),
   wasRunning: new Set(),
   gallery: { data: null, error: null, loading: false, stale: true, child: '', year: '', album: null, albumFor: null, albumError: null, albumLoading: false, lb: 0 },
+  // Sharing: whom I share with, who shares with me, and whose data is shown
+  // ('' is my own; otherwise an owner id, read-only).
+  share: null,
+  shareLoading: false,
+  owner: '',
+  sharedKinds: null,
 };
 const loggedIn = () => Boolean(state.summary && state.summary.login && state.summary.login.logged_in);
-const database = () => (state.summary ? state.summary.database : null);
+const database = () => {
+  const db = state.summary ? state.summary.database : null;
+  return db && state.owner ? Object.assign({}, db, { kinds: state.sharedKinds || [] }) : db;
+};
+const sharedWithMe = () => (state.share && state.share.available ? state.share.shared_with_me : []);
+const ownerName = () => (sharedWithMe().find((o) => o.owner === state.owner) || { name: 'den anden forælder' }).name;
+async function loadShares() {
+  if (state.shareLoading) return;
+  state.shareLoading = true;
+  try { state.share = await getJson('data/shares'); }
+  catch (err) { state.share = { available: false, error: err.message }; }
+  state.shareLoading = false;
+  if (state.owner && !sharedWithMe().some((o) => o.owner === state.owner)) { setOwner(''); return; }
+  route();
+}
+/** Shows my own data ('') or what another parent shares with me. */
+async function setOwner(id) {
+  if (id === state.owner) return;
+  state.owner = id;
+  state.sharedKinds = null;
+  Object.assign(state.browse, { items: [], offset: 0, more: false, sel: null, detail: null, kind: '' });
+  Object.assign(state.gallery, { data: null, error: null, stale: true, child: '', year: '', album: null, albumFor: null, albumError: null });
+  state.cal.key = '';
+  state.roles = null;
+  rolesAt = 0;
+  if (id) {
+    try { state.sharedKinds = (await getJson('data/stats')).kinds; }
+    catch (err) { state.sharedKinds = []; toast('Kunne ikke hente de delte data: ' + err.message); }
+    if (state.owner !== id) return;
+  }
+  if (id && !SHARED_VIEWS.includes(current())) go('gennemse'); else route();
+}
 const statsOf = (kind) => ((database() && database().kinds) || []).find((k) => k.kind === kind);
 const countOf = (kind) => (statsOf(kind) ? statsOf(kind).count : 0);
 const totalCount = () => ((database() && database().kinds) || []).reduce((s, k) => s + k.count, 0);
@@ -813,7 +864,31 @@ async function loadLive(force) {
 
 /* ---------- shell ---------- */
 const main = $('main');
-function current() { const h = location.hash.slice(1).split('/')[0]; return VIEWS.some((v) => v.id === h) ? h : 'oversigt'; }
+function visibleViews() {
+  return VIEWS.filter((v) => (v.id !== 'deling' || (state.share && state.share.available)) && (!state.owner || SHARED_VIEWS.includes(v.id)));
+}
+function current() {
+  const h = location.hash.slice(1).split('/')[0];
+  if (state.owner) return SHARED_VIEWS.includes(h) ? h : 'gennemse';
+  if (h === 'slet') return 'gemt';
+  return VIEWS.some((v) => v.id === h) ? h : 'oversigt';
+}
+function ownerPick(id) {
+  const owners = sharedWithMe();
+  if (!owners.length) return null;
+  return el('div', { class: 'view-pick' },
+    el('label', { class: 'muted small', for: id }, 'Viser data'),
+    el('select', { class: 'input', id, onchange: (e) => setOwner(e.target.value) },
+      el('option', { value: '' }, 'Mine data'),
+      owners.map((o) => el('option', { value: o.owner, selected: state.owner === o.owner ? true : null }, o.name + ' (kun læse)'))));
+}
+function sharedBanner() {
+  if (!state.owner) return null;
+  const name = ownerName();
+  return banner('info', 'lock',
+    el('p', {}, el('strong', {}, 'Du ser det, ' + name + ' deler med dig. '), 'Kun læse, og kun det, du ikke selv har, fx beskeder sendt til ' + name + ' alene.'),
+    el('div', { class: 'banner-actions' }, el('button', { class: 'btn btn-sm', onclick: () => setOwner('') }, 'Tilbage til mine data')));
+}
 function go(id) { if (location.hash.slice(1) === id) route(); else location.hash = id; }
 function navButton(v, cur, cls) {
   const count = v.id === 'gennemse' && database() ? el('span', { class: 'count' }, fmt(totalCount()))
@@ -822,13 +897,13 @@ function navButton(v, cur, cls) {
     icon(v.icon), el('span', {}, v.label), count);
 }
 function renderNav(cur) {
-  const side = [];
-  for (const v of VIEWS) {
-    if (v.id === 'slet') side.push(el('div', { class: 'nav-sep' }));
+  const side = [ownerPick('ownerPick')];
+  for (const v of visibleViews()) {
+    if (v.id === 'gemt') side.push(el('div', { class: 'nav-sep' }));
     side.push(navButton(v, cur, 'nav-item'));
   }
   fill($('sideNav'), ...side);
-  const bottoms = VIEWS.filter((v) => v.bottom);
+  const bottoms = visibleViews().filter((v) => v.bottom);
   const inMore = !bottoms.some((v) => v.id === cur);
   fill($('bottomNav'), 
     ...bottoms.map((v) => el('button', { 'data-go': v.id, 'aria-current': v.id === cur ? 'page' : null }, icon(v.icon), el('span', {}, v.short || v.label))),
@@ -838,12 +913,13 @@ function renderNav(cur) {
 }
 function route() {
   const cur = current();
-  if (cur === 'galleri' || cur === 'slet') state.gallery.stale = true;
+  if (cur === 'galleri' || cur === 'gemt') state.gallery.stale = true;
   renderNav(cur);
-  fill(main, el('div', { class: 'view' }, R[cur]()));
-  if (window.innerWidth < 900) window.scrollTo(0, 0);
+  fill(main, el('div', { class: 'view' }, sharedBanner(), R[cur]()));
+  if (location.hash === '#slet' && $('sletData')) $('sletData').scrollIntoView();
+  else if (window.innerWidth < 900) window.scrollTo(0, 0);
 }
-function rerender(view) { if (current() === view) { renderNav(view); fill(main, el('div', { class: 'view' }, R[view]())); } }
+function rerender(view) { if (current() === view) { renderNav(view); fill(main, el('div', { class: 'view' }, sharedBanner(), R[view]())); } }
 window.addEventListener('hashchange', route);
 
 const head = (title, lede, action) => el('div', { class: 'view-head' },
@@ -973,7 +1049,7 @@ R.gemt = () => {
         el('div', { class: 'panel-head' }, el('h2', {}, 'Sådan passer vi på det')),
         el('div', { class: 'lock-list' },
           el('div', {}, icon('lock'), el('p', {}, el('strong', {}, 'Krypteret for dig alene. '), 'Indholdet krypteres med en nøgle, der kun gælder dig. En anden forælder på samme server kan ikke se dine data.')),
-          el('div', {}, icon('db'), el('p', {}, el('strong', {}, 'Gemt, til du sletter det. '), 'Intet slettes automatisk. Du bestemmer selv under ', el('button', { class: 'linkish', 'data-go': 'slet' }, 'Slet data'), '.')),
+          el('div', {}, icon('db'), el('p', {}, el('strong', {}, 'Gemt, til du sletter det. '), 'Intet slettes automatisk. Du bestemmer selv under ', el('button', { class: 'linkish', onclick: () => $('sletData').scrollIntoView({ behavior: 'smooth' }) }, 'Slet data'), '.')),
           el('div', {}, icon('shield'), el('p', {}, el('strong', {}, 'Kun læsning. '), 'Synkronisering markerer aldrig noget som læst i Aula.')))))
       : storageOff(),
     db ? el('section', { class: 'panel' },
@@ -998,6 +1074,7 @@ R.gemt = () => {
     el('section', { class: 'panel' },
       el('h2', { style: 'margin-bottom:10px' }, 'Det gemmes ikke'),
       el('div', { class: 'list' }, s.not_stored.map((t) => el('div', { class: 'li', style: 'grid-template-columns:1fr' }, el('p', {}, t))))),
+    db ? deleteSections() : null,
   ];
 };
 
@@ -1083,6 +1160,11 @@ R.gennemse = () => {
       el('section', { class: 'panel detail', id: 'detail' })),
   ];
 };
+const FILE_TYPES = [['image', 'billede', 'billeder', 'image'], ['video', 'video', 'videoer', 'play'], ['pdf', 'PDF', 'PDF', 'clip'],
+  ['document', 'dokument', 'dokumenter', 'clip'], ['spreadsheet', 'regneark', 'regneark', 'clip'], ['other', 'fil', 'filer', 'clip']];
+/** What is attached to a message or post: one tag per file type with its count. */
+const fileTags = (files) => (files ? FILE_TYPES.filter(([t]) => files[t])
+  .map(([t, one, many, ic]) => el('span', { class: 'tag files', title: 'Vedhæftet' }, icon(ic), plural(files[t], one, many))) : null);
 function renderResults() {
   const box = $('results'); if (!box) return;
   const b = state.browse;
@@ -1095,7 +1177,7 @@ function renderResults() {
       el('span', { style: 'min-width:0;display:block' },
         el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, it.unread ? el('span', { class: 'unread-dot' }, '● ') : null, it.title), el('span', { class: 'result-date' }, rel(it.occurredAt || it.updatedAt))),
         it.subtitle ? el('span', { class: 'li-sub', style: 'display:block' }, it.subtitle) : null,
-        el('span', { class: 'result-foot' }, el('span', { class: 'tag' }, kindOf(it.kind).one), roleBadge(it.senderRole))));
+        el('span', { class: 'result-foot' }, el('span', { class: 'tag' }, kindOf(it.kind).one), roleBadge(it.senderRole), fileTags(it.files))));
   });
   fill(box, 
     el('div', { class: 'panel-head', style: 'padding:14px 16px 0;margin-bottom:6px' }, el('h2', {}, title)),
@@ -1115,8 +1197,8 @@ function selectItem(key) {
 }
 // Matches the types the server shows inline; anything else is a download.
 const INLINE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'video/mp4', 'video/webm', 'audio/mpeg', 'audio/mp4', 'text/plain'];
-const attachUrl = (kind, id, index, download) =>
-  'data/attachments/' + kind + '/' + encodeURIComponent(String(id)) + '/' + index + (download ? '?download=1' : '');
+const attachUrl = (kind, id, index, download) => withOwner(
+  'data/attachments/' + kind + '/' + encodeURIComponent(String(id)) + '/' + index + (download ? '?download=1' : ''));
 const isPicture = (t) => /^image\\/(jpeg|png|gif|webp)$/.test(t);
 function typeLabel(t) {
   if (t.startsWith('image/')) return 'Billede';
@@ -1801,8 +1883,8 @@ function pollSync() {
 
 /* ---------- galleri ---------- */
 const GALLERY_LEDE = 'Billeder og videoer fra Aula, hentet i original kvalitet og ordnet pr. barn og år.';
-const mediaUrl = (variant, albumId, mediaId, download) =>
-  'data/gallery/' + variant + '/' + encodeURIComponent(String(albumId)) + '/' + encodeURIComponent(String(mediaId)) + (download ? '?download=1' : '');
+const mediaUrl = (variant, albumId, mediaId, download) => withOwner(
+  'data/gallery/' + variant + '/' + encodeURIComponent(String(albumId)) + '/' + encodeURIComponent(String(mediaId)) + (download ? '?download=1' : ''));
 const isVideo = (m) => String(m.type || '').toLowerCase().includes('video');
 const galleryStatus = () => (state.gallery.data ? state.gallery.data.status : null);
 const galleryJob = () => (state.sync && state.sync.jobs ? state.sync.jobs.find((j) => j.job === 'gallery') : null);
@@ -1852,22 +1934,25 @@ async function loadGallery() {
   g.loading = true;
   g.stale = false;
   const child = g.child;
+  const owner = state.owner;
   try {
     const d = await getJson('data/gallery' + (child ? '?child=' + encodeURIComponent(child) : ''));
-    if (child === g.child) { g.data = d; g.error = null; } else g.stale = true;
+    if (child === g.child && owner === state.owner) { g.data = d; g.error = null; } else g.stale = true;
   } catch (err) {
-    g.error = { status: err.status, message: err.message };
+    if (owner === state.owner) g.error = { status: err.status, message: err.message };
   }
   g.loading = false;
-  for (const view of ['galleri', 'oversigt', 'slet']) rerender(view);
+  for (const view of ['galleri', 'oversigt', 'gemt']) rerender(view);
 }
 async function loadAlbum(id) {
   const g = state.gallery;
+  const owner = state.owner;
   g.albumLoading = true;
   g.stale = false;
   if (g.albumFor !== id) { g.album = null; g.albumError = null; g.albumFor = id; }
   try {
     const d = await getJson('data/gallery/albums/' + encodeURIComponent(String(id)));
+    if (owner !== state.owner) { g.albumLoading = false; g.stale = true; rerender('galleri'); return; }
     if (g.albumFor === id) { g.album = d; g.albumError = null; }
     // Came from a day in the calendar: show that photo straight away.
     const focus = g.focus;
@@ -1967,7 +2052,7 @@ R.galleri = () => {
   const albumId = albumInHash();
   if (albumId !== null) return albumView(albumId);
   if ((g.stale || (!g.data && !g.error)) && !g.loading) loadGallery();
-  const top = head('Galleri', GALLERY_LEDE, g.data ? runGallery() : null);
+  const top = head('Galleri', state.owner ? 'Album og billeder, som ' + ownerName() + ' har, og som du ikke selv har.' : GALLERY_LEDE, g.data && !state.owner ? runGallery() : null);
   if (g.error && !g.data) return [top, g.error.status === 404 ? galleryOff() : banner('warn', 'warn', el('p', {}, 'Kunne ikke hente galleriet: ' + g.error.message))];
   if (!g.data) return [top, el('div', { class: 'grid-2' }, skeleton(), skeleton())];
   const st = g.data.status;
@@ -1985,7 +2070,7 @@ R.galleri = () => {
     top,
     !st.downloads ? banner('info', 'info', el('p', {}, el('strong', {}, 'Filerne hentes ikke på denne server. '), 'Albummene vises fra listen i Aula, men billeder og videoer bliver ikke gemt, så længe serveren kører med ', el('code', {}, 'AULA_MCP_GALLERY=0'), '.')) : null,
     st.downloads && paused ? banner('warn', 'warn', el('p', {}, el('strong', {}, 'Hentningen holder pause. '), 'Disken er ' + pct(st.disk.used) + ' fuld, og grænsen er ' + pct(st.stopAt) + '. Slet album her, eller giv serveren mere plads, så fortsætter den ved næste kørsel.')) : null,
-    el('div', { class: 'grid-2' }, storagePanel(st), downloadPanel(st)),
+    state.owner ? null : el('div', { class: 'grid-2' }, storagePanel(st), downloadPanel(st)),
     st.albums ? el('section', { class: 'panel filters' },
       el('div', { class: 'filter-row' },
         el('div', { class: 'field', role: 'group', 'aria-labelledby': 'gkidLabel' }, el('label', { id: 'gkidLabel' }, 'Barn'),
@@ -2003,7 +2088,7 @@ R.galleri = () => {
     posts.length ? el('section', { 'aria-label': 'Album fra opslag' },
       el('div', { class: 'panel-head' }, el('h2', {}, 'Fra opslag'), el('span', { class: 'muted small' }, plural(posts.length, 'opslag', 'opslag') + ' med billeder')),
       el('div', { class: 'albums' }, posts.map(postAlbumCard))) : null,
-    st.albums || st.downloaded ? el('section', { class: 'danger-zone' },
+    !state.owner && (st.albums || st.downloaded) ? el('section', { class: 'danger-zone' },
       el('h2', {}, 'Slet hele galleriet'),
       el('p', {}, 'Sletter den lokale kopi af alle ' + plural(st.albums, 'album', 'album') + ' (' + size(st.bytes) + ') på serveren. Intet slettes i Aula, og de slettede album hentes ikke igen.'),
       el('div', {}, el('button', { class: 'btn btn-danger', onclick: () => askGalleryDelete(null) }, icon('trash'), 'Slet hele galleriet'))) : null,
@@ -2033,7 +2118,7 @@ function albumView(id) {
         el('p', { class: 'eyebrow' }, a.child + ' · ' + a.year),
         el('h1', { style: 'overflow-wrap:anywhere' }, a.title),
         el('p', { class: 'lede' }, parts.join(' · '))),
-      a.removed ? null : el('button', { class: 'btn btn-ghost-danger', onclick: () => askGalleryDelete(a) }, icon('trash'), 'Slet album')),
+      a.removed || state.owner ? null : el('button', { class: 'btn btn-ghost-danger', onclick: () => askGalleryDelete(a) }, icon('trash'), 'Slet album')),
     a.removed ? banner('info', 'info', el('p', {}, el('strong', {}, 'Du har slettet den lokale kopi af dette album. '), 'Det ligger stadig i Aula, men aula-mcp henter det ikke igen.')) : null,
     el('section', { class: 'panel' },
       el('dl', { class: 'kv' },
@@ -2243,9 +2328,65 @@ R.live = () => {
 };
 
 /* ---------- slet ---------- */
-R.slet = () => {
-  if (!state.summary) return [head('Slet data'), skeleton()];
-  if (!database()) return [head('Slet data'), storageOff()];
+/* ---------- deling ---------- */
+R.deling = () => {
+  const s = state.share;
+  const lede = 'Del dine gemte Aula-data med den anden forælder. De kan kun læse dem og ser kun det, de ikke selv har, fx beskeder sendt til dig alene.';
+  if (!s) { loadShares(); return [head('Deling', lede), skeleton()]; }
+  if (!s.available) {
+    return [head('Deling', lede), banner('info', 'info', el('p', {}, el('strong', {}, 'Deling findes ikke på denne server. '), s.error ? 'Kunne ikke hente: ' + s.error : 'Den kræver flere forældre med hver sit login og lokal lagring.'))];
+  }
+  const email = el('input', { class: 'input', id: 'shareEmail', type: 'email', autocomplete: 'off', placeholder: 'den.anden@forælder.dk', 'aria-label': 'Email' });
+  const add = async (e) => {
+    e.preventDefault();
+    const value = email.value.trim();
+    if (!value) return;
+    try {
+      s.granted = (await postJson('data/shares', { email: value })).granted;
+      toast('Delt med ' + value + '.');
+      rerender('deling');
+    } catch (err) { toast('Kunne ikke dele: ' + err.message); }
+  };
+  const remove = async (g) => {
+    try {
+      s.granted = (await postJson('data/shares/remove', { email: g.email })).granted;
+      toast('Deling med ' + g.email + ' er fjernet.');
+      rerender('deling');
+    } catch (err) { toast('Kunne ikke fjerne: ' + err.message); }
+  };
+  if (state.owner) {
+    return [head('Deling'), el('section', { class: 'panel' }, el('p', {}, 'Du ser lige nu det, ' + ownerName() + ' deler med dig. Gå tilbage til dine egne data for at styre, hvem du deler med.'))];
+  }
+  return [
+    head('Deling', lede),
+    s.email ? null : banner('warn', 'warn', el('p', {}, el('strong', {}, 'Din konto har ingen bekræftet email. '), 'Du kan dele dine data, men andre kan ikke dele med dig, før din email er bekræftet i login-systemet.')),
+    el('section', { class: 'panel' },
+      el('div', { class: 'panel-head' }, el('h2', {}, 'Del med en forælder')),
+      el('div', { class: 'lock-list' },
+        el('div', {}, icon('key'), el('p', {}, el('strong', {}, 'Med deres email. '), 'Skriv den email, de logger ind her med. Delingen starter, første gang de logger ind på dette dashboard.')),
+        el('div', {}, icon('lock'), el('p', {}, el('strong', {}, 'Kun læse. '), 'De kan se dine gemte beskeder, opslag, kalender og billeder, men ikke synkronisere, slette eller skrive i Aula. Dit Aula-login deles aldrig.')),
+        el('div', {}, icon('tools'), el('p', {}, el('strong', {}, 'Også for deres assistent. '), 'Deres AI-assistent kan læse det samme, read-only, via ', el('code', {}, 'aula.local.shared_with_me'), '.'))),
+      el('form', { class: 'share-form', onsubmit: add }, email, el('button', { class: 'btn btn-primary', type: 'submit' }, icon('group'), 'Del'))),
+    el('section', { class: 'panel' },
+      el('div', { class: 'panel-head' }, el('h2', {}, 'Du deler med')),
+      s.granted.length
+        ? el('div', {}, s.granted.map((g) => el('div', { class: 'share-row' },
+          el('div', { class: 'grow' }, el('strong', {}, g.email), el('div', { class: 'muted small' }, 'Siden ' + longDate(g.since))),
+          g.active ? el('span', { class: 'pill ok' }, 'Aktiv') : el('span', { class: 'pill neutral' }, 'Venter på login'),
+          el('button', { class: 'btn btn-sm btn-ghost-danger', onclick: () => remove(g) }, 'Fjern'))))
+        : el('p', { class: 'muted' }, 'Du deler ikke med nogen.')),
+    el('section', { class: 'panel' },
+      el('div', { class: 'panel-head' }, el('h2', {}, 'Delt med dig')),
+      s.shared_with_me.length
+        ? el('div', {}, s.shared_with_me.map((o) => el('div', { class: 'share-row' },
+          el('div', { class: 'grow' }, el('strong', {}, o.name), el('div', { class: 'muted small' }, 'Siden ' + longDate(o.since))),
+          el('button', { class: 'btn btn-sm', onclick: () => setOwner(o.owner) }, 'Vis'))))
+        : el('p', { class: 'muted' }, 'Ingen deler med dig endnu.')),
+  ];
+};
+
+/** Slet data, at the bottom of Gemt om dig. */
+function deleteSections() {
   const kinds = Object.keys(KINDS).filter((k) => !k.startsWith('gallery_') && (KINDS[k].synced || countOf(k) > 0));
   const g = state.gallery;
   if ((g.stale || (!g.data && !g.error)) && !g.loading) loadGallery();
@@ -2255,7 +2396,8 @@ R.slet = () => {
       el('div', { class: 'li-sub num' }, !gst ? 'Henter…' : gst.albums ? plural(gst.albums, 'album', 'album') + ' · ' + plural(gst.downloaded, 'fil', 'filer') + ' · ' + size(gst.bytes) + '. Hentes ikke igen.' : 'Intet gemt'))),
     el('button', { class: 'btn btn-sm btn-ghost-danger', disabled: !gst || !(gst.albums || gst.downloaded), onclick: () => askGalleryDelete(null) }, icon('trash'), 'Slet'));
   return [
-    head('Slet data', 'Sletter din lokale kopi hos aula-mcp. Det rører ikke noget i Aula. Næste synkronisering henter det, Aula stadig har, igen.'),
+    el('div', { class: 'view-head', id: 'sletData', style: 'margin-top:12px' },
+      el('div', {}, el('h2', {}, 'Slet data'), el('p', { class: 'lede' }, 'Sletter din lokale kopi hos aula-mcp. Det rører ikke noget i Aula. Næste synkronisering henter det, Aula stadig har, igen.'))),
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, 'Slet en type')),
       el('div', { class: 'list' }, galleryRow, kinds.map((k) => {
@@ -2271,7 +2413,7 @@ R.slet = () => {
       el('p', {}, 'Sletter alle ' + fmt(totalCount()) + ' gemte ting. Dit Aula-login og dine indstillinger bliver. Det kan ikke fortrydes.'),
       el('div', {}, el('button', { class: 'btn btn-danger', disabled: !totalCount(), onclick: () => askDelete(null) }, icon('trash'), 'Slet alle mine data'))),
   ];
-};
+}
 function confirmDialog(opts) {
   const form = $('confirmForm');
   const input = opts.typed ? el('input', { class: 'input', id: 'confirmText', autocomplete: 'off', placeholder: 'SLET' }) : null;
@@ -2421,7 +2563,8 @@ function openMore() {
   const cur = current();
   fill($('moreBody'), 
     el('div', { class: 'panel-head', style: 'margin:0' }, el('h2', {}, 'Mere'), el('button', { class: 'icon-btn', 'aria-label': 'Luk', onclick: () => $('moreDlg').close() }, icon('x'))),
-    el('div', { class: 'nav-list' }, VIEWS.filter((v) => !v.bottom).map((v) => navButton(v, cur, 'nav-item'))),
+    ownerPick('ownerPickMore'),
+    el('div', { class: 'nav-list' }, visibleViews().filter((v) => !v.bottom).map((v) => navButton(v, cur, 'nav-item'))),
     signedInAs ? [el('div', { class: 'nav-sep' }), el('form', { method: 'post', action: '/auth/logout', style: 'margin:0' },
       el('p', { class: 'muted small', style: 'margin-bottom:8px' }, 'Logget ind som ', el('strong', {}, signedInAs)), el('button', { class: 'btn btn-sm', type: 'submit' }, 'Log af'))] : null);
   $('moreDlg').showModal();
@@ -2453,6 +2596,7 @@ route();
 (async () => {
   await Promise.all([loadSummary(), loadSync()]);
   route();
+  if (signedInAs && database()) loadShares();
   pollSync();
   if (database()) {
     if (!state.gallery.data && !state.gallery.loading) loadGallery();
