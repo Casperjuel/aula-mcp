@@ -1,0 +1,138 @@
+{{- include "aula-mcp.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aula-mcp.fullname" . }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+spec:
+  # One replica: sessions and the token store are local to the pod.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "aula-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "aula-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: aula-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: AULA_MCP_HOST
+              value: "0.0.0.0"
+            - name: AULA_MCP_PORT
+              value: "7878"
+            {{- if include "aula-mcp.multiParent" . }}
+            - name: AULA_MCP_MULTI_PARENT
+              value: "1"
+            - name: AULA_MCP_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            - name: AULA_MCP_OIDC_AUDIENCE
+              value: {{ .Values.oidc.audience | quote }}
+            {{- if .Values.oidc.acceptIdToken }}
+            - name: AULA_MCP_OIDC_ACCEPT_ID_TOKEN
+              value: "1"
+            {{- end }}
+            {{- else }}
+            # Single-parent mode refuses a non-loopback bind without this; the
+            # NetworkPolicy limits who can reach it.
+            - name: AULA_MCP_ALLOW_REMOTE
+              value: "1"
+            {{- end }}
+            {{- if .Values.setupUi.enabled }}
+            - name: AULA_MCP_INGRESS_PORT
+              value: {{ .Values.setupUi.port | quote }}
+            {{- end }}
+            {{- if .Values.writeTools }}
+            - name: AULA_MCP_WRITE
+              value: "1"
+            {{- end }}
+            {{- if .Values.debugLogs }}
+            - name: AULA_MCP_LOG
+              value: "1"
+            {{- end }}
+            {{- with .Values.encryptionKey.existingSecret }}
+            - name: AULA_MCP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.encryptionKey.secretKey }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: mcp
+              containerPort: 7878
+            {{- if .Values.setupUi.enabled }}
+            - name: setup-ui
+              containerPort: {{ .Values.setupUi.port }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+            periodSeconds: 30
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "aula-mcp.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

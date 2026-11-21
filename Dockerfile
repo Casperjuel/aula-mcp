@@ -1,7 +1,7 @@
-# Kubernetes image for aula-mcp, built from the repository root so it ships
-# exactly the checked-out code:
+# Container image for aula-mcp (deployed by charts/aula-mcp), built from the
+# repository root so it ships exactly the checked-out code:
 #
-#   podman build -f kubernetes/Dockerfile -t <registry>/aula-mcp:<tag> .
+#   podman build -t <registry>/aula-mcp:<tag> .
 #
 # Same base as homeassistant-addon/Dockerfile and for the same reasons: pnpm
 # install needs Node (node:sqlite), the server needs Bun (Bun.serve), and
@@ -20,7 +20,7 @@ COPY packages ./packages
 COPY apps ./apps
 RUN pnpm install --frozen-lockfile --prod
 
-COPY kubernetes/parent-login.sh /usr/local/bin/aula-parent-login
+COPY scripts/aula-parent-login.sh /usr/local/bin/aula-parent-login
 RUN chmod 755 /usr/local/bin/aula-parent-login \
   && mkdir -p /data && chown node:node /data
 

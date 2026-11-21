@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "aula-mcp.fullname" . }}-test
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+    {{- include "aula-mcp.clientLabel" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 100
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: check
+      image: {{ .Values.tests.image }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      command: ["sh", "-c"]
+      args:
+        - |
+          set -eu
+          base=http://{{ include "aula-mcp.fullname" . }}:{{ .Values.service.port }}
+          curl -fsS "$base/healthz"
+          {{- if include "aula-mcp.multiParent" . }}
+          # Multi-parent mode must refuse a call without a token.
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/mcp" \
+            -H 'content-type: application/json' \
+            -H 'accept: application/json, text/event-stream' -d '{}')
+          echo "/mcp without a token: $code"
+          test "$code" = 401
+          {{- end }}

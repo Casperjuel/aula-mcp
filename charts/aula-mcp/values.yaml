@@ -1,0 +1,119 @@
+# Build the image from the repository root (see Dockerfile) and push it, or
+# load it into kind with `kind load docker-image`.
+image:
+  repository: aula-mcp
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# single-parent: one Aula login, and anyone who reaches /mcp acts as that
+#   parent. Keep it inside the cluster (networkPolicy) and never expose it
+#   publicly.
+# multi-parent: every request needs a token from oidc.issuer, and each parent
+#   gets their own Aula login (see README, "Log each parent into Aula").
+mode: single-parent
+
+oidc:
+  # e.g. https://keycloak.example.com/realms/kagent
+  issuer: ""
+  # Tokens must list this in `aud`.
+  audience: aula-mcp
+  # Accept Keycloak ID tokens as well as access tokens. kagent's oauth2-proxy
+  # forwards ID tokens, so turn this on with kagent.
+  acceptIdToken: false
+
+# AULA_MCP_WRITE=1: enable write tools. The server is read-only without it.
+writeTools: false
+# AULA_MCP_LOG=1: verbose logs.
+debugLogs: false
+
+# Optional key for the token store (AULA_MCP_KEY, hex or passphrase). Without
+# it, each token file is encrypted with a random key stored beside it.
+encryptionKey:
+  existingSecret: ""
+  secretKey: AULA_MCP_KEY
+
+extraEnv: []
+
+persistence:
+  enabled: true
+  # Use an existing PVC instead of creating one.
+  existingClaim: ""
+  storageClass: ""
+  size: 1Gi
+  accessModes: ["ReadWriteOnce"]
+
+service:
+  type: ClusterIP
+  port: 7878
+
+# Browser login UI from the Home Assistant add-on. It has no login of its own:
+# whoever reaches it can log their MitID in as *the* parent of this server.
+# single-parent mode only.
+setupUi:
+  enabled: false
+  port: 8099
+  # Must be set to true to enable setupUi; acknowledges the above.
+  iUnderstandItHasNoAuth: false
+
+# Gateway API routes. Each needs at least one parentRef.
+httpRoute:
+  mcp:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    #  - name: gateway
+    #    namespace: gateway
+    #    sectionName: https
+    hostnames: []
+  setupUi:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    hostnames: []
+
+# Only listed peers (and kagent, when enabled) may reach the pod. Add your
+# Gateway's namespace here when you use httpRoute.
+networkPolicy:
+  enabled: true
+  from: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: gateway
+
+# kagent integration (needs the kagent CRDs, api.kagent.dev/v1alpha3).
+kagent:
+  enabled: false
+  namespace: kagent
+  remoteMCPServer:
+    name: aula-mcp
+    description: Aula (Danish school platform) for the signed-in parent only
+    timeout: 60s
+  agent:
+    enabled: false
+    name: aula-assistant
+    harness: kagent-default
+    modelConfig: default-model-config
+    description: Answers questions about the signed-in parent's Aula messages, posts and calendar.
+    systemPrompt: |
+      You help a parent with Aula, the Danish school platform. You only see
+      the Aula data of the parent who is signed in. Answer in the language
+      the parent writes in. Never send a message unless the parent has seen
+      the exact text and asked you to send it.
+
+# One replica only: MCP sessions and the token store live in the pod.
+podAnnotations: {}
+podLabels: {}
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+tests:
+  image: curlimages/curl:8.17.0

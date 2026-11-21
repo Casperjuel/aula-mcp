@@ -1,0 +1,49 @@
+{{- if .Values.kagent.enabled }}
+{{- $multi := include "aula-mcp.multiParent" . }}
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: {{ .Values.kagent.remoteMCPServer.name }}
+  namespace: {{ .Values.kagent.namespace }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+    {{- if $multi }}
+    # The controller lists tools without a caller token, which multi-parent
+    # mode refuses. Agents list them at run time with the parent's token.
+    kagent.dev/discovery: disabled
+    {{- end }}
+spec:
+  description: {{ .Values.kagent.remoteMCPServer.description | quote }}
+  protocol: STREAMABLE_HTTP
+  url: {{ include "aula-mcp.mcpUrl" . }}
+  timeout: {{ .Values.kagent.remoteMCPServer.timeout }}
+  {{- if $multi }}
+  # Forward the signed-in user's token; aula-mcp picks their Aula login by it.
+  tokenPassthrough: true
+  {{- end }}
+{{- if .Values.kagent.agent.enabled }}
+---
+apiVersion: api.kagent.dev/v1alpha3
+kind: Agent
+metadata:
+  name: {{ .Values.kagent.agent.name }}
+  namespace: {{ .Values.kagent.namespace }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+spec:
+  harnessRef:
+    name: {{ .Values.kagent.agent.harness }}
+  template:
+    inline:
+      description: {{ .Values.kagent.agent.description | quote }}
+      modelConfig:
+        name: {{ .Values.kagent.agent.modelConfig }}
+      systemPrompt: |
+        {{- .Values.kagent.agent.systemPrompt | nindent 8 }}
+      tools:
+        - mcp:
+            server:
+              kind: RemoteMCPServer
+              name: {{ .Values.kagent.remoteMCPServer.name }}
+{{- end }}
+{{- end }}

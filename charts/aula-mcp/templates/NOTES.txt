@@ -1,0 +1,19 @@
+aula-mcp ({{ .Values.mode }}) is running at {{ include "aula-mcp.mcpUrl" . }}
+{{- if include "aula-mcp.multiParent" . }}
+
+Log each parent into Aula with their IdP user id (the token's `sub`):
+
+  kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "aula-mcp.fullname" . }} -- aula-parent-login <sub>
+{{- else }}
+
+Log the parent into Aula:
+
+  kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "aula-mcp.fullname" . }} -- bun apps/cli/src/index.ts login
+
+Anyone who can reach /mcp acts as this parent. Keep it inside the cluster.
+{{- end }}
+{{- if .Values.kagent.enabled }}
+
+kagent: RemoteMCPServer {{ .Values.kagent.namespace }}/{{ .Values.kagent.remoteMCPServer.name }}
+{{- if include "aula-mcp.multiParent" . }} (token passthrough; no discovered tools in its status is expected){{ end }}
+{{- end }}

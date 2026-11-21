@@ -5,3 +5,5 @@
 **/*.test.ts
 homeassistant-addon
 apps/cli/bin
+charts
+scripts/kind-test.sh
