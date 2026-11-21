@@ -29,6 +29,14 @@
  * signed in through setup-login.ts, and works on that parent's own token
  * store only. A login session belongs to the parent who started it; another
  * parent gets the same 404 as for an unknown session id.
+ *
+ * The dashboard (setup-dashboard.ts) reads and changes the parent's own
+ * stored data and sync jobs through the /data/* JSON routes below. Each
+ * route picks the storage and the sync from the signed-in parent, never from
+ * the request, so no parameter can reach another parent's rows. Requests
+ * that change something must be same-origin JSON: multi-parent mode checks
+ * the Origin, and these routes also refuse any other content type, which a
+ * cross-site form cannot send without a CORS preflight.
  */
 
 import { homedir } from 'node:os';
@@ -48,10 +56,18 @@ import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
 import type { AulaContext } from './aula-context.ts';
 import { buildDiscoverManifest } from './discover.ts';
+import { detail, searchText, summarize, threadMessage } from './item-view.ts';
 import { type Caller, callerId } from './oidc.ts';
+import { renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
-import { renderMyDataPage } from './setup-my-data.ts';
-import type { KindStats, ParentStorage, StorageInfo } from './storage.ts';
+import {
+  ITEM_KINDS,
+  type ItemKind,
+  type KindStats,
+  type ParentStorage,
+  type StorageInfo,
+} from './storage.ts';
+import { type ParentSync, SYNC_JOBS, type SyncJobName } from './sync.ts';
 import { DEFAULT_RENEW_WITHIN_SECONDS } from './token-keepalive.ts';
 import { type ToolInfo, toolCatalog } from './tool-catalog.ts';
 import { toolNameStyle } from './tool-names.ts';
@@ -60,6 +76,9 @@ import { toolNameStyle } from './tool-names.ts';
  *  MitID identity after the picker is shown. After this the login rejects
  *  with a timeout so the session entry gets cleaned up instead of leaking. */
 const IDENTITY_PICK_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Most stored items a search reads through before it stops. */
+const SEARCH_SCAN_LIMIT = 10_000;
 
 export interface SetupAppOptions {
   logger?: Logger;
@@ -80,6 +99,11 @@ export interface SetupAppOptions {
       info: StorageInfo;
       /** The parent's own rows (null caller in single-parent mode). */
       forParent(caller: Caller | null): ParentStorage;
+    };
+    /** The sync jobs, when local storage is on. */
+    sync?: {
+      /** The parent's own jobs (null caller in single-parent mode). */
+      forParent(caller: Caller | null): ParentSync;
     };
   };
   /** Multi-parent mode: the sign-in, and each parent's own token store. */
@@ -160,15 +184,25 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       }
       await next();
     });
+  } else {
+    // Single-parent mode has no sign-in; still refuse a browser that says
+    // the request comes from another site.
+    app.use('*', async (c, next) => {
+      const site = c.req.header('sec-fetch-site');
+      if (c.req.method !== 'GET' && site && site !== 'same-origin' && site !== 'none') {
+        return c.json({ error: 'cross-origin request refused' }, 403);
+      }
+      await next();
+    });
   }
 
-  app.get('/', (c) => c.html(renderSetupPage(parentOf(c)?.name)));
+  // One page for both; /data is where the old "Mine data" page lived.
+  app.get('/', (c) => c.html(renderDashboard(parentOf(c)?.name)));
+  app.get('/data', (c) => c.html(renderDashboard(parentOf(c)?.name)));
 
   app.get('/status', async (c) => c.json(await loginStatus(storeOf(c))));
 
   const tools = options.myData?.tools ?? toolCatalog(process.env, toolNameStyle());
-
-  app.get('/data', (c) => c.html(renderMyDataPage(parentOf(c)?.name)));
 
   // What aula-mcp keeps about the signed-in parent. Never the tokens.
   app.get('/data/summary', async (c) => {
@@ -228,6 +262,145 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       logger.warn('setup.data.live_failed', { error: (err as Error).message });
       return c.json({ error: (err as Error).message }, 502);
     }
+  });
+
+  // --- the dashboard's stored data and sync jobs, all for this parent only ---
+
+  const storageOf = (c: Context): ParentStorage | null =>
+    options.myData?.storage?.forParent(parentOf(c)?.caller ?? null) ?? null;
+  const syncOf = (c: Context): ParentSync | null =>
+    options.myData?.sync?.forParent(parentOf(c)?.caller ?? null) ?? null;
+  /** Jobs asked for from the dashboard that have not finished, per parent. */
+  const queuedRuns = new Map<string, Set<SyncJobName>>();
+
+  /** The JSON body of a request that changes something, or null to refuse it. */
+  const changeBody = async (c: Context): Promise<Record<string, unknown> | null> => {
+    if (!(c.req.header('content-type') ?? '').startsWith('application/json')) return null;
+    const body = (await c.req.json().catch(() => null)) as unknown;
+    return body && typeof body === 'object' && !Array.isArray(body)
+      ? (body as Record<string, unknown>)
+      : null;
+  };
+
+  // Newest first, a page at a time. `q` searches the text the parent sees;
+  // the stored data is encrypted, so that happens here and not in SQL.
+  app.get('/data/items', async (c) => {
+    const store = storageOf(c);
+    if (!store) return c.json({ error: 'local storage is off' }, 404);
+    const rawKind = c.req.query('kind') || undefined;
+    if (rawKind && !isKind(rawKind)) return c.json({ error: 'unknown kind' }, 400);
+    const kind = rawKind as ItemKind | undefined;
+    const since = optionalInt(c.req.query('since'));
+    const until = optionalInt(c.req.query('until'));
+    const offset = optionalInt(c.req.query('offset')) ?? 0;
+    const limit = optionalInt(c.req.query('limit')) ?? 30;
+    if ([since, until, offset, limit].some((n) => Number.isNaN(n))) {
+      return c.json({ error: 'since, until, offset and limit must be integers' }, 400);
+    }
+    const page = { offset: Math.max(offset, 0), limit: Math.min(Math.max(limit, 1), 100) };
+    const query = {
+      ...(kind ? { kind } : {}),
+      ...(since !== undefined ? { since } : {}),
+      ...(until !== undefined ? { until } : {}),
+    };
+    const q = (c.req.query('q') ?? '').trim().slice(0, 200).toLocaleLowerCase('da-DK');
+    if (!q) {
+      const rows = await store.list({ ...query, offset: page.offset, limit: page.limit + 1 });
+      return c.json({
+        items: rows.slice(0, page.limit).map(summarize),
+        ...page,
+        more: rows.length > page.limit,
+      });
+    }
+    const matches = [];
+    let scanned = 0;
+    let skip = page.offset;
+    for (;;) {
+      const rows = await store.list({ ...query, offset: scanned, limit: 500 });
+      scanned += rows.length;
+      for (const row of rows) {
+        if (!searchText(row).includes(q)) continue;
+        if (skip > 0) skip--;
+        else matches.push(row);
+      }
+      const exhausted = rows.length < 500;
+      if (matches.length > page.limit || exhausted || scanned >= SEARCH_SCAN_LIMIT) {
+        return c.json({
+          items: matches.slice(0, page.limit).map(summarize),
+          ...page,
+          more: matches.length > page.limit,
+          ...(!exhausted && matches.length <= page.limit ? { search_truncated: true } : {}),
+        });
+      }
+    }
+  });
+
+  app.get('/data/items/:kind/:id', async (c) => {
+    const store = storageOf(c);
+    if (!store) return c.json({ error: 'local storage is off' }, 404);
+    const kind = c.req.param('kind');
+    if (!isKind(kind)) return c.json({ error: 'unknown kind' }, 400);
+    const item = await store.get(kind, c.req.param('id'));
+    if (!item) return c.json({ error: 'not found' }, 404);
+    const messages =
+      kind === 'message_thread'
+        ? (await store.list({ kind: 'message', idPrefix: `${item.id}:`, limit: 500 }))
+            .reverse()
+            .map(threadMessage)
+        : undefined;
+    return c.json({ item: detail(item), ...(messages ? { messages } : {}) });
+  });
+
+  app.get('/data/sync', async (c) => {
+    const sync = syncOf(c);
+    const loggedIn = (await loginStatus(storeOf(c))).logged_in;
+    if (!sync) return c.json({ available: false, logged_in: loggedIn, jobs: [] });
+    const queued = queuedRuns.get(ownerOf(c)) ?? new Set();
+    const jobs = await sync.status();
+    return c.json({
+      available: true,
+      logged_in: loggedIn,
+      jobs: jobs.map((job) => ({ ...job, queued: queued.has(job.job) && !job.running })),
+    });
+  });
+
+  // Starts the jobs and answers at once; the page follows them in /data/sync.
+  // A run of every job can take longer than an HTTP request may stay idle.
+  app.post('/data/sync/run', async (c) => {
+    const sync = syncOf(c);
+    if (!sync) return c.json({ error: 'sync is off' }, 404);
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const asked = body.jobs === undefined ? [...SYNC_JOBS] : body.jobs;
+    if (!Array.isArray(asked) || asked.length === 0 || !asked.every(isJob)) {
+      return c.json({ error: `jobs must be some of ${SYNC_JOBS.join(', ')}` }, 400);
+    }
+    if (!(await storeOf(c).load())) return c.json({ error: 'not logged in to Aula' }, 409);
+    const owner = ownerOf(c);
+    const queued = queuedRuns.get(owner) ?? new Set<SyncJobName>();
+    queuedRuns.set(owner, queued);
+    for (const job of asked) queued.add(job);
+    void sync
+      .run(asked)
+      .catch((err) => logger.warn('setup.sync_run_failed', { error: (err as Error).message }))
+      .finally(() => {
+        for (const job of asked) queued.delete(job);
+      });
+    return c.json({ started: asked }, 202);
+  });
+
+  // Deletes the parent's own copy of one kind, or of everything. Nothing in Aula.
+  app.post('/data/delete', async (c) => {
+    const store = storageOf(c);
+    if (!store) return c.json({ error: 'local storage is off' }, 404);
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    if (body.confirm !== 'SLET') return c.json({ error: 'confirm must be "SLET"' }, 400);
+    if (body.all === true) return c.json({ deleted: await store.delete() });
+    if (typeof body.kind !== 'string' || !isKind(body.kind)) {
+      return c.json({ error: 'give a known kind, or all: true' }, 400);
+    }
+    return c.json({ deleted: await store.delete({ kind: body.kind }) });
   });
 
   async function loginStatus(store: TokenStore) {
@@ -558,270 +731,16 @@ export function escapeHtml(text: string): string {
   );
 }
 
-/** `signedInAs` is set in multi-parent mode, for the sign-out bar. */
-function renderSetupPage(signedInAs?: string): string {
-  const account = signedInAs
-    ? `<form class="account" method="post" action="/auth/logout">
-    <span>Logget ind som <strong>${escapeHtml(signedInAs)}</strong></span>
-    <button type="submit" class="secondary">Log af</button>
-  </form>`
-    : '';
-  // Inline single-page UI. Vanilla JS + EventSource so it works without a
-  // build step inside the addon. Styling kept minimal to match HA's frame.
-  return `<!doctype html>
-<html lang="da">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>aula-mcp — login</title>
-<style>
-  :root { color-scheme: light dark; --fg: #1d1d1f; --muted: #6b7280; --bg: #ffffff; --card: #f7f7f8; --border: #e5e7eb; --accent: #03a9f4; --error: #b00020; --success: #117a3a; }
-  @media (prefers-color-scheme: dark) { :root { --fg: #f5f5f7; --muted: #a1a1aa; --bg: #111114; --card: #1c1c1f; --border: #2a2a2e; } }
-  * { box-sizing: border-box; }
-  body { font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--fg); background: var(--bg); margin: 0; padding: 2rem 1rem; }
-  main { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 1.4rem; margin: 0 0 0.5rem; display: flex; align-items: center; gap: 0.5rem; }
-  h1 svg { color: var(--accent); }
-  p { color: var(--muted); margin: 0 0 1rem; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 1.25rem; margin: 1rem 0; }
-  .qr-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
-  .qr-wrap > div { background: #fff; border-radius: 8px; padding: 0.5rem; display: flex; align-items: center; justify-content: center; }
-  .qr-wrap svg { width: 100%; height: auto; max-width: 240px; }
-  label { display: block; font-weight: 500; margin-bottom: 0.25rem; }
-  input[type=text] { width: 100%; padding: 0.6rem 0.75rem; font-size: 1rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); }
-  button { font: inherit; padding: 0.6rem 1.1rem; border-radius: 8px; border: 0; background: var(--accent); color: #fff; font-weight: 500; cursor: pointer; }
-  button:disabled { opacity: 0.6; cursor: not-allowed; }
-  button.secondary { background: transparent; color: var(--fg); border: 1px solid var(--border); }
-  .row { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-  .status-line { display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem; }
-  .dot { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--muted); }
-  .dot.ok { background: var(--success); }
-  .dot.err { background: var(--error); }
-  .stage { font-weight: 500; }
-  .stage.error { color: var(--error); }
-  .stage.success { color: var(--success); }
-  .identity-options button { margin: 0.25rem 0.5rem 0.25rem 0; background: var(--card); color: var(--fg); border: 1px solid var(--border); }
-  .muted { color: var(--muted); font-size: 0.85rem; }
-  details { margin-top: 1rem; }
-  summary { cursor: pointer; color: var(--muted); }
-  .account { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; color: var(--muted); }
-  code { background: var(--card); border: 1px solid var(--border); padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.9em; }
-</style>
-</head>
-<body>
-<main>
-  <h1>${ICON_SVG} aula-mcp</h1>
-  ${account}
-  <p>Log ind med MitID, så HA's Assist + Voice kan tale med Aula.</p>
-  <p><a href="data">Mine data og værktøjer →</a></p>
-
-  <div class="card" id="status-card">
-    <div class="status-line">
-      <span class="dot" id="status-dot"></span>
-      <span id="status-text">Indlæser status…</span>
-    </div>
-    <div id="status-detail" class="muted" style="margin-top: 0.5rem;"></div>
-    <div class="row" id="status-actions" style="margin-top: 0.75rem;"></div>
-  </div>
-
-  <div class="card" id="login-card" hidden>
-    <label for="username">MitID-brugernavn</label>
-    <input type="text" id="username" placeholder="dit MitID-username" autocomplete="username" />
-    <div class="row" style="margin-top: 0.75rem;">
-      <button id="start-btn">Start login</button>
-      <span class="muted">Du scanner QR-koden med MitID-appen.</span>
-    </div>
-  </div>
-
-  <div class="card" id="progress-card" hidden>
-    <div class="status-line">
-      <span class="dot" id="progress-dot"></span>
-      <span class="stage" id="stage">Starter…</span>
-    </div>
-    <div id="progress-detail" class="muted" style="margin-top: 0.5rem;"></div>
-    <div class="qr-wrap" id="qr-wrap" hidden></div>
-    <div id="identity-choice" hidden style="margin-top: 1rem;">
-      <p style="margin: 0 0 0.5rem;">Du har flere identiteter — vælg den der hører til Aula:</p>
-      <div class="identity-options" id="identity-options"></div>
-    </div>
-  </div>
-
-  <details>
-    <summary>Hvad sker der her?</summary>
-    <p class="muted">Login-flow'et kører lokalt i din HA-installation. MitID-godkendelsen sker mellem MitID-appen og <code>nemlog-in.mitid.dk</code> — denne side ser kun de OAuth-tokens du får tilbage, og gemmer dem krypteret i <code>/config/aula-mcp/</code>. Tokens forlader ikke din HA.</p>
-  </details>
-</main>
-
-<script>
-const $ = (id) => document.getElementById(id);
-const statusDot = $('status-dot');
-const statusText = $('status-text');
-const statusDetail = $('status-detail');
-const statusActions = $('status-actions');
-const loginCard = $('login-card');
-const progressCard = $('progress-card');
-const progressDot = $('progress-dot');
-const stage = $('stage');
-const progressDetail = $('progress-detail');
-const qrWrap = $('qr-wrap');
-const identityChoice = $('identity-choice');
-const identityOptions = $('identity-options');
-const startBtn = $('start-btn');
-const usernameInput = $('username');
-
-let currentSessionId = null;
-let currentSource = null;
-
-async function refreshStatus() {
-  const res = await fetch('status');
-  const data = await res.json();
-  if (data.logged_in) {
-    statusDot.classList.add('ok');
-    statusDot.classList.remove('err');
-    statusText.textContent = 'Logget ind';
-    const expiresMin = Math.round(data.seconds_remaining / 60);
-    let renewal;
-    if (data.auto_renew) {
-      const renewMin = Math.round(data.seconds_until_renew / 60);
-      renewal = 'Automatisk fornyelse er slået til. ' + (renewMin > 0
-        ? 'Næste fornyelse om ca. ' + renewMin + ' min.'
-        : 'Fornyes inden for få minutter.');
-    } else {
-      renewal = 'Automatisk fornyelse er slået fra: access token udløber om ' + expiresMin +
-        ' min. og fornyes først ved næste brug.';
-    }
-    statusDetail.textContent = (data.identity_name ? data.identity_name + ' — ' : '') +
-      (data.username) + '. ' + renewal;
-    statusActions.innerHTML = '';
-    const logoutBtn = document.createElement('button');
-    logoutBtn.textContent = 'Log ud';
-    logoutBtn.className = 'secondary';
-    logoutBtn.onclick = async () => {
-      await fetch('logout', { method: 'POST' });
-      await refreshStatus();
-    };
-    statusActions.appendChild(logoutBtn);
-    loginCard.hidden = true;
-  } else {
-    statusDot.classList.remove('ok', 'err');
-    statusText.textContent = 'Ikke logget ind';
-    statusDetail.textContent = 'Klik nedenfor for at starte MitID-login.';
-    statusActions.innerHTML = '';
-    loginCard.hidden = false;
-  }
+function isKind(value: string): value is ItemKind {
+  return (ITEM_KINDS as readonly string[]).includes(value);
 }
 
-function setStage(text, kind = '') {
-  stage.textContent = text;
-  stage.classList.remove('error', 'success');
-  if (kind) stage.classList.add(kind);
-  progressDot.classList.remove('ok', 'err');
-  if (kind === 'success') progressDot.classList.add('ok');
-  if (kind === 'error') progressDot.classList.add('err');
+function isJob(value: unknown): value is SyncJobName {
+  return typeof value === 'string' && (SYNC_JOBS as readonly string[]).includes(value);
 }
 
-function showQR(svg1, svg2, refresh) {
-  qrWrap.hidden = false;
-  qrWrap.innerHTML = '<div>' + svg1 + '</div><div>' + svg2 + '</div>';
-  progressDetail.textContent = 'Scan en af QR-koderne med MitID-appen (skifter automatisk).';
-}
-
-function showIdentityChoice(options) {
-  identityChoice.hidden = false;
-  identityOptions.innerHTML = '';
-  for (const opt of options) {
-    const btn = document.createElement('button');
-    btn.textContent = opt.name;
-    btn.onclick = async () => {
-      identityOptions.innerHTML = '<span class="muted">Vælger ' + opt.name + '…</span>';
-      await fetch('login/identity?sessionId=' + encodeURIComponent(currentSessionId), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ index: opt.index }),
-      });
-    };
-    identityOptions.appendChild(btn);
-  }
-}
-
-startBtn.onclick = async () => {
-  const username = usernameInput.value.trim();
-  if (!username) {
-    usernameInput.focus();
-    return;
-  }
-  startBtn.disabled = true;
-  loginCard.hidden = true;
-  progressCard.hidden = false;
-  qrWrap.hidden = true;
-  identityChoice.hidden = true;
-  setStage('Starter login…');
-  progressDetail.textContent = '';
-
-  const res = await fetch('login/start', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ username }),
-  });
-  if (!res.ok) {
-    setStage('Kunne ikke starte login', 'error');
-    progressDetail.textContent = 'HTTP ' + res.status + ' — tjek log.';
-    startBtn.disabled = false;
-    return;
-  }
-  const { sessionId } = await res.json();
-  currentSessionId = sessionId;
-
-  currentSource = new EventSource('login/events?sessionId=' + encodeURIComponent(sessionId));
-
-  currentSource.addEventListener('qr', (ev) => {
-    setStage('Venter på MitID');
-    const data = JSON.parse(ev.data);
-    showQR(data.svg1, data.svg2, data.refreshCount);
-  });
-  currentSource.addEventListener('otp', (ev) => {
-    const data = JSON.parse(ev.data);
-    setStage('Indtast OTP i MitID-appen');
-    progressDetail.textContent = 'Kode: ' + data.code;
-  });
-  currentSource.addEventListener('verified', () => {
-    setStage('Bekræft i MitID-appen');
-    progressDetail.textContent = 'Godkend login i MitID-appen.';
-  });
-  currentSource.addEventListener('identity', (ev) => {
-    setStage('Vælg identitet');
-    const data = JSON.parse(ev.data);
-    showIdentityChoice(data.options);
-  });
-  currentSource.addEventListener('identity-selected', () => {
-    identityChoice.hidden = true;
-    setStage('Fortsætter…');
-  });
-  currentSource.addEventListener('success', async (ev) => {
-    setStage('Logget ind 🎉', 'success');
-    const data = JSON.parse(ev.data);
-    progressDetail.textContent = 'Tokens gemt. ' +
-      (data.identityName ? 'Identitet: ' + data.identityName + '. ' : '');
-    currentSource.close();
-    startBtn.disabled = false;
-    await refreshStatus();
-  });
-  currentSource.addEventListener('error', (ev) => {
-    if (!ev.data) return;
-    setStage('Login fejlede', 'error');
-    try {
-      const data = JSON.parse(ev.data);
-      progressDetail.textContent = data.message || 'Ukendt fejl.';
-    } catch {
-      progressDetail.textContent = 'Forbindelsen blev afbrudt.';
-    }
-    currentSource.close();
-    startBtn.disabled = false;
-  });
-};
-
-refreshStatus();
-</script>
-</body>
-</html>`;
+/** undefined when absent, NaN when not an integer. */
+function optionalInt(value: string | undefined): number | undefined {
+  if (value === undefined || value === '') return undefined;
+  return /^-?\d+$/.test(value) ? Number(value) : Number.NaN;
 }
