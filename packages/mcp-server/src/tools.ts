@@ -33,7 +33,6 @@ import {
   vacationRequests,
 } from './child-actions.ts';
 import { buildDiscoverManifest } from './discover.ts';
-import { resolveFamilyProfileIds } from './family-profiles.ts';
 import type { GalleryView } from './gallery.ts';
 import { registerGalleryTools } from './gallery-tools.ts';
 import { registerLocalTools, type SharedAccess } from './local-tools.ts';
