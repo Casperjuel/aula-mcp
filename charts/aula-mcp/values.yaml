@@ -27,6 +27,11 @@ oidc:
 writeTools: false
 # AULA_MCP_LOG=1: verbose logs.
 debugLogs: false
+# AULA_MCP_TOOL_NAMES: `dotted` (aula.discover) or `underscore`
+# (aula_discover). The Anthropic API refuses tool names with dots, and kagent
+# passes MCP tool names straight through. Empty: `underscore` when
+# kagent.enabled, else `dotted`.
+toolNames: ""
 
 # Optional key for the token store (AULA_MCP_KEY, hex or passphrase). Without
 # it, each token file is encrypted with a random key stored beside it.
