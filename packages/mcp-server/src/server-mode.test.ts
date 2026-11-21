@@ -16,8 +16,27 @@ describe('resolveServerMode', () => {
   test('multi-parent with issuer and audience', () => {
     expect(resolveServerMode({ AULA_MCP_MULTI_PARENT: '1', ...OIDC })).toEqual({
       kind: 'multi-parent',
-      oidc: { issuer: OIDC.AULA_MCP_OIDC_ISSUER, audience: 'aula-mcp' },
+      oidc: { issuer: OIDC.AULA_MCP_OIDC_ISSUER, audience: 'aula-mcp', acceptIdTokens: false },
     });
+  });
+
+  test('accepting ID tokens is opt-in and needs multi-parent mode', () => {
+    const on = resolveServerMode({
+      AULA_MCP_MULTI_PARENT: '1',
+      AULA_MCP_OIDC_ACCEPT_ID_TOKEN: '1',
+      ...OIDC,
+    });
+    expect(on.kind === 'multi-parent' && on.oidc.acceptIdTokens).toBe(true);
+    expect(() => resolveServerMode({ AULA_MCP_OIDC_ACCEPT_ID_TOKEN: '1' })).toThrow(
+      /multi-parent mode is off/,
+    );
+    expect(() =>
+      resolveServerMode({
+        AULA_MCP_MULTI_PARENT: '1',
+        AULA_MCP_OIDC_ACCEPT_ID_TOKEN: 'yes',
+        ...OIDC,
+      }),
+    ).toThrow(/must be 1 or 0/);
   });
 
   test('refuses OIDC settings while multi-parent mode is off', () => {

@@ -62,7 +62,7 @@ export interface OidcVerifierOptions extends OidcConfig {
 }
 
 export function createOidcVerifier(options: OidcVerifierOptions): CallerVerifier {
-  const { issuer, audience } = options;
+  const { issuer, audience, acceptIdTokens } = options;
   let keysPromise: Promise<JWTVerifyGetKey> | undefined = options.keys
     ? Promise.resolve(options.keys)
     : undefined;
@@ -96,7 +96,9 @@ export function createOidcVerifier(options: OidcVerifierOptions): CallerVerifier
     }
     // Keycloak marks ID tokens with typ "ID". One issued to the aula-mcp
     // client would pass the audience check, but it isn't an access token.
-    if (payload.typ === 'ID') {
+    // Accepted only when explicitly configured, for fronts that forward
+    // nothing else; the audience check above still applied.
+    if (payload.typ === 'ID' && !acceptIdTokens) {
       throw new CallerAuthError('invalid_token', 'An ID token is not an access token.');
     }
     if (typeof payload.sub !== 'string' || payload.sub === '') {

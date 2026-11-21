@@ -1,0 +1,16 @@
+apiVersion: api.kagent.dev/v1alpha3
+kind: RemoteMCPServer
+metadata:
+  name: aula-mcp
+  labels:
+    # The controller lists tools without a caller token, which aula-mcp
+    # refuses. With discovery disabled, agents list them at run time with the
+    # parent's token instead.
+    kagent.dev/discovery: disabled
+spec:
+  description: Aula (Danish school platform) for the signed-in parent only
+  protocol: STREAMABLE_HTTP
+  url: http://aula-mcp.aula-mcp.svc.cluster.local:7878/mcp
+  # Forward the signed-in user's token; aula-mcp picks their Aula login by it.
+  tokenPassthrough: true
+  timeout: 60s

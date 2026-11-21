@@ -1,0 +1,31 @@
+{
+  "clientId": "kagent",
+  "name": "kagent",
+  "description": "kagent UI sign-in through oauth2-proxy",
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "clientAuthenticatorType": "client-secret",
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "implicitFlowEnabled": false,
+  "serviceAccountsEnabled": false,
+  "redirectUris": ["https://kagent.example.com/oauth2/callback"],
+  "webOrigins": ["https://kagent.example.com"],
+  "attributes": {
+    "pkce.code.challenge.method": "S256",
+    "post.logout.redirect.uris": "https://kagent.example.com/*"
+  },
+  "protocolMappers": [
+    {
+      "name": "audience-aula-mcp",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "config": {
+        "included.custom.audience": "aula-mcp",
+        "id.token.claim": "true",
+        "access.token.claim": "true",
+        "introspection.token.claim": "true"
+      }
+    }
+  ]
+}

@@ -8,6 +8,10 @@
  *                             carry an OIDC access token, and each parent
  *                             gets their own Aula session.
  *
+ * AULA_MCP_OIDC_ACCEPT_ID_TOKEN=1 also accepts OIDC ID tokens. Some fronts
+ * only forward an ID token (kagent behind oauth2-proxy), so it exists for
+ * them; the audience check still applies.
+ *
  * Every half-configured state is a startup error rather than a guess: the
  * flag without an issuer/audience, or OIDC settings without the flag. A typo
  * must never leave someone believing auth is on when it isn't.
@@ -18,6 +22,8 @@ export interface OidcConfig {
   issuer: string;
   /** Must appear in the `aud` claim of the access tokens. */
   audience: string;
+  /** Also accept ID tokens (AULA_MCP_OIDC_ACCEPT_ID_TOKEN=1). Off by default. */
+  acceptIdTokens: boolean;
 }
 
 export type ServerMode = { kind: 'single-parent' } | { kind: 'multi-parent'; oidc: OidcConfig };
@@ -32,11 +38,12 @@ export function resolveServerMode(env: Env): ServerMode {
   const flag = env.AULA_MCP_MULTI_PARENT ?? '';
   const issuer = env.AULA_MCP_OIDC_ISSUER?.trim() ?? '';
   const audience = env.AULA_MCP_OIDC_AUDIENCE?.trim() ?? '';
+  const acceptIdToken = env.AULA_MCP_OIDC_ACCEPT_ID_TOKEN ?? '';
 
   if (flag === '' || flag === '0') {
-    if (issuer || audience) {
+    if (issuer || audience || acceptIdToken) {
       throw new ServerModeError(
-        'AULA_MCP_OIDC_ISSUER / AULA_MCP_OIDC_AUDIENCE are set but multi-parent mode is off.\n' +
+        'AULA_MCP_OIDC_* settings are set but multi-parent mode is off.\n' +
           'Set AULA_MCP_MULTI_PARENT=1 to require OIDC, or remove the OIDC settings.',
       );
     }
@@ -44,6 +51,11 @@ export function resolveServerMode(env: Env): ServerMode {
   }
   if (flag !== '1') {
     throw new ServerModeError(`AULA_MCP_MULTI_PARENT must be 1 or 0, got "${flag}".`);
+  }
+  if (!['', '0', '1'].includes(acceptIdToken)) {
+    throw new ServerModeError(
+      `AULA_MCP_OIDC_ACCEPT_ID_TOKEN must be 1 or 0, got "${acceptIdToken}".`,
+    );
   }
 
   const missing = [
@@ -72,5 +84,8 @@ export function resolveServerMode(env: Env): ServerMode {
     );
   }
 
-  return { kind: 'multi-parent', oidc: { issuer, audience } };
+  return {
+    kind: 'multi-parent',
+    oidc: { issuer, audience, acceptIdTokens: acceptIdToken === '1' },
+  };
 }

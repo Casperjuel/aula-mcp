@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aula-mcp
+  labels:
+    app.kubernetes.io/name: aula-mcp
+spec:
+  # One replica: sessions and the token store are local to the pod.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: aula-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: aula-mcp
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: aula-mcp
+          image: aula-mcp
+          envFrom:
+            - configMapRef:
+                name: aula-mcp-config
+          ports:
+            - name: mcp
+              containerPort: 7878
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: aula-mcp-data
+        - name: tmp
+          emptyDir: {}
