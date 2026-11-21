@@ -8,6 +8,7 @@ import {
   GalleryFiles,
   GalleryView,
   galleryConfig,
+  type S3Like,
   SHARED_FOLDER,
   safeName,
   syncGallery,
@@ -262,5 +263,111 @@ describe('gallery helpers', () => {
       false,
     );
     expect(() => galleryConfig({ AULA_MCP_GALLERY_STOP_AT: '2' })).toThrow();
+  });
+});
+
+/** An in-memory bucket with the calls the gallery makes. */
+function fakeS3(): S3Like & { objects: Map<string, Buffer> } {
+  const objects = new Map<string, Buffer>();
+  return {
+    objects,
+    file(key: string) {
+      return {
+        exists: async () => objects.has(key),
+        stat: async () => {
+          const body = objects.get(key);
+          if (!body) throw new Error('NoSuchKey');
+          return { size: body.length };
+        },
+        stream: () => new Blob([objects.get(key) ?? Buffer.alloc(0)]).stream(),
+        delete: async () => {
+          objects.delete(key);
+        },
+        writer: () => {
+          const parts: Buffer[] = [];
+          return {
+            write: (chunk: Uint8Array) => {
+              parts.push(Buffer.from(chunk));
+              return chunk.length;
+            },
+            end: async () => {
+              objects.set(key, Buffer.concat(parts));
+              return 0;
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
+describe('gallery on S3', () => {
+  const s3Config = {
+    dir: '/unused',
+    downloads: true,
+    stopAt: 0.9,
+    s3: { bucket: 'b', region: 'us-east-1', prefix: 'aula/' },
+  };
+
+  test('stores under <prefix><parent>/ with the same layout, and serves and deletes', async () => {
+    const bucket = fakeS3();
+    files = new GalleryFiles(s3Config, { fetch: fakeFetch, s3: bucket });
+    await run(client([{ album: ALBUM, media: [media(1)] }]));
+    expect([...bucket.objects.keys()].sort()).toEqual([
+      'aula/p/.thumbs/1.jpg',
+      'aula/p/Alma/2026/2026-11-18 Tur til skoven efterår/1.jpeg',
+    ]);
+    const view = new GalleryView(storage.forParent('p'), files.forParent('p'));
+    const status = await view.status();
+    expect(status).toMatchObject({ store: 's3', location: 's3://b/aula/p/', disk: null });
+    const opened = await view.file(100, 1, 'original');
+    const chunks: Buffer[] = [];
+    for await (const chunk of opened?.stream ?? []) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks).toString()).toBe('bytes of m1');
+
+    fetched = [];
+    await run(client([{ album: ALBUM, media: [media(1)] }]));
+    expect(fetched).toEqual([]);
+
+    await view.remove({ albumId: 100 });
+    expect(bucket.objects.size).toBe(0);
+  });
+
+  test('a duplicate points at the first object instead of a second copy', async () => {
+    const bucket = fakeS3();
+    files = new GalleryFiles(s3Config, { fetch: fakeFetch, s3: bucket });
+    const dup = (id: number, n: number) =>
+      media(id, { file: { id, name: 'a.jpg', url: `${URL_BASE}/dup${n}?s` } }, true);
+    await run(
+      client([
+        { album: ALBUM, media: [dup(1, 1)] },
+        { album: { ...ALBUM, id: 101, title: 'Kopi' }, media: [dup(2, 2)] },
+      ]),
+    );
+    expect(bucket.objects.size).toBe(1);
+    const media2 = await new GalleryView(storage.forParent('p'), files.forParent('p')).media(101);
+    expect(media2[0]?.downloaded).toBe(true);
+  });
+
+  test('keys never leave the parent prefix', () => {
+    files = new GalleryFiles(s3Config, { fetch: fakeFetch, s3: fakeS3() });
+    const gallery = files.forParent('p') as import('./gallery.ts').S3ParentGallery;
+    expect(gallery.key('../q/x.jpg')).toBeNull();
+    expect(gallery.key('Alma/x.jpg')).toBe('aula/p/Alma/x.jpg');
+  });
+
+  test('config needs a bucket and a clean prefix', () => {
+    expect(
+      galleryConfig({ AULA_MCP_GALLERY_STORE: 's3', AULA_MCP_GALLERY_S3_BUCKET: 'b' }).s3,
+    ).toEqual({ bucket: 'b', region: 'us-east-1', prefix: '' });
+    expect(() => galleryConfig({ AULA_MCP_GALLERY_STORE: 's3' })).toThrow();
+    expect(() =>
+      galleryConfig({
+        AULA_MCP_GALLERY_STORE: 's3',
+        AULA_MCP_GALLERY_S3_BUCKET: 'b',
+        AULA_MCP_GALLERY_S3_PREFIX: 'no-slash',
+      }),
+    ).toThrow();
+    expect(() => galleryConfig({ AULA_MCP_GALLERY_STORE: 'ftp' })).toThrow();
   });
 });

@@ -113,8 +113,11 @@ await storage.forParent('parent-c').put([
     },
   },
 ]);
-await mkdir(join(galleryFiles.forParent('parent-c').root, 'Anna/Skovtur'), { recursive: true });
-await writeFile(join(galleryFiles.forParent('parent-c').root, 'Anna/Skovtur/IMG_1.jpg'), 'photo');
+await mkdir(join(galleryFiles.forParent('parent-c').location, 'Anna/Skovtur'), { recursive: true });
+await writeFile(
+  join(galleryFiles.forParent('parent-c').location, 'Anna/Skovtur/IMG_1.jpg'),
+  'photo',
+);
 
 function setup(clientSecret?: string) {
   const stores = new Map<string, MemoryStore>();

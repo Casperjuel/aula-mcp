@@ -185,7 +185,7 @@ async function setup(options: { login?: boolean; logger?: Logger; gallery?: bool
   galleryDir = await mkdtemp(join(tmpdir(), 'aula-gallery-'));
   const files = new GalleryFiles({ dir: galleryDir, downloads: true, stopAt: 1 });
   const parentFiles = files.forParent('default');
-  if (options.gallery !== false) await seedGallery(mine, parentFiles.root);
+  if (options.gallery !== false) await seedGallery(mine, parentFiles.location);
   const store = new MemoryStore();
   if (options.login !== false) await store.save(LOGIN);
   const sync = fakeSync();
@@ -203,7 +203,7 @@ async function setup(options: { login?: boolean; logger?: Logger; gallery?: bool
         : {}),
     },
   });
-  return { app, mine, sync, galleryRoot: parentFiles.root };
+  return { app, mine, sync, galleryRoot: parentFiles.location };
 }
 
 const json = (body: unknown, headers: Record<string, string> = {}) => ({

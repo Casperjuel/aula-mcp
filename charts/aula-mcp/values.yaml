@@ -69,6 +69,22 @@ gallery:
     storageClass: ""
     size: 50Gi
     accessModes: ["ReadWriteOnce"]
+  # Store the files in an S3 bucket instead of the volume (no volume is made).
+  # The layout is the same under <prefix><parent>/. S3 has no disk limit, so
+  # stopAt does not apply.
+  s3:
+    enabled: false
+    bucket: ""
+    # e.g. http://s3.example.lan for MinIO, Ceph RGW, Garage or SeaweedFS
+    # (path-style). Empty: AWS.
+    endpoint: ""
+    region: us-east-1
+    # Must end with "/" when set, e.g. "aula-mcp/".
+    prefix: ""
+    # Secret with the access keys.
+    existingSecret: ""
+    accessKeyIdKey: AWS_ACCESS_KEY_ID
+    secretAccessKeyKey: AWS_SECRET_ACCESS_KEY
 
 service:
   type: ClusterIP

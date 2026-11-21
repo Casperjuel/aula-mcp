@@ -1,3 +1,4 @@
+{{- $galleryVolume := and .Values.gallery.persistence.enabled (not .Values.gallery.s3.enabled) }}
 {{- include "aula-mcp.validate" . }}
 apiVersion: apps/v1
 kind: Deployment
@@ -100,7 +101,35 @@ spec:
                   name: {{ . }}
                   key: {{ $.Values.encryptionKey.secretKey }}
             {{- end }}
-            {{- if .Values.gallery.persistence.enabled }}
+            {{- with .Values.gallery.s3 }}
+            {{- if .enabled }}
+            - name: AULA_MCP_GALLERY_STORE
+              value: s3
+            - name: AULA_MCP_GALLERY_S3_BUCKET
+              value: {{ required "gallery.s3.bucket is required with gallery.s3.enabled" .bucket | quote }}
+            {{- if .endpoint }}
+            - name: AULA_MCP_GALLERY_S3_ENDPOINT
+              value: {{ .endpoint | quote }}
+            {{- end }}
+            - name: AULA_MCP_GALLERY_S3_REGION
+              value: {{ .region | quote }}
+            {{- if .prefix }}
+            - name: AULA_MCP_GALLERY_S3_PREFIX
+              value: {{ .prefix | quote }}
+            {{- end }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "gallery.s3.existingSecret is required with gallery.s3.enabled" .existingSecret }}
+                  key: {{ .accessKeyIdKey }}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .secretAccessKeyKey }}
+            {{- end }}
+            {{- end }}
+            {{- if $galleryVolume }}
             - name: AULA_MCP_GALLERY_DIR
               value: /gallery
             {{- end }}
@@ -143,7 +172,7 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
-            {{- if .Values.gallery.persistence.enabled }}
+            {{- if $galleryVolume }}
             - name: gallery
               mountPath: /gallery
             {{- end }}
@@ -157,7 +186,7 @@ spec:
           {{- end }}
         - name: tmp
           emptyDir: {}
-        {{- if .Values.gallery.persistence.enabled }}
+        {{- if $galleryVolume }}
         - name: gallery
           persistentVolumeClaim:
             claimName: {{ .Values.gallery.persistence.existingClaim | default (printf "%s-gallery" (include "aula-mcp.fullname" .)) }}

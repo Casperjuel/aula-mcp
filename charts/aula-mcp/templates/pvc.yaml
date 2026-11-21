@@ -20,7 +20,7 @@ spec:
       storage: {{ .Values.persistence.size }}
 {{- end }}
 {{- with .Values.gallery.persistence }}
-{{- if and .enabled (not .existingClaim) }}
+{{- if and .enabled (not .existingClaim) (not $.Values.gallery.s3.enabled) }}
 ---
 # Downloaded gallery files. Kept on uninstall like the data volume.
 apiVersion: v1

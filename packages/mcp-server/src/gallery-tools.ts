@@ -17,7 +17,9 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
         "How far the download of the caller's own Aula photo albums has come: albums and " +
         'media known, how many are downloaded, waiting or failed, bytes stored (each file ' +
         'counted once, the same photo in two albums is stored once), a split per child, the ' +
-        'disk use of the gallery volume and the level at which downloads pause, and the ' +
+        'disk use of the gallery volume and the level at which downloads pause (null when ' +
+        'the files are in an S3 bucket, `store` "s3", which has no limit), where they are ' +
+        '(`location`: a folder or s3://bucket/prefix), and the ' +
         'last run of the `gallery` sync job. Files are kept in original quality with a ' +
         'thumbnail, under <child>/<year>/<date album title>/. Albums shared with more than ' +
         'one child are filed under "Fælles". To download now, call aula.sync.run with ' +

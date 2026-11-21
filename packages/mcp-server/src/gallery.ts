@@ -17,6 +17,10 @@
  *   AULA_MCP_GALLERY_DIR      — where files go (default <AULA_MCP_DIR>/gallery)
  *   AULA_MCP_GALLERY=0        — no downloads; albums are still listed
  *   AULA_MCP_GALLERY_STOP_AT  — disk use that pauses downloads, 0–1 (default 0.9)
+ *   AULA_MCP_GALLERY_STORE    — `disk` (default) or `s3`
+ *   AULA_MCP_GALLERY_S3_BUCKET, _ENDPOINT, _REGION, _PREFIX — the bucket with
+ *     `s3`; keys come from AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY. The
+ *     same layout is used under <prefix><parentId>/, and S3 has no disk limit.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -41,8 +45,20 @@ const PAGE_SIZE = 50;
 /** Folder for albums that are not one child's alone. */
 export const SHARED_FOLDER = 'Fælles';
 
+export interface GalleryS3Config {
+  bucket: string;
+  endpoint?: string;
+  region: string;
+  /** Put before every key, e.g. `aula/`. */
+  prefix: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+}
+
 export interface GalleryConfig {
   dir: string;
+  /** Set when files go to an S3 bucket instead of `dir`. */
+  s3?: GalleryS3Config;
   /** False with AULA_MCP_GALLERY=0: albums are listed, nothing is downloaded. */
   downloads: boolean;
   /** Disk use (0–1) at which downloads pause. */
@@ -57,10 +73,36 @@ export function galleryConfig(env: NodeJS.ProcessEnv = process.env): GalleryConf
       `AULA_MCP_GALLERY_STOP_AT must be between 0 and 1, not "${env.AULA_MCP_GALLERY_STOP_AT}".`,
     );
   }
+  const store = env.AULA_MCP_GALLERY_STORE ?? 'disk';
+  if (store !== 'disk' && store !== 's3') {
+    throw new Error(`AULA_MCP_GALLERY_STORE must be disk or s3, not "${store}".`);
+  }
+  const bucket = env.AULA_MCP_GALLERY_S3_BUCKET;
+  if (store === 's3' && !bucket) {
+    throw new Error('AULA_MCP_GALLERY_STORE=s3 needs AULA_MCP_GALLERY_S3_BUCKET.');
+  }
+  const prefix = env.AULA_MCP_GALLERY_S3_PREFIX ?? '';
+  if (prefix && !/^[A-Za-z0-9._/-]+\/$/.test(prefix)) {
+    throw new Error('AULA_MCP_GALLERY_S3_PREFIX must end with / and use only A-Z a-z 0-9 . _ - /.');
+  }
   return {
     dir: env.AULA_MCP_GALLERY_DIR ?? join(base, 'gallery'),
     downloads: env.AULA_MCP_GALLERY !== '0',
     stopAt,
+    ...(store === 's3' && bucket
+      ? {
+          s3: {
+            bucket,
+            ...(env.AULA_MCP_GALLERY_S3_ENDPOINT
+              ? { endpoint: env.AULA_MCP_GALLERY_S3_ENDPOINT }
+              : {}),
+            region: env.AULA_MCP_GALLERY_S3_REGION ?? 'us-east-1',
+            prefix,
+            ...(env.AWS_ACCESS_KEY_ID ? { accessKeyId: env.AWS_ACCESS_KEY_ID } : {}),
+            ...(env.AWS_SECRET_ACCESS_KEY ? { secretAccessKey: env.AWS_SECRET_ACCESS_KEY } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -71,31 +113,107 @@ export interface DiskUsage {
   used: number;
 }
 
-/** The gallery folders of every parent. */
+/** One parent's gallery files. Every path is relative and checked to stay inside. */
+export interface ParentGallery {
+  readonly config: GalleryConfig;
+  /** Where the files are, without credentials: a folder or `s3://bucket/prefix`. */
+  readonly location: string;
+  /** How full the disk is; null on S3, which has no limit to pause at. */
+  disk(): Promise<DiskUsage | null>;
+  exists(rel: string): Promise<boolean>;
+  /**
+   * Fetches `url` to `rel` and hashes it on the way. `keep` gets the hash and
+   * decides: true keeps it at `rel`, false drops it.
+   */
+  download(
+    url: string,
+    rel: string,
+    keep: (sha256: string) => boolean,
+  ): Promise<{ sha256: string; bytes: number; kept: boolean }>;
+  remove(rel: string): Promise<void>;
+  /** A read stream of the file, for the dashboard. */
+  open(rel: string): Promise<{ stream: Readable; bytes: number } | null>;
+  /** Stores an already stored file under a second name; false when it can't. */
+  linkTo(existingRel: string, rel: string): Promise<boolean>;
+}
+
+/** The S3 calls the gallery makes; Bun's S3Client has them. */
+export interface S3Like {
+  file(key: string): {
+    exists(): Promise<boolean>;
+    stat(): Promise<{ size: number }>;
+    stream(): ReadableStream<Uint8Array>;
+    delete(): Promise<void>;
+    writer(options?: { partSize?: number }): {
+      write(chunk: Uint8Array): number | Promise<number>;
+      end(): Promise<number> | number;
+    };
+  };
+}
+
+/** The gallery files of every parent. */
 export class GalleryFiles {
   readonly config: GalleryConfig;
   private readonly fetchFn: typeof fetch;
+  private readonly s3: S3Like | null;
 
-  constructor(config: GalleryConfig, options: { fetch?: typeof fetch } = {}) {
+  constructor(config: GalleryConfig, options: { fetch?: typeof fetch; s3?: S3Like } = {}) {
     this.config = config;
     this.fetchFn = options.fetch ?? fetch;
+    this.s3 = config.s3 ? (options.s3 ?? bunS3(config.s3)) : null;
   }
 
   forParent(parentId: string): ParentGallery {
     if (!/^[A-Za-z0-9._-]+$/.test(parentId) || parentId.startsWith('.')) {
       throw new Error('gallery: unusable parent id');
     }
-    return new ParentGallery(join(resolve(this.config.dir), parentId), this.config, this.fetchFn);
+    if (this.s3 && this.config.s3) {
+      return new S3ParentGallery(
+        this.s3,
+        `${this.config.s3.prefix}${parentId}/`,
+        `s3://${this.config.s3.bucket}/${this.config.s3.prefix}${parentId}/`,
+        this.config,
+        this.fetchFn,
+      );
+    }
+    return new DiskParentGallery(
+      join(resolve(this.config.dir), parentId),
+      this.config,
+      this.fetchFn,
+    );
   }
 }
 
-/** One parent's gallery folder. Every path is relative to it and checked to stay inside. */
-export class ParentGallery {
+function bunS3(config: GalleryS3Config): S3Like {
+  return new Bun.S3Client({
+    bucket: config.bucket,
+    region: config.region,
+    ...(config.endpoint ? { endpoint: config.endpoint } : {}),
+    ...(config.accessKeyId ? { accessKeyId: config.accessKeyId } : {}),
+    ...(config.secretAccessKey ? { secretAccessKey: config.secretAccessKey } : {}),
+  }) as unknown as S3Like;
+}
+
+/** Fetches an Aula media URL; the error never carries the signed URL. */
+async function fetchMedia(fetchFn: typeof fetch, url: string): Promise<Readable> {
+  if (!isAulaMediaUrl(url)) throw new Error('gallery: not an Aula media URL');
+  const response = await fetchFn(url, { redirect: 'error' });
+  // Status only: the URL is a signed grant to the file.
+  if (!response.ok || !response.body) throw new Error(`download failed: HTTP ${response.status}`);
+  return Readable.fromWeb(response.body as import('node:stream/web').ReadableStream);
+}
+
+/** One parent's gallery folder on disk. */
+export class DiskParentGallery implements ParentGallery {
   constructor(
     readonly root: string,
     readonly config: GalleryConfig,
     private readonly fetchFn: typeof fetch,
   ) {}
+
+  get location(): string {
+    return this.root;
+  }
 
   /** The absolute path of `rel`, or null when it would leave the parent's folder. */
   resolve(rel: string): string | null {
@@ -120,10 +238,7 @@ export class ParentGallery {
     );
   }
 
-  /**
-   * Fetches `url` into a temporary file next to `rel` and hashes it on the way.
-   * `keep` gets the hash and decides: true moves it to `rel`, false drops it.
-   */
+  /** Writes to a temporary file next to `rel` and renames it when kept. */
   async download(
     url: string,
     rel: string,
@@ -131,17 +246,14 @@ export class ParentGallery {
   ): Promise<{ sha256: string; bytes: number; kept: boolean }> {
     const target = this.resolve(rel);
     if (!target) throw new Error('gallery: path outside the parent folder');
-    if (!isAulaMediaUrl(url)) throw new Error('gallery: not an Aula media URL');
-    const response = await this.fetchFn(url, { redirect: 'error' });
-    // Status only: the URL is a signed grant to the file.
-    if (!response.ok || !response.body) throw new Error(`download failed: HTTP ${response.status}`);
+    const body = await fetchMedia(this.fetchFn, url);
     await mkdir(dirname(target), { recursive: true });
     const tmp = `${target}.part-${randomUUID()}`;
     const hash = createHash('sha256');
     let bytes = 0;
     try {
       await pipeline(
-        Readable.fromWeb(response.body as import('node:stream/web').ReadableStream),
+        body,
         new Transform({
           transform(chunk: Buffer, _encoding, done) {
             hash.update(chunk);
@@ -173,7 +285,6 @@ export class ParentGallery {
     }
   }
 
-  /** A read stream of the file, for the dashboard. */
   async open(rel: string): Promise<{ stream: Readable; bytes: number } | null> {
     const full = this.resolve(rel);
     if (!full) return null;
@@ -182,7 +293,7 @@ export class ParentGallery {
     return { stream: createReadStream(full), bytes: s.size };
   }
 
-  /** Hard-links an already stored file under a second name; false when it can't. */
+  /** A hard link. */
   async linkTo(existingRel: string, rel: string): Promise<boolean> {
     const from = this.resolve(existingRel);
     const to = this.resolve(rel);
@@ -192,6 +303,93 @@ export class ParentGallery {
       () => true,
       () => false,
     );
+  }
+}
+
+/**
+ * One parent's gallery in an S3 bucket, under `<prefix><parentId>/`. Objects
+ * have no hard links, so a second copy points at the first file instead.
+ */
+export class S3ParentGallery implements ParentGallery {
+  constructor(
+    private readonly s3: S3Like,
+    /** `<prefix><parentId>/`. */
+    private readonly base: string,
+    readonly location: string,
+    readonly config: GalleryConfig,
+    private readonly fetchFn: typeof fetch,
+  ) {}
+
+  /** The object key of `rel`, or null when it would leave the parent's prefix. */
+  key(rel: string): string | null {
+    const full = resolve('/r', rel);
+    return full.startsWith('/r/') ? this.base + full.slice(3) : null;
+  }
+
+  async disk(): Promise<null> {
+    return null;
+  }
+
+  async exists(rel: string): Promise<boolean> {
+    const key = this.key(rel);
+    return key
+      ? this.s3
+          .file(key)
+          .exists()
+          .catch(() => false)
+      : false;
+  }
+
+  /** Writes straight to `rel` (multipart for big files) and deletes it when not kept. */
+  async download(
+    url: string,
+    rel: string,
+    keep: (sha256: string) => boolean,
+  ): Promise<{ sha256: string; bytes: number; kept: boolean }> {
+    const key = this.key(rel);
+    if (!key) throw new Error('gallery: path outside the parent folder');
+    const body = await fetchMedia(this.fetchFn, url);
+    const file = this.s3.file(key);
+    const writer = file.writer({ partSize: 8 * 1024 * 1024 });
+    const hash = createHash('sha256');
+    let bytes = 0;
+    try {
+      for await (const chunk of body as AsyncIterable<Buffer>) {
+        hash.update(chunk);
+        bytes += chunk.length;
+        await writer.write(chunk);
+      }
+      await writer.end();
+    } catch (err) {
+      await Promise.resolve(writer.end()).catch(() => {});
+      await file.delete().catch(() => {});
+      throw err;
+    }
+    const sha256 = hash.digest('hex');
+    const kept = keep(sha256);
+    if (!kept) await file.delete();
+    return { sha256, bytes, kept };
+  }
+
+  async remove(rel: string): Promise<void> {
+    const key = this.key(rel);
+    if (key) await this.s3.file(key).delete();
+  }
+
+  async open(rel: string): Promise<{ stream: Readable; bytes: number } | null> {
+    const key = this.key(rel);
+    if (!key) return null;
+    const file = this.s3.file(key);
+    const s = await file.stat().catch(() => null);
+    if (!s) return null;
+    return {
+      stream: Readable.fromWeb(file.stream() as import('node:stream/web').ReadableStream),
+      bytes: s.size,
+    };
+  }
+
+  async linkTo(): Promise<boolean> {
+    return false;
   }
 }
 
@@ -409,7 +607,7 @@ export const syncGallery: SyncJob = async ({ client, store, gallery, childIds })
         if (downloads >= GALLERY_DOWNLOADS_PER_RUN || diskFull) {
           pending++;
           more ||= !diskFull;
-        } else if ((await gallery.disk()).used >= gallery.config.stopAt) {
+        } else if (((await gallery.disk())?.used ?? 0) >= gallery.config.stopAt) {
           diskFull = true;
           pending++;
         } else {
@@ -498,6 +696,11 @@ function groupIds(raw: unknown): number[] {
 export interface GalleryStatus {
   downloads: boolean;
   stopAt: number;
+  /** Where the files go: `disk` or `s3`. */
+  store: 'disk' | 's3';
+  /** The folder or `s3://bucket/prefix`, without credentials. */
+  location: string;
+  /** Null on S3, or when the disk can't be read. */
   disk: DiskUsage | null;
   albums: number;
   media: number;
@@ -584,6 +787,8 @@ export class GalleryView {
     return {
       downloads: this.files.config.downloads,
       stopAt: this.files.config.stopAt,
+      store: this.files.config.s3 ? 's3' : 'disk',
+      location: this.files.location,
       disk: await this.files.disk().catch(() => null),
       albums: albums.filter((a) => !a.removedAt).length,
       media: live.length,

@@ -387,6 +387,12 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_GALLERY_DIR` | `<AULA_MCP_DIR>/gallery` | Hvor galleri-synkroniseringen gemmer billeder og videoer i original kvalitet med et miniaturebillede, pr. forælder: `<forælder>/<barn>/<år>/<dato albumtitel>/`. Album delt med flere børn ligger under `Fælles`. Samme fil i to album gemmes én gang. Filerne bliver, til forælderen sletter dem; et slettet album hentes ikke igen. |
 | `AULA_MCP_GALLERY=0` | on | Henter ingen filer; albummene listes stadig. |
 | `AULA_MCP_GALLERY_STOP_AT` | `0.9` | Hvor fuld disken må være (0–1), før download holder pause. |
+| `AULA_MCP_GALLERY_STORE` | `disk` | `s3` gemmer galleriet i en S3-bucket i stedet for på disken (AWS, MinIO, Ceph RGW, Garage, SeaweedFS). Samme mappestruktur under `<prefix><forælder>/`. S3 har ingen pladsgrænse, så `STOP_AT` gælder ikke. |
+| `AULA_MCP_GALLERY_S3_BUCKET` | — | Bucket, kræves med `s3`. |
+| `AULA_MCP_GALLERY_S3_ENDPOINT` | AWS | Fx `http://s3.example.lan` (path-style). |
+| `AULA_MCP_GALLERY_S3_REGION` | `us-east-1` | Region. |
+| `AULA_MCP_GALLERY_S3_PREFIX` | — | Fx `aula-mcp/`, skal slutte med `/`. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — | Nøgler til bucketten. |
 | `AULA_MCP_SQLITE_PATH` | `<AULA_MCP_DIR>/aula.db` | SQLite-filen. |
 | `AULA_MCP_DATABASE_URL` | – | PostgreSQL-URL (fx fra en CNPG-secret). Kræves med `AULA_MCP_STORAGE=postgres`. |
 | `AULA_MCP_STORAGE_KEY` | `<AULA_MCP_DIR>/storage.key` | Nøglen (base64, 32 bytes) data krypteres med. Uden den genereres en nøglefil. Tag backup af nøglen sammen med databasen; uden den kan data ikke læses. |

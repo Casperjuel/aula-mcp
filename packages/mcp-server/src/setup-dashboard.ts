@@ -1712,7 +1712,7 @@ function storagePanel(st) {
         el('span', {}, el('i', { style: 'background:color-mix(in srgb, var(--muted) 45%, var(--surface-2))' }), 'Andet ' + size(Math.max(disk.totalBytes - disk.freeBytes - st.bytes, 0))),
         el('span', {}, el('i', { style: 'background:var(--surface-2);border:1px solid var(--line)' }), 'Fri ' + size(disk.freeBytes))),
       el('p', { class: 'muted small', style: 'margin-top:10px' }, 'Disken er ' + pct(disk.used) + ' fuld (' + size(disk.totalBytes - disk.freeBytes) + ' af ' + size(disk.totalBytes) + '). Når ' + pct(st.stopAt) + ' er brugt, holder hentningen pause. Intet slettes af sig selv.'),
-    ] : el('p', { class: 'muted small', style: 'margin-top:12px' }, 'Kunne ikke læse, hvor meget plads der er på disken.'));
+    ] : el('p', { class: 'muted small', style: 'margin-top:12px' }, st.store === 's3' ? 'Filerne gemmes i ' + st.location + '. S3 har ingen fast grænse, så hentningen holder aldrig pause for plads.' : 'Kunne ikke læse, hvor meget plads der er på disken.'));
 }
 function downloadPanel(st) {
   const sync = st.sync;

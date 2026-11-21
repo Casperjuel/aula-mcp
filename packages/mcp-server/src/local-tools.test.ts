@@ -67,15 +67,13 @@ beforeEach(async () => {
     },
   ]);
   // Another parent's row must never show up.
-  await storage
-    .forParent('b')
-    .put([
-      {
-        kind: 'message',
-        id: '99:1',
-        data: { sender: sender('Anden', 'guardian'), text: 'madpakke' },
-      },
-    ]);
+  await storage.forParent('b').put([
+    {
+      kind: 'message',
+      id: '99:1',
+      data: { sender: sender('Anden', 'guardian'), text: 'madpakke' },
+    },
+  ]);
   const server = new McpServer({ name: 't', version: '0' });
   registerLocalTools(server, storage.forParent('a'));
   const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
