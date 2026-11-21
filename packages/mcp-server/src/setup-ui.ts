@@ -58,6 +58,7 @@ import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
 import { isInline } from './attachments.ts';
 import type { AulaContext } from './aula-context.ts';
+import { feedEvents, toIcs } from './calendar-feed.ts';
 import {
   childPlan,
   childrenToday,
@@ -85,6 +86,7 @@ import {
   AUDIT_CATEGORIES,
   type AuditCategory,
   type AuditEntry,
+  type FeedTokens,
   ITEM_KINDS,
   type ItemKind,
   type KindStats,
@@ -133,6 +135,15 @@ export interface SetupAppOptions {
     gallery?: {
       /** The parent's own albums and files (null caller in single-parent mode). */
       forParent(caller: Caller | null): GalleryView;
+    };
+    /** Local storage: the secret calendar feed link of each parent. */
+    feeds?: {
+      tokens: FeedTokens;
+      /** The stored-data id of a signed-in parent ('default' in single-parent mode). */
+      parentIdOf(caller: Caller | null): string;
+      storageFor(parentId: string): ParentStorage;
+      /** Where browsers and calendar apps reach this UI; the request's origin when null. */
+      publicUrl: string | null;
     };
     /** Multi-parent mode with local storage: sharing with another parent. */
     sharing?: {
@@ -282,6 +293,26 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const changed = parents?.changed;
     return parent && changed ? () => changed(parent.caller) : undefined;
   };
+
+  // A calendar app cannot sign in, so the feed answers to its secret link
+  // alone, before the sign-in below. Unknown links get the same 404 as any
+  // missing page.
+  const feeds = options.myData?.feeds;
+  if (feeds) {
+    app.get('/feed/:token/calendar.ics', async (c) => {
+      const parentId = await feeds.tokens.resolve(c.req.param('token'));
+      if (!parentId) return c.text('Not found', 404);
+      const events = await feedEvents(feeds.storageFor(parentId), {
+        lessons: c.req.query('skema') === '1',
+      });
+      return c.body(toIcs(events), 200, {
+        'content-type': 'text/calendar; charset=utf-8',
+        'cache-control': 'private, no-store',
+        'referrer-policy': 'no-referrer',
+        'x-robots-tag': 'noindex',
+      });
+    });
+  }
 
   if (parents) {
     parents.login.mount(app);
@@ -569,6 +600,33 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       details,
     });
     return c.json({ ok: true });
+  });
+
+  // The secret calendar feed link: made, shown once and removed here only.
+  const feedUrl = (c: Context, token: string) =>
+    `${feeds?.publicUrl ?? new URL(c.req.url).origin}/feed/${token}/calendar.ics`;
+  app.get('/data/calendar-feed', async (c) => {
+    if (!feeds) return c.json({ error: 'local storage is off' }, 404);
+    const status = await feeds.tokens.status(feeds.parentIdOf(parentOf(c)?.caller ?? null));
+    return c.json({ active: status !== null, ...status });
+  });
+  app.post('/data/calendar-feed', async (c) => {
+    if (!feeds) return c.json({ error: 'local storage is off' }, 404);
+    const replaced = await feeds.tokens.status(feeds.parentIdOf(parentOf(c)?.caller ?? null));
+    const token = await feeds.tokens.create(feeds.parentIdOf(parentOf(c)?.caller ?? null));
+    await auditOf(c)?.({
+      category: 'sharing',
+      action: 'calendar_feed_created',
+      ok: true,
+      details: { replaced: replaced !== null },
+    });
+    return c.json({ url: feedUrl(c, token) });
+  });
+  app.post('/data/calendar-feed/remove', async (c) => {
+    if (!feeds) return c.json({ error: 'local storage is off' }, 404);
+    const removed = await feeds.tokens.revoke(feeds.parentIdOf(parentOf(c)?.caller ?? null));
+    await auditOf(c)?.({ category: 'sharing', action: 'calendar_feed_removed', ok: true });
+    return c.json({ removed });
   });
 
   // --- the dashboard's stored data and sync jobs, all for this parent only ---

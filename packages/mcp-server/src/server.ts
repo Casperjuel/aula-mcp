@@ -270,7 +270,12 @@ async function sessionAppFor(caller: Caller | null): Promise<McpApp> {
     ...(loginRequired ? { loginRequired } : {}),
     ...(sync ? { sync: sync.forParent(parentIdOf(caller), context) } : {}),
     ...(gallery ? { gallery } : {}),
-    ...(storage ? { local: storage.forParent(parentIdOf(caller)) } : {}),
+    ...(storage
+      ? {
+          local: storage.forParent(parentIdOf(caller)),
+          feedStatus: () => storage.feeds.status(parentIdOf(caller)),
+        }
+      : {}),
     ...(shared ? { shared } : {}),
   });
 }
@@ -724,6 +729,16 @@ if (INGRESS_PORT_RAW) {
       : {}),
     ...(galleryFiles
       ? { gallery: { forParent: (caller: Caller | null) => galleryFor(caller) as GalleryView } }
+      : {}),
+    ...(storage
+      ? {
+          feeds: {
+            tokens: storage.feeds,
+            parentIdOf,
+            storageFor: (parentId: string) => storage.forParent(parentId),
+            publicUrl: setupLogin?.publicUrl ?? null,
+          },
+        }
       : {}),
     ...(multiParent && storage
       ? {

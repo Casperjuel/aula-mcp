@@ -21,7 +21,7 @@ for (const [name, driver] of backends) {
       const db = driver();
       if (name === 'postgres')
         await db.run(
-          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, schema_migrations',
+          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, feed_tokens, schema_migrations',
         );
       storage = await createStorage(db, KEY, { type: name as 'sqlite', location: 'test' });
       return storage;
@@ -32,7 +32,7 @@ for (const [name, driver] of backends) {
       const db = driver();
       if (name === 'postgres')
         await db.run(
-          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, schema_migrations',
+          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, feed_tokens, schema_migrations',
         );
       const old = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await old.forParent('p').put([
@@ -243,7 +243,7 @@ for (const [name, driver] of backends) {
       const db = driver();
       if (name === 'postgres')
         await db.run(
-          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, schema_migrations',
+          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, feed_tokens, schema_migrations',
         );
       storage = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await storage
@@ -264,11 +264,11 @@ for (const [name, driver] of backends) {
       const db = driver();
       if (name === 'postgres')
         await db.run(
-          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, schema_migrations',
+          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, feed_tokens, schema_migrations',
         );
       storage = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
-      expect(await db.all('SELECT version FROM schema_migrations')).toHaveLength(4);
+      expect(await db.all('SELECT version FROM schema_migrations')).toHaveLength(5);
     });
 
     test('keeps sync state per parent', async () => {

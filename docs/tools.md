@@ -23,6 +23,7 @@ threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With
 | [`aula.local.calendar`](#aulalocalcalendar) | read | Stored calendar |
 | [`aula.local.activity`](#aulalocalactivity) | read | What arrived each day |
 | [`aula.local.audit_log`](#aulalocalaudit_log) | read | Audit log of syncs and actions |
+| [`aula.local.calendar_feed_status`](#aulalocalcalendar_feed_status) | read | Calendar subscription link |
 | [`aula.local.message_roles`](#aulalocalmessage_roles) | read | Who writes the messages |
 | [`aula.discover`](#auladiscover) | read | Discover Aula context |
 | [`aula.profiles.list`](#aulaprofileslist) | read | List Aula profiles |
@@ -209,6 +210,14 @@ The caller's own audit log, newest first: every sync job run (scheduled or start
 | `failedOnly` | boolean | no | true: only what failed. |
 | `before` | string | no | Only events before this ISO date-time, for the next page. |
 | `limit` | integer | no | Default 50. |
+
+## `aula.local.calendar_feed_status`
+
+**Calendar subscription link** · read
+
+Whether the caller has a calendar subscription link: a secret .ics link a phone or calendar app (Google, Outlook, Apple) subscribes to, so the stored Aula events, ferie and fridage (from 30 days back on, without the lesson schedule unless ?skema=1 is added) show up in that calendar, refreshed about hourly. Answers active, since and lastUsedAt (when a calendar app last fetched it). The link itself is never shown here: anyone holding it can read the parent's calendar without signing in, so it is made, shown once, replaced and removed only in the setup dashboard (Kalender, "Abonnér i din egen kalender"). For the events themselves use aula.local.calendar. Never calls Aula.
+
+No parameters.
 
 ## `aula.local.message_roles`
 

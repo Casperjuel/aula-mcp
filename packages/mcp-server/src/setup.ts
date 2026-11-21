@@ -12,7 +12,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { AulaContext } from './aula-context.ts';
 import type { GalleryView } from './gallery.ts';
 import type { SharedAccess } from './local-tools.ts';
-import type { ParentStorage } from './storage.ts';
+import type { FeedStatus, ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
 import { type ToolNameStyle, toolName, toolNameStyle, underscoreTools } from './tool-names.ts';
 import { registerTools } from './tools.ts';
@@ -78,6 +78,8 @@ export interface McpAppOptions {
   local?: ParentStorage;
   /** What other parents share with the caller (multi-parent mode). */
   shared?: SharedAccess;
+  /** The caller's calendar feed link status, when local storage is on. */
+  feedStatus?: () => Promise<FeedStatus | null>;
 }
 
 export interface McpApp {
@@ -94,12 +96,14 @@ export function createMcpApp({
   gallery,
   local,
   shared,
+  feedStatus,
 }: McpAppOptions): McpApp {
   const extras = {
     ...(sync ? { sync } : {}),
     ...(gallery ? { gallery } : {}),
     ...(local ? { local } : {}),
     ...(shared ? { shared } : {}),
+    ...(feedStatus ? { feedStatus } : {}),
   };
   const tools =
     toolNames === 'underscore'

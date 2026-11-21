@@ -22,7 +22,7 @@
  * is the exception: it keeps AULA_MCP_AUDIT_DAYS.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -180,6 +180,8 @@ export interface Storage {
   forParent(parentId: string): ParentStorage;
   /** Who shares with whom. */
   readonly shares: Shares;
+  /** The secret links to a parent's calendar feed. */
+  readonly feeds: FeedTokens;
   /**
    * The owner's items that the viewer has not stored themselves, read-only;
    * null unless the owner shares with the viewer.
@@ -244,6 +246,7 @@ export async function createStorage(
 ): Promise<Storage> {
   await migrate(driver);
   const shares = new Shares(driver);
+  const feeds = new FeedTokens(driver);
   const keys = Buffer.isBuffer(storageKeys) ? { current: storageKeys, previous: [] } : storageKeys;
   const audit = { days: options.auditDays ?? 30, previousKeys: keys.previous.length };
   const forParent = (parentId: string) =>
@@ -258,6 +261,7 @@ export async function createStorage(
     info,
     forParent,
     shares,
+    feeds,
     sharedWith: async (viewerId, ownerId) =>
       viewerId !== ownerId && (await shares.allows(ownerId, viewerId))
         ? new ParentStorage(driver, parentCipher(keys, ownerId), ownerId, viewerId, audit)
@@ -300,6 +304,67 @@ function auditDays(value: string | undefined): number {
  * time they sign in with a verified email that matches (`claim`), and from
  * then on only that parent id can read it.
  */
+/** A parent's calendar feed link, without the secret. Times are unix seconds. */
+export interface FeedStatus {
+  since: number;
+  lastUsedAt: number | null;
+}
+
+const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
+
+/**
+ * One secret link per parent to read their stored calendar from a calendar
+ * app, which cannot sign in. Only a hash of the secret is stored: the link is
+ * shown once, and a new one replaces it.
+ */
+export class FeedTokens {
+  constructor(private readonly db: SqlDriver) {}
+
+  /** A new secret for the parent; the previous one stops working. */
+  async create(parentId: string): Promise<string> {
+    const token = randomBytes(32).toString('base64url');
+    await this.db.run(
+      `INSERT INTO feed_tokens (parent_id, token_hash, created_at, last_used_at)
+       VALUES ($1, $2, $3, NULL)
+       ON CONFLICT (parent_id) DO UPDATE SET token_hash = excluded.token_hash,
+         created_at = excluded.created_at, last_used_at = NULL`,
+      [parentId, hashToken(token), Math.floor(Date.now() / 1000)],
+    );
+    return token;
+  }
+
+  /** Resolves to whether there was a link to remove. */
+  async revoke(parentId: string): Promise<boolean> {
+    return (await this.db.run('DELETE FROM feed_tokens WHERE parent_id = $1', [parentId])) > 0;
+  }
+
+  async status(parentId: string): Promise<FeedStatus | null> {
+    const [row] = await this.db.all<Record<string, unknown>>(
+      'SELECT created_at, last_used_at FROM feed_tokens WHERE parent_id = $1',
+      [parentId],
+    );
+    return row
+      ? { since: Number(row.created_at), lastUsedAt: numberOrNull(row.last_used_at) }
+      : null;
+  }
+
+  /** The parent the secret belongs to, or null; notes that it was used. */
+  async resolve(token: string): Promise<string | null> {
+    if (!/^[\w-]{43}$/.test(token)) return null;
+    const hash = hashToken(token);
+    const [row] = await this.db.all<{ parent_id: string }>(
+      'SELECT parent_id FROM feed_tokens WHERE token_hash = $1',
+      [hash],
+    );
+    if (!row) return null;
+    await this.db.run('UPDATE feed_tokens SET last_used_at = $1 WHERE token_hash = $2', [
+      Math.floor(Date.now() / 1000),
+      hash,
+    ]);
+    return row.parent_id;
+  }
+}
+
 export class Shares {
   constructor(private readonly db: SqlDriver) {}
 
@@ -792,6 +857,15 @@ const MIGRATIONS: string[][] = [
        PRIMARY KEY (parent_id, id)
      )`,
     'CREATE INDEX audit_by_time ON audit_log (parent_id, at)',
+  ],
+  [
+    // The secret calendar feed link of each parent, as a SHA-256 hash only.
+    `CREATE TABLE feed_tokens (
+       parent_id TEXT PRIMARY KEY,
+       token_hash TEXT NOT NULL UNIQUE,
+       created_at BIGINT NOT NULL,
+       last_used_at BIGINT
+     )`,
   ],
 ];
 

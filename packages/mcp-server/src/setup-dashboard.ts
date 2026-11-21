@@ -1769,8 +1769,50 @@ R.kalender = () => {
           el('button', { class: 'icon-btn', 'aria-label': 'Næste', onclick: () => calStep(1) }, icon('chev')))),
       el('div', { id: 'calFilters', class: 'cal-filters' })),
     el('div', { id: 'calBody', class: 'cal-body' }),
+    state.owner ? null : feedPanel(),
   ];
 };
+/* The secret link a calendar app subscribes to. The link is shown once, right after it is made. */
+state.feed = null;
+function feedPanel() {
+  const box = el('section', { class: 'panel', id: 'feedPanel' });
+  const draw = (fresh) => {
+    const f = state.feed;
+    const made = el('button', { class: 'btn btn-primary btn-sm', onclick: () => askFeed(Boolean(f && f.active)) }, f && f.active ? 'Lav et nyt link' : 'Lav et link');
+    fill(box,
+      el('div', { class: 'panel-head' }, el('h2', {}, 'Abonnér i din egen kalender')),
+      el('p', { class: 'muted small', style: 'margin:0' }, 'Et hemmeligt link, som din telefon eller kalender kan abonnere på. Det viser begivenheder, ferie og fridage fra de sidste 30 dage og frem, ikke skemaet. Kalenderen henter det selv, cirka en gang i timen.'),
+      fresh ? el('div', { class: 'field' },
+        el('label', { for: 'feedUrl' }, 'Dit link. Kopiér det nu, det vises kun én gang'),
+        el('input', { class: 'input', id: 'feedUrl', readonly: true, value: fresh, onclick: (e) => e.target.select() }),
+        el('p', { class: 'muted small' }, 'Vil du også have skemaet med, så sæt ?skema=1 bag på linket.')) : null,
+      el('p', { class: 'muted small' }, !f ? 'Henter …' : f.active ? 'Linket virker. Lavet ' + rel(f.since) + (f.lastUsedAt ? ', sidst hentet ' + rel(f.lastUsedAt) : ', ikke hentet endnu') + '.' : 'Du har ikke noget link.'),
+      el('p', { class: 'muted small' }, 'Alle med linket kan læse din kalender uden at logge ind. Del det ikke. Lav et nyt link, hvis det er kommet ud, så holder det gamle op med at virke.'),
+      el('div', { class: 'dlg-actions', style: 'justify-content:flex-start' }, made,
+        f && f.active ? el('button', { class: 'btn btn-sm', onclick: removeFeed }, 'Fjern linket') : null));
+  };
+  const askFeed = (replace) => confirmDialog({
+    icon: 'cal', title: replace ? 'Lav et nyt link?' : 'Lav et kalenderlink?', ok: replace ? 'Lav nyt link' : 'Lav link',
+    body: [el('p', {}, replace ? 'Det gamle link holder op med at virke med det samme. Du skal sætte det nye ind i din kalender.' : 'Alle med linket kan læse din Aula-kalender. Abonnerer du i Google eller Outlook, henter deres servere den.'),
+      el('p', { class: 'muted small' }, 'Det står i din log under Deling.')],
+    onok: async () => {
+      try { const r = await postJson('data/calendar-feed', {}); state.feed = null; await load(); draw(r.url); }
+      catch (err) { toast('Kunne ikke: ' + err.message); }
+    },
+  });
+  const removeFeed = () => confirmDialog({
+    danger: true, icon: 'trash', title: 'Fjern kalenderlinket?', ok: 'Fjern linket',
+    body: [el('p', {}, 'Kalendere, der abonnerer på det, får ikke flere opdateringer.')],
+    onok: async () => {
+      try { await postJson('data/calendar-feed/remove', {}); await load(); draw(); toast('Kalenderlinket er fjernet'); }
+      catch (err) { toast('Kunne ikke: ' + err.message); }
+    },
+  });
+  const load = async () => { try { state.feed = await getJson('data/calendar-feed'); } catch (err) { state.feed = { active: false }; } };
+  draw();
+  load().then(() => draw());
+  return box;
+}
 function renderCalFilters(c) {
   const box = $('calFilters'); if (!box) return;
   const present = new Set((c.items || []).map((e) => e.type));

@@ -33,7 +33,7 @@ import { resolveFamilyProfileIds } from './family-profiles.ts';
 import type { GalleryView } from './gallery.ts';
 import { registerGalleryTools } from './gallery-tools.ts';
 import { registerLocalTools, type SharedAccess } from './local-tools.ts';
-import type { AuditDetails, ParentStorage } from './storage.ts';
+import type { AuditDetails, FeedStatus, ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
 import { registerSyncTools } from './sync-tools.ts';
 
@@ -367,6 +367,8 @@ export interface ToolExtras {
   local?: ParentStorage;
   /** What other parents share with the caller: the `owner` argument of the local and gallery tools. */
   shared?: SharedAccess;
+  /** The caller's calendar feed link status; aula.local.calendar_feed_status is registered when set. */
+  feedStatus?: () => Promise<FeedStatus | null>;
 }
 
 /** `env` decides which gated tools are registered (tool-catalog.ts lists
@@ -406,7 +408,7 @@ export function registerTools(
 
   if (extras.sync) registerSyncTools(server, extras.sync);
   if (extras.gallery) registerGalleryTools(server, extras.gallery, extras.shared);
-  if (extras.local) registerLocalTools(server, extras.local, extras.shared);
+  if (extras.local) registerLocalTools(server, extras.local, extras.shared, extras.feedStatus);
 
   // --- aula.discover -------------------------------------------------------
 

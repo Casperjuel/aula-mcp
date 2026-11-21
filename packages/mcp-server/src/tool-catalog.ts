@@ -111,6 +111,7 @@ function collect(env: NodeJS.ProcessEnv): Collected[] {
       sync: NO_SYNC,
       gallery: NO_GALLERY,
       local: NO_LOCAL,
+      feedStatus: async () => null,
     });
   } finally {
     context.dispose();

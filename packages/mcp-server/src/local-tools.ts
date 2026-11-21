@@ -22,7 +22,13 @@ import {
   searchItems,
   threadMessages,
 } from './local-data.ts';
-import { AUDIT_CATEGORIES, ITEM_KINDS, type ParentStorage, type SharedFrom } from './storage.ts';
+import {
+  AUDIT_CATEGORIES,
+  type FeedStatus,
+  ITEM_KINDS,
+  type ParentStorage,
+  type SharedFrom,
+} from './storage.ts';
 
 /** Another parent's data as the caller may read it. */
 export interface SharedView {
@@ -80,6 +86,8 @@ export function registerLocalTools(
   server: McpServer,
   own: ParentStorage,
   shared?: SharedAccess,
+  /** The caller's calendar feed link: whether it exists, never the link itself. */
+  feedStatus?: () => Promise<FeedStatus | null>,
 ): void {
   const owner = ownerArg(shared);
   const sharedNote = shared ? ` ${OWNER_TEXT}` : '';
@@ -377,6 +385,37 @@ export function registerLocalTools(
       });
     },
   );
+
+  if (feedStatus) {
+    server.registerTool(
+      'aula.local.calendar_feed_status',
+      {
+        title: 'Calendar subscription link',
+        description:
+          'Whether the caller has a calendar subscription link: a secret .ics link a ' +
+          'phone or calendar app (Google, Outlook, Apple) subscribes to, so the stored ' +
+          'Aula events, ferie and fridage (from 30 days back on, without the lesson ' +
+          'schedule unless ?skema=1 is added) show up in that calendar, refreshed about ' +
+          'hourly. Answers active, since and lastUsedAt (when a calendar app last fetched ' +
+          'it). The link itself is never shown here: anyone holding it can read the ' +
+          "parent's calendar without signing in, so it is made, shown once, replaced and " +
+          'removed only in the setup dashboard (Kalender, "Abonnér i din egen kalender"). ' +
+          'For the events themselves use aula.local.calendar. Never calls Aula.',
+        inputSchema: {},
+      },
+      async () => {
+        const status = await feedStatus();
+        return jsonContent(
+          status
+            ? { active: true, since: iso(status.since), lastUsedAt: iso(status.lastUsedAt) }
+            : {
+                active: false,
+                hint: 'Make one in the setup dashboard under Kalender.',
+              },
+        );
+      },
+    );
+  }
 
   server.registerTool(
     'aula.local.message_roles',
