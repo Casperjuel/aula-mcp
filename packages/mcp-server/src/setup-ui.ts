@@ -67,6 +67,7 @@ import {
   searchItems,
   threadMessages,
 } from './local-data.ts';
+import type { SharedView } from './local-tools.ts';
 import { type Caller, callerId } from './oidc.ts';
 import { renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
@@ -74,7 +75,9 @@ import {
   ITEM_KINDS,
   type ItemKind,
   type KindStats,
+  normalEmail,
   type ParentStorage,
+  type Shares,
   type StorageInfo,
 } from './storage.ts';
 import { type ParentSync, SYNC_JOBS, type SyncJobName } from './sync.ts';
@@ -117,6 +120,12 @@ export interface SetupAppOptions {
       /** The parent's own albums and files (null caller in single-parent mode). */
       forParent(caller: Caller | null): GalleryView;
     };
+    /** Multi-parent mode with local storage: sharing with another parent. */
+    sharing?: {
+      shares: Shares;
+      /** What `owner` shares with `viewer`, read-only; null unless they do. */
+      open(viewer: Caller, ownerId: string): Promise<SharedView | null>;
+    };
   };
   /** Multi-parent mode: the sign-in, and each parent's own token store. */
   parents?: {
@@ -126,6 +135,11 @@ export interface SetupAppOptions {
     changed?(caller: Caller): void;
   };
 }
+
+/** The reads `?owner=` works for: stored items and files, never sync, login or changes. */
+const SHARED_READS =
+  /^\/data\/(stats|items(\/[^/]+\/[^/]+)?|activity|messages\/roles|gallery(\/albums\/[^/]+|\/(file|thumb)\/[^/]+\/[^/]+)?|attachments\/(post|message)\/[^/]+\/[^/]+)$/;
+const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 interface LoginSession {
   sessionId: string;
@@ -167,6 +181,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
 
   // Signed-in parent for this request; the middleware below guarantees one.
   const parentOf = (c: Context) => parents?.login.parent(c) ?? null;
+  const sharedViews = new WeakMap<Request, SharedView>();
   const ownerOf = (c: Context): string => {
     const parent = parentOf(c);
     return parent ? callerId(parent.caller) : '';
@@ -194,6 +209,20 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       if (c.req.method !== 'GET' && !parents.login.sameOrigin(c)) {
         return c.json({ error: 'cross-origin request refused' }, 403);
       }
+      await next();
+    });
+    // `?owner=<parent id>` reads what that parent shares with this one, and
+    // only for the reads above.
+    app.use('/data/*', async (c, next) => {
+      const owner = c.req.query('owner');
+      if (owner === undefined) return next();
+      if (c.req.method !== 'GET' || !SHARED_READS.test(c.req.path)) {
+        return c.json({ error: 'shared data is read-only' }, 403);
+      }
+      const parent = parents.login.parent(c);
+      const view = parent && (await options.myData?.sharing?.open(parent.caller, owner));
+      if (!view) return c.json({ error: 'not shared with you' }, 404);
+      sharedViews.set(c.req.raw, view);
       await next();
     });
   } else {
@@ -248,6 +277,13 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
 
   app.get('/data/tools', (c) => c.json({ tools }));
 
+  // Counts per kind; with `owner`, of what that parent shares with you.
+  app.get('/data/stats', async (c) => {
+    const store = storageOf(c);
+    if (!store) return c.json({ error: 'local storage is off' }, 404);
+    return c.json({ kinds: await store.stats() });
+  });
+
   // A live read through the parent's own context: who and what Aula shows.
   app.get('/data/live', async (c) => {
     if (!options.myData) return c.json({ error: 'live data is not available here' }, 404);
@@ -279,12 +315,18 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
 
   // --- the dashboard's stored data and sync jobs, all for this parent only ---
 
+  // A read with ?owner= gets the shared view the middleware opened.
   const storageOf = (c: Context): ParentStorage | null =>
-    options.myData?.storage?.forParent(parentOf(c)?.caller ?? null) ?? null;
+    sharedViews.get(c.req.raw)?.store ??
+    options.myData?.storage?.forParent(parentOf(c)?.caller ?? null) ??
+    null;
   const syncOf = (c: Context): ParentSync | null =>
     options.myData?.sync?.forParent(parentOf(c)?.caller ?? null) ?? null;
-  const galleryOf = (c: Context): GalleryView | null =>
-    options.myData?.gallery?.forParent(parentOf(c)?.caller ?? null) ?? null;
+  const galleryOf = (c: Context): GalleryView | null => {
+    const shared = sharedViews.get(c.req.raw);
+    if (shared) return shared.gallery;
+    return options.myData?.gallery?.forParent(parentOf(c)?.caller ?? null) ?? null;
+  };
   /** Jobs asked for from the dashboard that have not finished, per parent. */
   const queuedRuns = new Map<string, Set<SyncJobName>>();
 
@@ -449,6 +491,61 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       await galleryOf(c)?.removeAttachments(body.kind);
     }
     return c.json({ deleted: await store.delete({ kind: body.kind }) });
+  });
+
+  // --- sharing: whom this parent shares with, and who shares with them ---
+
+  app.get('/data/shares', async (c) => {
+    const parent = parentOf(c);
+    const sharing = options.myData?.sharing;
+    if (!parent || !sharing) return c.json({ available: false });
+    const id = callerId(parent.caller);
+    // Shares waiting for this parent's verified email become theirs.
+    if (parent.email) await sharing.shares.claim(id, parent.email);
+    const [granted, owners] = await Promise.all([
+      sharing.shares.granted(id),
+      sharing.shares.owners(id),
+    ]);
+    return c.json({
+      available: true,
+      email: parent.email ?? null,
+      granted,
+      shared_with_me: owners.map((o) => ({ owner: o.ownerId, name: o.ownerName, since: o.since })),
+    });
+  });
+
+  // Shares this parent's stored data, read-only, with whoever signs in with
+  // the email. They see only what they have not stored themselves.
+  app.post('/data/shares', async (c) => {
+    const parent = parentOf(c);
+    const sharing = options.myData?.sharing;
+    if (!parent || !sharing) return c.json({ error: 'sharing is not available' }, 404);
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const email = typeof body.email === 'string' ? normalEmail(body.email) : '';
+    if (email.length > 254 || !EMAIL.test(email)) {
+      return c.json({ error: 'give the email the other parent signs in with' }, 400);
+    }
+    if (parent.email && normalEmail(parent.email) === email) {
+      return c.json({ error: 'that is your own email' }, 400);
+    }
+    const id = callerId(parent.caller);
+    await sharing.shares.grant(id, parent.name, email);
+    return c.json({ granted: await sharing.shares.granted(id) });
+  });
+
+  app.post('/data/shares/remove', async (c) => {
+    const parent = parentOf(c);
+    const sharing = options.myData?.sharing;
+    if (!parent || !sharing) return c.json({ error: 'sharing is not available' }, 404);
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    if (typeof body.email !== 'string') return c.json({ error: 'give the email' }, 400);
+    const id = callerId(parent.caller);
+    if (!(await sharing.shares.revoke(id, body.email))) {
+      return c.json({ error: 'not shared with that email' }, 404);
+    }
+    return c.json({ granted: await sharing.shares.granted(id) });
   });
 
   // --- the downloaded gallery, this parent's own folder only ---

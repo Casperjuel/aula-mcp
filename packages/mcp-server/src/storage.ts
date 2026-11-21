@@ -1,7 +1,9 @@
 /**
  * Local storage of Aula data, so it can be read without Aula and kept after
  * Aula drops it. Rows are keyed by parent: every read and write goes through
- * `forParent(parentId)`, and no method reads across parents.
+ * `forParent(parentId)`. The one read across parents is `sharedWith`: a
+ * read-only view of what a parent chose to share (`shares`), without the
+ * items the viewer has stored themselves.
  *
  * Env:
  *   AULA_MCP_STORAGE      — `sqlite` (default), `postgres`, or `none` to turn
@@ -100,9 +102,34 @@ export interface StorageInfo {
   location: string;
 }
 
+/** A parent who shares their data with the viewer. */
+export interface SharedFrom {
+  ownerId: string;
+  /** The owner's name when they shared, for display only. */
+  ownerName: string;
+  /** Unix seconds. */
+  since: number;
+}
+
+/** Someone a parent shares their data with, by the email they sign in with. */
+export interface ShareGrant {
+  email: string;
+  /** They have signed in with that email since, so the share is in use. */
+  active: boolean;
+  /** Unix seconds. */
+  since: number;
+}
+
 export interface Storage {
   readonly info: StorageInfo;
   forParent(parentId: string): ParentStorage;
+  /** Who shares with whom. */
+  readonly shares: Shares;
+  /**
+   * The owner's items that the viewer has not stored themselves, read-only;
+   * null unless the owner shares with the viewer.
+   */
+  sharedWith(viewerId: string, ownerId: string): Promise<ParentStorage | null>;
   /** Every parent with stored data. */
   parents(): Promise<string[]>;
   close(): Promise<void>;
@@ -139,10 +166,16 @@ export async function createStorage(
   info: StorageInfo,
 ): Promise<Storage> {
   await migrate(driver);
+  const shares = new Shares(driver);
   return {
     info,
     forParent: (parentId) =>
       new ParentStorage(driver, parentCipher(storageKey, parentId), parentId),
+    shares,
+    sharedWith: async (viewerId, ownerId) =>
+      viewerId !== ownerId && (await shares.allows(ownerId, viewerId))
+        ? new ParentStorage(driver, parentCipher(storageKey, ownerId), ownerId, viewerId)
+        : null,
     parents: async () =>
       (
         await driver.all<{ parent_id: string }>(
@@ -153,15 +186,116 @@ export async function createStorage(
   };
 }
 
+/**
+ * Sharing is granted by email, the one thing a parent knows about the other
+ * parent's sign-in. The grant is tied to the viewer's parent id the first
+ * time they sign in with a verified email that matches (`claim`), and from
+ * then on only that parent id can read it.
+ */
+export class Shares {
+  constructor(private readonly db: SqlDriver) {}
+
+  /** Whom the owner shares with. */
+  async granted(ownerId: string): Promise<ShareGrant[]> {
+    const rows = await this.db.all<Record<string, unknown>>(
+      'SELECT email, viewer_id, created_at FROM shares WHERE owner_id = $1 ORDER BY created_at, email',
+      [ownerId],
+    );
+    return rows.map((row) => ({
+      email: String(row.email),
+      active: row.viewer_id !== null && row.viewer_id !== undefined,
+      since: Number(row.created_at),
+    }));
+  }
+
+  /** Shares the owner's data with whoever signs in with `email`. */
+  async grant(ownerId: string, ownerName: string, email: string): Promise<void> {
+    await this.db.run(
+      `INSERT INTO shares (owner_id, email, owner_name, viewer_id, created_at)
+       VALUES ($1, $2, $3, NULL, $4)
+       ON CONFLICT (owner_id, email) DO UPDATE SET owner_name = excluded.owner_name`,
+      [ownerId, normalEmail(email), ownerName, Math.floor(Date.now() / 1000)],
+    );
+  }
+
+  /** Stops sharing with `email`. Resolves to whether there was such a share. */
+  async revoke(ownerId: string, email: string): Promise<boolean> {
+    return (
+      (await this.db.run('DELETE FROM shares WHERE owner_id = $1 AND email = $2', [
+        ownerId,
+        normalEmail(email),
+      ])) > 0
+    );
+  }
+
+  /** Ties the shares waiting for `email` to the parent who signed in with it. */
+  async claim(viewerId: string, email: string): Promise<number> {
+    return this.db.run(
+      'UPDATE shares SET viewer_id = $1 WHERE email = $2 AND viewer_id IS NULL AND owner_id <> $1',
+      [viewerId, normalEmail(email)],
+    );
+  }
+
+  /** The parents who share with the viewer. */
+  async owners(viewerId: string): Promise<SharedFrom[]> {
+    const rows = await this.db.all<Record<string, unknown>>(
+      'SELECT owner_id, owner_name, created_at FROM shares WHERE viewer_id = $1 ORDER BY created_at, owner_id',
+      [viewerId],
+    );
+    return rows.map((row) => ({
+      ownerId: String(row.owner_id),
+      ownerName: String(row.owner_name),
+      since: Number(row.created_at),
+    }));
+  }
+
+  async allows(ownerId: string, viewerId: string): Promise<boolean> {
+    const rows = await this.db.all<{ owner_id: string }>(
+      'SELECT owner_id FROM shares WHERE owner_id = $1 AND viewer_id = $2',
+      [ownerId, viewerId],
+    );
+    return rows.length > 0;
+  }
+}
+
+export function normalEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
 export class ParentStorage {
   constructor(
     private readonly db: SqlDriver,
     private readonly cipher: ParentCipher,
     readonly parentId: string,
+    /** A shared view: hide what this parent has stored, and change nothing. */
+    readonly viewerId: string | null = null,
   ) {}
+
+  /** Read-only: a view of another parent's data. */
+  get shared(): boolean {
+    return this.viewerId !== null;
+  }
+
+  /**
+   * The rows this storage reads: the parent's, and in a shared view only
+   * those the viewer has no row of the same kind and id for. Adds the parent
+   * id as $1, so call it first.
+   */
+  private visible(params: Array<string | number>): string {
+    params.push(this.parentId);
+    if (this.viewerId === null) return 'items.parent_id = $1';
+    params.push(this.viewerId);
+    return `items.parent_id = $1 AND NOT EXISTS (SELECT 1 FROM items mine
+      WHERE mine.parent_id = $${params.length} AND mine.kind = items.kind AND mine.id = items.id)`;
+  }
+
+  private writable(): void {
+    if (this.viewerId !== null) throw new Error('Shared data is read-only.');
+  }
 
   /** Inserts new items and updates changed ones; unchanged ones are left alone. */
   async put(items: ItemInput[]): Promise<{ changed: number; unchanged: number }> {
+    this.writable();
     const now = Math.floor(Date.now() / 1000);
     let changed = 0;
     await this.db.transaction(async (tx) => {
@@ -194,17 +328,20 @@ export class ParentStorage {
   }
 
   async get(kind: ItemKind, id: string): Promise<StoredItem | null> {
+    const params: Array<string | number> = [];
+    const where = this.visible(params);
+    params.push(kind, id);
     const rows = await this.db.all<ItemRow>(
-      `SELECT ${COLUMNS} FROM items WHERE parent_id = $1 AND kind = $2 AND id = $3`,
-      [this.parentId, kind, id],
+      `SELECT ${COLUMNS} FROM items WHERE ${where} AND kind = $${params.length - 1} AND id = $${params.length}`,
+      params,
     );
     return rows[0] ? this.decode(rows[0]) : null;
   }
 
   /** Newest first. */
   async list(query: ListQuery = {}): Promise<StoredItem[]> {
-    const where = ['parent_id = $1'];
-    const params: Array<string | number> = [this.parentId];
+    const params: Array<string | number> = [];
+    const where = [this.visible(params)];
     const add = (clause: string, value: string | number) => {
       params.push(value);
       where.push(clause.replace('?', `$${params.length}`));
@@ -235,16 +372,23 @@ export class ParentStorage {
     until: number,
   ): Promise<Array<{ kind: ItemKind; at: number }>> {
     if (!kinds.length) return [];
-    const marks = kinds.map((_, i) => `$${i + 4}`).join(', ');
+    const params: Array<string | number> = [];
+    const where = this.visible(params);
+    params.push(since, until);
+    const first = params.length + 1;
+    params.push(...kinds);
+    const marks = kinds.map((_, i) => `$${first + i}`).join(', ');
     const rows = await this.db.all<{ kind: ItemKind; occurred_at: unknown }>(
       `SELECT kind, occurred_at FROM items
-       WHERE parent_id = $1 AND occurred_at >= $2 AND occurred_at <= $3 AND kind IN (${marks})`,
-      [this.parentId, since, until, ...kinds],
+       WHERE ${where} AND occurred_at >= $${first - 2} AND occurred_at <= $${first - 1} AND kind IN (${marks})`,
+      params,
     );
     return rows.map((row) => ({ kind: row.kind, at: Number(row.occurred_at) }));
   }
 
   async stats(): Promise<KindStats[]> {
+    const params: Array<string | number> = [];
+    const where = this.visible(params);
     const rows = await this.db.all<{
       kind: ItemKind;
       count: unknown;
@@ -254,8 +398,8 @@ export class ParentStorage {
     }>(
       `SELECT kind, COUNT(*) AS count, MIN(occurred_at) AS oldest, MAX(occurred_at) AS newest,
               MAX(updated_at) AS last_updated
-       FROM items WHERE parent_id = $1 GROUP BY kind ORDER BY kind`,
-      [this.parentId],
+       FROM items WHERE ${where} GROUP BY kind ORDER BY kind`,
+      params,
     );
     return rows.map((row) => ({
       kind: row.kind,
@@ -268,6 +412,7 @@ export class ParentStorage {
 
   /** Deletes this parent's items, of one kind or all. Resolves to how many. */
   async delete(options: { kind?: ItemKind } = {}): Promise<number> {
+    this.writable();
     return options.kind
       ? this.db.run('DELETE FROM items WHERE parent_id = $1 AND kind = $2', [
           this.parentId,
@@ -277,6 +422,8 @@ export class ParentStorage {
   }
 
   async syncStates(): Promise<SyncState[]> {
+    // How the owner's sync is doing is not part of what they share.
+    if (this.viewerId !== null) return [];
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT job, last_run_at, last_success_at, next_run_at, failures, last_error, fetched, changed
        FROM sync_state WHERE parent_id = $1 ORDER BY job`,
@@ -295,6 +442,7 @@ export class ParentStorage {
   }
 
   async saveSyncState(state: SyncState): Promise<void> {
+    this.writable();
     await this.db.run(
       `INSERT INTO sync_state (parent_id, job, last_run_at, last_success_at, next_run_at, failures, last_error, fetched, changed)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -381,6 +529,20 @@ const MIGRATIONS: string[][] = [
        changed INTEGER NOT NULL,
        PRIMARY KEY (parent_id, job)
      )`,
+  ],
+  [
+    // Who a parent shares their data with: an email until that parent signs
+    // in with it, then also their parent id. No Aula content.
+    `CREATE TABLE shares (
+       owner_id TEXT NOT NULL,
+       email TEXT NOT NULL,
+       owner_name TEXT NOT NULL,
+       viewer_id TEXT,
+       created_at BIGINT NOT NULL,
+       PRIMARY KEY (owner_id, email)
+     )`,
+    'CREATE INDEX shares_by_viewer ON shares (viewer_id)',
+    'CREATE INDEX shares_by_email ON shares (email)',
   ],
 ];
 

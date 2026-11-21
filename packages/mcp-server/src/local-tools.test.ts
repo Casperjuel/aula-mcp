@@ -175,3 +175,46 @@ describe('aula.local tools', () => {
     expect(parseDate('nope')).toBeNull();
   });
 });
+
+describe('aula.local tools with sharing', () => {
+  const OWNER = 'b'.repeat(32);
+  test('read what another parent shares by `owner`, only what the caller lacks', async () => {
+    await storage.forParent(OWNER).put([
+      { kind: 'message', id: '10:1', data: { sender: sender('Lærer', 'employee'), text: 'x' } },
+      { kind: 'message', id: '99:1', data: { sender: sender('Pædagog', 'employee'), text: 'y' } },
+    ]);
+    await storage.shares.grant(OWNER, 'Far', 'a@example.dk');
+    await storage.shares.claim('a', 'a@example.dk');
+    const server = new McpServer({ name: 't', version: '0' });
+    registerLocalTools(server, storage.forParent('a'), {
+      owners: () => storage.shares.owners('a'),
+      open: async (ownerId) => {
+        const store = await storage.sharedWith('a', ownerId);
+        return store ? { store, gallery: null } : null;
+      },
+    });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const shared = new Client({ name: 'test', version: '0' });
+    await shared.connect(clientSide);
+    const callShared = async (name: string, args: Record<string, unknown> = {}) => {
+      const result = await shared.callTool({ name, arguments: args });
+      const text = (result.content as Array<{ text: string }>)[0]?.text ?? '';
+      return { isError: result.isError === true, text };
+    };
+
+    const owners = JSON.parse((await callShared('aula.local.shared_with_me')).text);
+    expect(owners.owners).toEqual([{ owner: OWNER, name: 'Far', since: expect.any(String) }]);
+    const found = JSON.parse(
+      (await callShared('aula.local.search', { kind: 'message', owner: OWNER })).text,
+    );
+    expect(found.items.map((i: { id: string }) => i.id)).toEqual(['99:1']);
+    expect(
+      (await callShared('aula.local.get', { kind: 'message', id: '10:1', owner: OWNER })).isError,
+    ).toBe(true);
+    const nobody = await callShared('aula.local.search', { owner: 'c'.repeat(32) });
+    expect(nobody.isError).toBe(true);
+    expect(nobody.text).toContain('does not share');
+    await shared.close();
+  });
+});

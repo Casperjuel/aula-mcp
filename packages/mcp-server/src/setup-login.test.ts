@@ -158,6 +158,13 @@ function setup(clientSecret?: string) {
             galleryFiles.forParent(caller?.sub ?? 'none'),
           ),
       },
+      sharing: {
+        shares: storage.shares,
+        open: async (viewer, ownerId) => {
+          const store = await storage.sharedWith(callerId(viewer), ownerId);
+          return store ? { store, gallery: null } : null;
+        },
+      },
       sync: {
         forParent: (caller) => ({
           status: async () => [],
@@ -189,8 +196,8 @@ const claimsFor =
   (n: string) => ({ iss: issuer, aud: CLIENT_ID, sub, nonce: n, name: `Parent ${sub}`, ...extra });
 
 /** Runs the whole sign-in and returns the session cookie header. */
-async function signIn(app: App, sub: string): Promise<string> {
-  idTokenClaims = claimsFor(sub);
+async function signIn(app: App, sub: string, extra: Record<string, unknown> = {}): Promise<string> {
+  idTokenClaims = claimsFor(sub, extra);
   const start = await app.request('/auth/login');
   const location = new URL(start.headers.get('location') ?? '');
   nonce = location.searchParams.get('nonce') ?? '';
@@ -472,6 +479,77 @@ describe('setup UI sign-in', () => {
     expect(
       await (await app.request('/data/gallery/file/11/1', { headers: { cookie: c } })).text(),
     ).toBe('photo');
+  });
+
+  test('a parent shares their data read-only with the email they give', async () => {
+    const { app } = setup();
+    const ownerId = callerId({ issuer, sub: 'share-a' });
+    const viewerId = callerId({ issuer, sub: 'share-b' });
+    await storage.forParent(ownerId).put([
+      { kind: 'message', id: 'm1', data: { text: 'til begge' } },
+      { kind: 'message', id: 'm2', data: { text: 'kun til A' } },
+    ]);
+    await storage
+      .forParent(viewerId)
+      .put([{ kind: 'message', id: 'm1', data: { text: 'til begge' } }]);
+    const a = await signIn(app, 'share-a', { email: 'a@example.dk', email_verified: true });
+    const b = await signIn(app, 'share-b', { email: 'B@example.dk', email_verified: true });
+    // Without a verified email the claim never matches.
+    const c = await signIn(app, 'share-c', { email: 'b@example.dk', email_verified: false });
+    const get = async (path: string, cookie: string) => {
+      const res = await app.request(path, { headers: { cookie } });
+      return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+    };
+    const post = (path: string, cookie: string, body: unknown, origin = PUBLIC_URL) =>
+      app.request(path, {
+        method: 'POST',
+        headers: { cookie, origin, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    expect((await get('/data/shares', a)).body).toMatchObject({
+      available: true,
+      email: 'a@example.dk',
+      granted: [],
+      shared_with_me: [],
+    });
+    expect((await post('/data/shares', a, { email: 'a@example.dk' })).status).toBe(400);
+    expect((await post('/data/shares', a, { email: 'not an email' })).status).toBe(400);
+    expect(
+      (await post('/data/shares', a, { email: 'b@example.dk' }, 'https://evil.example.com')).status,
+    ).toBe(403);
+    expect((await post('/data/shares', a, { email: 'b@example.dk' })).status).toBe(200);
+
+    // Nothing is shared before B is matched by their verified email.
+    const owner = `owner=${ownerId}`;
+    expect((await get(`/data/items?${owner}`, b)).status).toBe(404);
+    expect((await get('/data/shares', c)).body.shared_with_me).toEqual([]);
+    expect((await get('/data/shares', b)).body.shared_with_me).toEqual([
+      { owner: ownerId, name: 'Parent share-a', since: expect.any(Number) },
+    ]);
+    expect((await get('/data/shares', a)).body.granted).toEqual([
+      { email: 'b@example.dk', active: true, since: expect.any(Number) },
+    ]);
+    expect((await get(`/data/items?${owner}`, c)).status).toBe(404);
+
+    // B reads only what they do not have themselves, and cannot change it.
+    const items = (await get(`/data/items?${owner}`, b)).body.items as Array<{ id: string }>;
+    expect(items.map((i) => i.id)).toEqual(['m2']);
+    expect((await get(`/data/items/message/m1?${owner}`, b)).status).toBe(404);
+    expect((await get(`/data/items/message/m2?${owner}`, b)).status).toBe(200);
+    expect((await get(`/data/stats?${owner}`, b)).body.kinds).toMatchObject([
+      { kind: 'message', count: 1 },
+    ]);
+    expect((await post(`/data/delete?${owner}`, b, { confirm: 'SLET', all: true })).status).toBe(
+      403,
+    );
+    expect((await get(`/data/sync?${owner}`, b)).status).toBe(403);
+    expect((await get(`/data/items?owner=${viewerId}`, a)).status).toBe(404);
+
+    // Taking it back ends it at once.
+    expect((await post('/data/shares/remove', a, { email: 'b@example.dk' })).status).toBe(200);
+    expect((await post('/data/shares/remove', a, { email: 'b@example.dk' })).status).toBe(404);
+    expect((await get(`/data/items?${owner}`, b)).status).toBe(404);
   });
 
   test('a login session belongs to the parent who started it', async () => {

@@ -2,14 +2,29 @@
  * MCP tools for the downloaded gallery: what is stored, the albums, the media
  * in an album, a thumbnail as an image, and the photos and files saved from
  * posts and messages. They read the local copy only;
- * the `gallery` sync job (aula.sync.run) fetches from Aula.
+ * the `gallery` sync job (aula.sync.run) fetches from Aula. The read tools
+ * take `owner` for what another parent shares (local-tools.ts).
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { GalleryView } from './gallery.ts';
+import { NOT_SHARED, OWNER_TEXT, ownerArg, type SharedAccess } from './local-tools.ts';
 
-export function registerGalleryTools(server: McpServer, gallery: GalleryView): void {
+export function registerGalleryTools(
+  server: McpServer,
+  own: GalleryView,
+  shared?: SharedAccess,
+): void {
+  const owner = ownerArg(shared);
+  const sharedNote = shared ? ` ${OWNER_TEXT}` : '';
+  /** The caller's own gallery, or what `args.owner` shares with them. */
+  const galleryFor = async (args: { owner?: string | undefined }): Promise<GalleryView | null> =>
+    args.owner ? ((await shared?.open(args.owner))?.gallery ?? null) : own;
+  const notShared = () => ({
+    isError: true,
+    content: [{ type: 'text' as const, text: NOT_SHARED }],
+  });
   server.registerTool(
     'aula.gallery.status',
     {
@@ -28,7 +43,7 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
         'soon while more are waiting.',
       inputSchema: {},
     },
-    async () => jsonContent(await gallery.status()),
+    async () => jsonContent(await own.status()),
   );
 
   server.registerTool(
@@ -40,7 +55,8 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
         'child folder, year and date, who made it, the groups it is shared with, media ' +
         'count, how many are downloaded and their size. Filter by `child` (the folder ' +
         'name, as aula.gallery.status lists it, or "Fælles") and `year`. Use the id with ' +
-        'aula.gallery.media. Reads local storage only, so it shows what the last sync saw.',
+        'aula.gallery.media. Reads local storage only, so it shows what the last sync saw.' +
+        sharedNote,
       inputSchema: {
         child: z.string().optional().describe('Child folder name, or "Fælles".'),
         year: z
@@ -50,9 +66,12 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
           .describe('Year the album was made, e.g. "2026".'),
         limit: z.number().int().min(1).max(200).optional().describe('Default 50.'),
         offset: z.number().int().min(0).optional().describe('Default 0.'),
+        ...owner,
       },
     },
     async (args) => {
+      const gallery = await galleryFor(args);
+      if (!gallery) return notShared();
       const all = await gallery.albums({
         ...(args.child ? { child: args.child } : {}),
         ...(args.year ? { year: args.year } : {}),
@@ -73,14 +92,18 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
         'original and the thumbnail are downloaded, the stored path relative to the ' +
         "parent's gallery folder, the names of people tagged, and the last download " +
         'error if any. Take `albumId` from aula.gallery.albums. Use aula.gallery.thumbnail ' +
-        'to look at one.',
+        'to look at one.' +
+        sharedNote,
       inputSchema: {
         albumId: z.number().int().describe('Album id from aula.gallery.albums.'),
         limit: z.number().int().min(1).max(500).optional().describe('Default 100.'),
         offset: z.number().int().min(0).optional().describe('Default 0.'),
+        ...owner,
       },
     },
     async (args) => {
+      const gallery = await galleryFor(args);
+      if (!gallery) return notShared();
       const all = await gallery.media(args.albumId);
       const offset = args.offset ?? 0;
       const media = all.slice(offset, offset + (args.limit ?? 100));
@@ -96,13 +119,17 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
         'Returns the stored thumbnail (about 170 KB, JPEG) of one photo or video as an ' +
         'image, so it can be looked at or described. Needs `albumId` and `mediaId` from ' +
         'aula.gallery.media; answers with an error when that thumbnail is not downloaded ' +
-        'yet. Never returns the original file.',
+        'yet. Never returns the original file.' +
+        sharedNote,
       inputSchema: {
         albumId: z.number().int().describe('Album id.'),
         mediaId: z.number().int().describe('Media id from aula.gallery.media.'),
+        ...owner,
       },
     },
     async (args) => {
+      const gallery = await galleryFor(args);
+      if (!gallery) return notShared();
       const file = await gallery.file(args.albumId, args.mediaId, 'thumb');
       if (!file) {
         return {
@@ -134,16 +161,20 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
         'and never in Aula. Filter by `year`. Look at one with aula.gallery.attachment ' +
         '(kind "post", the post id and the index); read the post itself with ' +
         'aula.local.get. Only files the posts sync saved while their links were fresh ' +
-        'are listed.',
+        'are listed.' +
+        sharedNote,
       inputSchema: {
         year: z
           .string()
           .regex(/^\d{4}$/)
           .optional()
           .describe('Year of the post, e.g. "2026".'),
+        ...owner,
       },
     },
     async (args) => {
+      const gallery = await galleryFor(args);
+      if (!gallery) return notShared();
       const posts = (await gallery.postAlbums()).filter(
         (p) => !args.year || p.date?.startsWith(args.year),
       );
@@ -163,14 +194,18 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
         'the attachments aula.local.get lists (0 is the first). The posts and messages ' +
         'sync save attachments while their Aula links are fresh; answers with an error ' +
         'when no copy is saved. For a file that was never saved use ' +
-        'aula.posts.get_attachment or aula.messages.get_attachment, which ask Aula.',
+        'aula.posts.get_attachment or aula.messages.get_attachment, which ask Aula.' +
+        sharedNote,
       inputSchema: {
         kind: z.enum(['post', 'message']).describe('post or message.'),
         id: z.string().min(1).describe('Id from aula.local.search.'),
         index: z.number().int().min(0).max(19).describe('Attachment number, 0 first.'),
+        ...owner,
       },
     },
     async (args) => {
+      const gallery = await galleryFor(args);
+      if (!gallery) return notShared();
       const file = await gallery.attachment(args.kind, args.id, args.index);
       if (!file) {
         return {

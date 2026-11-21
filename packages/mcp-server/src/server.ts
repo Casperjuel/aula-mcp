@@ -64,6 +64,7 @@ import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { AulaContext } from './aula-context.ts';
 import { GalleryFiles, GalleryView, galleryConfig } from './gallery.ts';
+import type { SharedAccess } from './local-tools.ts';
 import {
   authenticateRequest,
   type Caller,
@@ -147,6 +148,27 @@ function galleryFor(caller: Caller | null): GalleryView | null {
   return new GalleryView(storage.forParent(parentId), galleryFiles.forParent(parentId));
 }
 
+/**
+ * What other parents share with the caller: read-only views of their rows
+ * and gallery files, without what the caller stored themselves. Multi-parent
+ * mode only.
+ */
+function sharedFor(caller: Caller | null): SharedAccess | null {
+  if (!multiParent || !caller || !storage) return null;
+  const viewerId = callerId(caller);
+  return {
+    owners: () => storage.shares.owners(viewerId),
+    open: async (ownerId) => {
+      const store = await storage.sharedWith(viewerId, ownerId);
+      if (!store) return null;
+      return {
+        store,
+        gallery: galleryFiles ? new GalleryView(store, galleryFiles.forParent(ownerId)) : null,
+      };
+    },
+  };
+}
+
 /** Whose rows: the caller in multi-parent mode, the one parent otherwise. */
 function parentIdOf(caller: Caller | null): string {
   if (!multiParent) return SINGLE_PARENT_ID;
@@ -217,6 +239,7 @@ async function sessionAppFor(caller: Caller | null): Promise<McpApp> {
   const loginRequired = await loginRequiredFor(caller);
   const context = contextFor(caller);
   const gallery = galleryFor(caller);
+  const shared = sharedFor(caller);
   return createMcpApp({
     logger,
     context,
@@ -224,6 +247,7 @@ async function sessionAppFor(caller: Caller | null): Promise<McpApp> {
     ...(sync ? { sync: sync.forParent(parentIdOf(caller), context) } : {}),
     ...(gallery ? { gallery } : {}),
     ...(storage ? { local: storage.forParent(parentIdOf(caller)) } : {}),
+    ...(shared ? { shared } : {}),
   });
 }
 
@@ -676,6 +700,15 @@ if (INGRESS_PORT_RAW) {
       : {}),
     ...(galleryFiles
       ? { gallery: { forParent: (caller: Caller | null) => galleryFor(caller) as GalleryView } }
+      : {}),
+    ...(multiParent && storage
+      ? {
+          sharing: {
+            shares: storage.shares,
+            open: (viewer: Caller, ownerId: string) =>
+              (sharedFor(viewer) as SharedAccess).open(ownerId),
+          },
+        }
       : {}),
   };
   const setupApp = createSetupApp(

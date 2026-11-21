@@ -45,11 +45,13 @@ const SYNC_COLUMNS = [
   'fetched',
   'changed',
 ];
+const SHARE_COLUMNS = ['owner_id', 'email', 'owner_name', 'viewer_id', 'created_at'];
 
 export interface CopyResult {
   parents: number;
   items: { read: number; copied: number };
   syncStates: { read: number; copied: number };
+  shares: { read: number; copied: number };
 }
 
 export class StorageKeyMismatchError extends Error {
@@ -79,6 +81,7 @@ export async function copyStorage(
     parents: parents.length,
     items: await copyTable(from, to, 'items', ITEM_COLUMNS, 'parent_id, kind, id'),
     syncStates: await copyTable(from, to, 'sync_state', SYNC_COLUMNS, 'parent_id, job'),
+    shares: await copyTable(from, to, 'shares', SHARE_COLUMNS, 'owner_id, email'),
   };
 }
 

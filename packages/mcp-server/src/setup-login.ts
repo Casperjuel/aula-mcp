@@ -30,6 +30,8 @@ export interface SignedInParent {
   caller: Caller;
   /** For display only. */
   name: string;
+  /** Only when the identity provider says it is verified: what shares are matched on. */
+  email?: string;
 }
 
 export interface SetupLogin {
@@ -183,6 +185,11 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
       sessions.set(id, {
         caller: { issuer, sub },
         name: displayName(claims) ?? sub,
+        ...(typeof claims.email === 'string' &&
+        claims.email !== '' &&
+        claims.email_verified === true
+          ? { email: claims.email }
+          : {}),
         expiresAt: Date.now() + SESSION_TTL_MS,
       });
       setCookie(c, sessionCookie, id, { ...cookieOptions, maxAge: SESSION_TTL_MS / 1000 });
@@ -242,7 +249,11 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
       sessions.delete(id as string);
       return null;
     }
-    return { caller: session.caller, name: session.name };
+    return {
+      caller: session.caller,
+      name: session.name,
+      ...(session.email ? { email: session.email } : {}),
+    };
   }
 
   // Browsers send Origin on every POST, so a missing one is refused too.

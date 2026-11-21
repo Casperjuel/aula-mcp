@@ -11,6 +11,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { AulaContext } from './aula-context.ts';
 import type { GalleryView } from './gallery.ts';
+import type { SharedAccess } from './local-tools.ts';
 import type { ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
 import { type ToolNameStyle, toolName, toolNameStyle, underscoreTools } from './tool-names.ts';
@@ -75,6 +76,8 @@ export interface McpAppOptions {
   gallery?: GalleryView;
   /** The caller's stored data, when local storage is on. */
   local?: ParentStorage;
+  /** What other parents share with the caller (multi-parent mode). */
+  shared?: SharedAccess;
 }
 
 export interface McpApp {
@@ -90,11 +93,13 @@ export function createMcpApp({
   sync,
   gallery,
   local,
+  shared,
 }: McpAppOptions): McpApp {
   const extras = {
     ...(sync ? { sync } : {}),
     ...(gallery ? { gallery } : {}),
     ...(local ? { local } : {}),
+    ...(shared ? { shared } : {}),
   };
   const tools =
     toolNames === 'underscore'

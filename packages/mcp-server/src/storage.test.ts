@@ -20,11 +20,61 @@ for (const [name, driver] of backends) {
     const open = async () => {
       const db = driver();
       if (name === 'postgres')
-        await db.run('DROP TABLE IF EXISTS items, sync_state, schema_migrations');
+        await db.run('DROP TABLE IF EXISTS items, sync_state, shares, schema_migrations');
       storage = await createStorage(db, KEY, { type: name as 'sqlite', location: 'test' });
       return storage;
     };
     afterEach(() => storage?.close());
+
+    test('shares read-only, and only what the viewer lacks', async () => {
+      const store = await open();
+      const owner = store.forParent('owner-a');
+      const viewer = store.forParent('viewer-b');
+      await owner.put([
+        { kind: 'message', id: '1', occurredAt: 1_700_000_000, data: { text: 'Til begge' } },
+        { kind: 'message', id: '2', occurredAt: 1_700_000_100, data: { text: 'Kun til A' } },
+        { kind: 'post', id: '9', occurredAt: 1_700_000_200, data: { title: 'Opslag' } },
+      ]);
+      await viewer.put([
+        { kind: 'message', id: '1', occurredAt: 1_700_000_000, data: { text: 'Til begge' } },
+      ]);
+
+      // Nothing until the owner grants and the viewer has claimed it.
+      expect(await store.sharedWith('viewer-b', 'owner-a')).toBeNull();
+      await store.shares.grant('owner-a', 'Anne', ' B@Example.dk ');
+      expect(await store.shares.granted('owner-a')).toEqual([
+        { email: 'b@example.dk', active: false, since: expect.any(Number) },
+      ]);
+      expect(await store.sharedWith('viewer-b', 'owner-a')).toBeNull();
+      // The owner cannot claim their own share.
+      expect(await store.shares.claim('owner-a', 'b@example.dk')).toBe(0);
+      expect(await store.shares.claim('viewer-b', 'B@example.dk')).toBe(1);
+      expect((await store.shares.granted('owner-a'))[0]?.active).toBe(true);
+      expect(await store.shares.owners('viewer-b')).toEqual([
+        { ownerId: 'owner-a', ownerName: 'Anne', since: expect.any(Number) },
+      ]);
+
+      const shared = await store.sharedWith('viewer-b', 'owner-a');
+      if (!shared) throw new Error('expected a shared view');
+      expect(shared.shared).toBe(true);
+      expect((await shared.list({})).map((i) => `${i.kind}:${i.id}`)).toEqual([
+        'post:9',
+        'message:2',
+      ]);
+      expect(await shared.get('message', '1')).toBeNull();
+      expect((await shared.get('message', '2'))?.data).toEqual({ text: 'Kun til A' });
+      const counts = Object.fromEntries((await shared.stats()).map((k) => [k.kind, k.count]));
+      expect(counts).toEqual({ message: 1, post: 1 });
+      expect(shared.put([{ kind: 'post', id: '1', data: {} }])).rejects.toThrow('read-only');
+      expect(shared.delete()).rejects.toThrow('read-only');
+      // Sharing is one way, and not with yourself.
+      expect(await store.sharedWith('owner-a', 'viewer-b')).toBeNull();
+      expect(await store.sharedWith('owner-a', 'owner-a')).toBeNull();
+
+      expect(await store.shares.revoke('owner-a', 'b@example.dk')).toBe(true);
+      expect(await store.shares.revoke('owner-a', 'b@example.dk')).toBe(false);
+      expect(await store.sharedWith('viewer-b', 'owner-a')).toBeNull();
+    });
 
     test('stores, reads back and lists newest first', async () => {
       const parent = (await open()).forParent('parent-a');
@@ -128,7 +178,7 @@ for (const [name, driver] of backends) {
     test('payloads are encrypted at rest and bound to their parent and id', async () => {
       const db = driver();
       if (name === 'postgres')
-        await db.run('DROP TABLE IF EXISTS items, sync_state, schema_migrations');
+        await db.run('DROP TABLE IF EXISTS items, sync_state, shares, schema_migrations');
       storage = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await storage
         .forParent('parent-a')
@@ -147,10 +197,10 @@ for (const [name, driver] of backends) {
     test('migrations run once', async () => {
       const db = driver();
       if (name === 'postgres')
-        await db.run('DROP TABLE IF EXISTS items, sync_state, schema_migrations');
+        await db.run('DROP TABLE IF EXISTS items, sync_state, shares, schema_migrations');
       storage = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
-      expect(await db.all('SELECT version FROM schema_migrations')).toHaveLength(2);
+      expect(await db.all('SELECT version FROM schema_migrations')).toHaveLength(3);
     });
 
     test('keeps sync state per parent', async () => {

@@ -3,11 +3,16 @@
  * search, one item in full, the calendar and who wrote the messages. They
  * never call Aula, so they answer fast, work while Aula is down and go back
  * as far as the sync has kept; the aula.sync.* tools fill the store.
+ *
+ * In multi-parent mode each tool also takes `owner`: it then reads what that
+ * parent shares with the caller, read-only and without what the caller has
+ * stored themselves (storage.ts `sharedWith`).
  */
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { addDays, startOfDayCopenhagen } from './calendar-range.ts';
+import type { GalleryView } from './gallery.ts';
 import { detail, type ItemSummary, summarize } from './item-view.ts';
 import {
   ACTIVITY_KINDS,
@@ -17,7 +22,43 @@ import {
   searchItems,
   threadMessages,
 } from './local-data.ts';
-import { ITEM_KINDS, type ParentStorage } from './storage.ts';
+import { ITEM_KINDS, type ParentStorage, type SharedFrom } from './storage.ts';
+
+/** Another parent's data as the caller may read it. */
+export interface SharedView {
+  store: ParentStorage;
+  gallery: GalleryView | null;
+}
+
+/** What other parents share with the caller. */
+export interface SharedAccess {
+  owners(): Promise<SharedFrom[]>;
+  /** Null unless `ownerId` shares with the caller. */
+  open(ownerId: string): Promise<SharedView | null>;
+}
+
+export const OWNER_TEXT =
+  'Set `owner` (an id from aula.local.shared_with_me) to read what another parent shares ' +
+  'with you instead: read-only, and only what is not in your own data, such as messages ' +
+  'sent to them alone.';
+
+const OWNER = z
+  .string()
+  .regex(/^[0-9a-f]{32}$/, 'an owner id from aula.local.shared_with_me')
+  .optional()
+  .describe('Read what this parent shares with you. Id from aula.local.shared_with_me.');
+
+/**
+ * The `owner` argument, when anyone can share with the caller. Typed as
+ * always there so the handlers' `args` keep their types; without sharing it
+ * is left out of the schema and `args.owner` is never set.
+ */
+export function ownerArg(shared: SharedAccess | undefined): { owner: typeof OWNER } {
+  return (shared ? { owner: OWNER } : {}) as { owner: typeof OWNER };
+}
+
+export const NOT_SHARED =
+  'That parent does not share their data with you. See aula.local.shared_with_me.';
 
 const KIND_TEXT =
   'Kinds: message_thread, message (one message of a thread), post, notification, ' +
@@ -35,7 +76,43 @@ const dateArg = (what: string) =>
     .optional()
     .describe(`${what}: an ISO date (Copenhagen midnight) or date-time.`);
 
-export function registerLocalTools(server: McpServer, store: ParentStorage): void {
+export function registerLocalTools(
+  server: McpServer,
+  own: ParentStorage,
+  shared?: SharedAccess,
+): void {
+  const owner = ownerArg(shared);
+  const sharedNote = shared ? ` ${OWNER_TEXT}` : '';
+  /** The caller's own store, or the shared view `args.owner` asks for. */
+  const storeFor = async (args: { owner?: string | undefined }): Promise<ParentStorage | null> =>
+    args.owner ? ((await shared?.open(args.owner))?.store ?? null) : own;
+
+  if (shared) {
+    server.registerTool(
+      'aula.local.shared_with_me',
+      {
+        title: 'Parents who share with me',
+        description:
+          'The other parents who share their stored Aula data with the caller: owner id, ' +
+          'name and since when. Pass the id as `owner` to the aula.local.* and ' +
+          'aula.gallery.* read tools to read what they share: read-only, and only what ' +
+          "is not in the caller's own data (messages, posts or photos sent to that parent " +
+          'alone). A parent shares from the setup dashboard (Deling) by the email the ' +
+          'other parent signs in with; it starts once that parent has signed in to the ' +
+          'dashboard. Never calls Aula.',
+        inputSchema: {},
+      },
+      async () =>
+        jsonContent({
+          owners: (await shared.owners()).map((o) => ({
+            owner: o.ownerId,
+            name: o.ownerName,
+            since: iso(o.since),
+          })),
+        }),
+    );
+  }
+
   server.registerTool(
     'aula.local.overview',
     {
@@ -45,10 +122,13 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
         'number of items, the oldest and newest (when they happened in Aula) and when ' +
         'the kind was last updated, plus when each sync job last succeeded. Start here ' +
         'to see how far back aula.local.search can look. Never calls Aula. ' +
-        KIND_TEXT,
-      inputSchema: {},
+        KIND_TEXT +
+        sharedNote,
+      inputSchema: { ...owner },
     },
-    async () => {
+    async (args) => {
+      const store = await storeFor(args);
+      if (!store) return errorContent(NOT_SHARED);
       const [kinds, jobs] = await Promise.all([store.stats(), store.syncStates()]);
       return jsonContent({
         kinds: kinds.map((k) => ({
@@ -83,7 +163,7 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
         'says `truncated` when it stopped early. Never calls Aula, so it is fast and goes ' +
         'back further than the live tools, but is only as fresh as the last sync ' +
         '(aula.sync.status). Example: kind "message", q "udflugt", role "employee". ' +
-        `${KIND_TEXT} ${ROLE_TEXT}`,
+        `${KIND_TEXT} ${ROLE_TEXT}${sharedNote}`,
       inputSchema: {
         kind: z.enum(ITEM_KINDS).optional().describe('Only this kind.'),
         q: z.string().max(200).optional().describe('Text to find, e.g. "madpakke".'),
@@ -95,9 +175,12 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
         until: dateArg('Until'),
         limit: z.number().int().min(1).max(100).optional().describe('Default 20.'),
         offset: z.number().int().min(0).optional().describe('Default 0.'),
+        ...owner,
       },
     },
     async (args) => {
+      const store = await storeFor(args);
+      if (!store) return errorContent(NOT_SHARED);
       if (args.role && args.kind !== 'message' && args.kind !== 'message_thread') {
         return errorContent('role needs kind "message" or "message_thread".');
       }
@@ -135,14 +218,18 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
         'A message_thread comes with all its stored messages, oldest first, each with ' +
         "sender, time, text and sender role. Set `raw` for Aula's own JSON as it was " +
         'stored. Take `kind` and `id` from aula.local.search. Never calls Aula and never ' +
-        'marks anything read.',
+        'marks anything read.' +
+        sharedNote,
       inputSchema: {
         kind: z.enum(ITEM_KINDS).describe('Kind from aula.local.search.'),
         id: z.string().min(1).describe('Id from aula.local.search.'),
         raw: z.boolean().optional().describe("Also return Aula's stored JSON. Default false."),
+        ...owner,
       },
     },
     async (args) => {
+      const store = await storeFor(args);
+      if (!store) return errorContent(NOT_SHARED);
       const item = await store.get(args.kind, args.id);
       if (!item) return errorContent(`No stored ${args.kind} with id ${args.id}.`);
       const { occurredAt, updatedAt, ...rest } = detail(item);
@@ -176,14 +263,18 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
         'Defaults to today and 14 days ahead. The calendar sync keeps a week back to ' +
         'eight weeks ahead, plus older events it has seen before. Use `types` to pick ' +
         'some, e.g. ["parental_meeting","excursion"]. For live data from Aula use ' +
-        'aula.calendar.events instead. Never calls Aula.',
+        'aula.calendar.events instead. Never calls Aula.' +
+        sharedNote,
       inputSchema: {
         since: dateArg('From, default today'),
         until: dateArg('Until, default 14 days after since'),
         types: z.array(z.string()).optional().describe('Only these event types.'),
+        ...owner,
       },
     },
     async (args) => {
+      const store = await storeFor(args);
+      if (!store) return errorContent(NOT_SHARED);
       const since = parseDate(args.since) ?? epoch(startOfDayCopenhagen(new Date()));
       const until = parseDate(args.until) ?? epoch(addDays(new Date(since * 1000), 14));
       const rows = await store.list({ kind: 'calendar_event', since, until, limit: 1000 });
@@ -209,7 +300,8 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
         'Defaults to the current month; at most 400 days. Use it for "what happened in ' +
         'November" or "which days had many photos", then aula.local.search with kind, ' +
         'since and until set to that day for the items themselves. Calendar events are ' +
-        'in aula.local.calendar. Only as far back as the sync has stored. Never calls Aula.',
+        'in aula.local.calendar. Only as far back as the sync has stored. Never calls Aula.' +
+        sharedNote,
       inputSchema: {
         since: dateArg('From, default the first of this month'),
         until: dateArg('Until, default the end of the month of since'),
@@ -217,9 +309,12 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
           .array(z.enum(ACTIVITY_KINDS))
           .optional()
           .describe('Only these: message, gallery_media, post, notification. Default all.'),
+        ...owner,
       },
     },
     async (args) => {
+      const store = await storeFor(args);
+      if (!store) return errorContent(NOT_SHARED);
       const since = parseDate(args.since) ?? startOfMonthCopenhagen(new Date());
       const until =
         parseDate(args.until) ??
@@ -248,10 +343,14 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
         'How many stored message threads and messages each kind of sender wrote, for ' +
         'the caller only: counts for guardian, employee, child and other. A thread ' +
         'counts by its latest sender. Filter the messages themselves with ' +
-        `aula.local.search and \`role\`. ${ROLE_TEXT} Never calls Aula.`,
-      inputSchema: {},
+        `aula.local.search and \`role\`. ${ROLE_TEXT} Never calls Aula.${sharedNote}`,
+      inputSchema: { ...owner },
     },
-    async () => jsonContent(await roleCounts(store)),
+    async (args) => {
+      const store = await storeFor(args);
+      if (!store) return errorContent(NOT_SHARED);
+      return jsonContent(await roleCounts(store));
+    },
   );
 }
 

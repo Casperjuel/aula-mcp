@@ -39,6 +39,7 @@ describe('copyStorage', () => {
       parents: 2,
       items: { read: 3, copied: 2 },
       syncStates: { read: 1, copied: 1 },
+      shares: { read: 0, copied: 0 },
     });
     expect((await target.forParent('a').get('message', '1:1'))?.data).toEqual({ text: 'ny' });
     expect((await target.forParent('a').get('post', '2'))?.data).toEqual({ title: 'Opslag' });
