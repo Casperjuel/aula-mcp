@@ -8,6 +8,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { StoredTokenRecord, TokenStore } from '@aula-mcp/aula-auth';
 import { createSetupApp } from './setup-ui.ts';
+import { createStorage } from './storage.ts';
+import { sqliteDriver } from './storage-sql.ts';
 
 class MemoryStore implements TokenStore {
   private record: StoredTokenRecord | null = null;
@@ -65,6 +67,36 @@ describe('createSetupApp', () => {
     expect(body.login).toMatchObject({ logged_in: true, username: 'demo', auto_renew: true });
     expect(body.stored.map((item) => item.what)).toContain('Dit Aula-login');
     expect(body.not_stored.length).toBeGreaterThan(0);
+  });
+
+  test('GET /data/summary shows what is in the local database', async () => {
+    const storage = await createStorage(sqliteDriver(':memory:'), Buffer.alloc(32, 1), {
+      type: 'sqlite',
+      location: '/data/aula.db',
+    });
+    await storage
+      .forParent('default')
+      .put([{ kind: 'message', id: '1', occurredAt: 100, data: { text: 'hemmelig' } }]);
+    const app = createSetupApp({
+      store: new MemoryStore(),
+      myData: {
+        contextFor: () => {
+          throw new Error('unused');
+        },
+        storage: { info: storage.info, forParent: () => storage.forParent('default') },
+      },
+    });
+    const text = await (await app.fetch(new Request('http://test/data/summary'))).text();
+    // Counts only; the stored content itself is not part of the summary.
+    expect(text).not.toContain('hemmelig');
+    const body = JSON.parse(text) as {
+      database: { type: string; kinds: Array<{ kind: string; count: number }> };
+      stored: Array<{ what: string; where: string }>;
+    };
+    expect(body.database.type).toBe('sqlite');
+    expect(body.database.kinds).toMatchObject([{ kind: 'message', count: 1 }]);
+    expect(body.stored[0]).toMatchObject({ where: 'SQLite: /data/aula.db' });
+    await storage.close();
   });
 
   test('GET /data/summary without a login lists no Aula login', async () => {

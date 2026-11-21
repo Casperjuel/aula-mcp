@@ -382,6 +382,10 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_TOOL_NAMES` | `dotted` | `underscore` navngiver tools `aula_discover` osv. i stedet for `aula.discover`, også i instruktioner, beskrivelser og svar. Til klienter der sender MCP-toolnavne direkte videre til Anthropic API'et (fx kagent), som kun tager `^[a-zA-Z0-9_-]{1,128}$`. |
 | `AULA_MCP_LOG=1` | off | Verbose console-logs fra auth/client-lagene (samme redaktion som wire-transcripts). |
 | `AULA_MCP_ALLOW_REMOTE=1` | off | Tillader at binde til ikke-loopback adresser (fx bag en reverse proxy). |
+| `AULA_MCP_STORAGE` | `sqlite` | Lokal database til Aula-data: `sqlite`, `postgres` eller `none` (slået fra). Indholdet krypteres (AES-256-GCM) med en nøgle pr. forælder, og intet slettes automatisk. |
+| `AULA_MCP_SQLITE_PATH` | `<AULA_MCP_DIR>/aula.db` | SQLite-filen. |
+| `AULA_MCP_DATABASE_URL` | – | PostgreSQL-URL (fx fra en CNPG-secret). Kræves med `AULA_MCP_STORAGE=postgres`. |
+| `AULA_MCP_STORAGE_KEY` | `<AULA_MCP_DIR>/storage.key` | Nøglen (base64, 32 bytes) data krypteres med. Uden den genereres en nøglefil. Tag backup af nøglen sammen med databasen; uden den kan data ikke læses. |
 
 ### Wire-transcripts
 

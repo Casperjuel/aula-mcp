@@ -89,6 +89,11 @@ export function renderMyDataPage(signedInAs?: string): string {
     return body;
   };
 
+  const KIND_LABELS = {
+    message_thread: 'Beskedtråde', message: 'Beskeder', post: 'Opslag', notification: 'Notifikationer',
+    calendar_event: 'Kalender', presence: 'Komme/gå', weekly_plan: 'Ugeplaner', task: 'Opgaver og lektier',
+    contact: 'Kontakter', group: 'Grupper', gallery_album: 'Fotoalbum', gallery_media: 'Billeder og video',
+  };
   const loaded = {};
   const loaders = {
     async stored() {
@@ -107,6 +112,14 @@ export function renderMyDataPage(signedInAs?: string): string {
         : [['Aula-login', 'Nej, du er ikke logget ind']];
       fill('tab-stored',
         card(el('h2', {}, 'Dit login'), el('dl', {}, rows.map(([k, v]) => [el('dt', {}, k), el('dd', {}, v)]))),
+        data.database ? card(el('h2', {}, 'Lokal database'),
+          el('p', { class: 'muted' }, (data.database.type === 'postgres' ? 'PostgreSQL' : 'SQLite') + ' · krypteret'),
+          data.database.kinds.length
+            ? el('dl', {}, data.database.kinds.map((k) => [
+                el('dt', {}, KIND_LABELS[k.kind] || k.kind),
+                el('dd', {}, k.count + (k.newest ? ' · nyeste ' + when(k.newest) : '')),
+              ]))
+            : el('p', {}, 'Ingen data gemt endnu.')) : null,
         card(el('h2', {}, 'Det gemmer aula-mcp om dig'),
           data.stored.map((item) => el('div', { class: 'item' },
             el('h3', {}, item.what), el('p', { class: 'muted' }, 'Hvor: ', item.where), el('p', {}, item.detail)))),
