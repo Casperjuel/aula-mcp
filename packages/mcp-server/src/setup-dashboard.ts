@@ -337,6 +337,9 @@ button.li { width: 100%; background: none; border-left: 0; border-right: 0; bord
 .msg-body { margin-top: 4px; max-width: 65ch; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .attach-table { margin-top: 12px; }
+.attach-media { margin-top: 12px; }
+#detail .attach-media { max-width: 560px; }
+.attach-prev { border: 0; padding: 0; cursor: pointer; }
 .day-group { margin-top: 18px; display: grid; gap: 8px; justify-items: start; }
 .day-group > .list, .day-group > .media-grid { width: 100%; }
 .day-group-head { display: flex; gap: 8px; align-items: center; font-size: .95rem; margin: 0; }
@@ -1126,16 +1129,33 @@ function typeLabel(t) {
   if (/powerpoint|presentation/.test(t)) return 'PowerPoint';
   return 'Fil';
 }
+const isPlayable = (t) => t === 'video/mp4' || t === 'video/webm';
+/** The saved photos and videos of an item, as the viewer takes them. */
+const viewable = (kind, id, files) => (files || []).filter((f) => f.saved && (isPicture(f.mediaType) || isPlayable(f.mediaType)))
+  .map((f) => ({ index: f.index, src: attachUrl(kind, id, f.index), download: attachUrl(kind, id, f.index, true), video: isPlayable(f.mediaType), name: f.name, size: f.size }));
+/** Photos and videos as gallery tiles that open the viewer. */
+function attachMedia(kind, id, files) {
+  const list = viewable(kind, id, files);
+  if (!list.length) return null;
+  return el('div', { class: 'media-grid attach-media' }, list.map((m, i) =>
+    el('button', { class: 'thumb', title: m.name, 'aria-label': (m.video ? 'Video ' : 'Billede ') + (i + 1) + ': ' + m.name, onclick: () => openLightbox(i, list) },
+      m.video ? coverEmpty('play') : lazyImg(m.src, 'image'),
+      m.video ? el('span', { class: 'vid' }, icon('play'), 'Video') : null)));
+}
 function attachTable(kind, id, files) {
   if (!files || !files.length) return null;
+  const media = viewable(kind, id, files);
+  const view = (f) => media.findIndex((m) => m.index === f.index);
   const rows = files.map((f) => {
     const open = attachUrl(kind, id, f.index);
-    const preview = f.saved && isPicture(f.mediaType)
-      ? el('a', { class: 'attach-prev', href: open, target: '_blank', rel: 'noopener', 'aria-label': 'Vis ' + f.name }, lazyImg(open, 'image'))
+    const at = view(f);
+    const preview = at >= 0
+      ? el('button', { class: 'attach-prev', 'aria-label': 'Vis ' + f.name, onclick: () => openLightbox(at, media) }, isPicture(f.mediaType) ? lazyImg(open, 'image') : icon('play'))
       : el('span', { class: 'attach-prev', 'aria-hidden': 'true' }, icon(f.mediaType.startsWith('video/') ? 'play' : f.mediaType.startsWith('image/') ? 'image' : 'clip'));
     const acts = f.saved
       ? el('span', { class: 'attach-acts' },
-        INLINE_TYPES.includes(f.mediaType) ? el('a', { class: 'btn btn-sm', href: open, target: '_blank', rel: 'noopener' }, icon('external'), 'Åbn') : null,
+        at >= 0 ? el('button', { class: 'btn btn-sm', onclick: () => openLightbox(at, media) }, icon('external'), 'Vis')
+          : INLINE_TYPES.includes(f.mediaType) ? el('a', { class: 'btn btn-sm', href: open, target: '_blank', rel: 'noopener' }, icon('external'), 'Åbn') : null,
         el('a', { class: 'btn btn-sm', href: attachUrl(kind, id, f.index, true), download: f.name }, icon('download'), 'Hent'))
       : el('span', { class: 'muted small', title: 'Filen gemmes ved næste synkronisering, så længe Aula stadig har den.' }, 'Ikke gemt endnu');
     return el('tr', {},
@@ -1176,6 +1196,7 @@ function renderDetail() {
     el('div', { class: 'detail-meta' }, it.subtitle ? el('span', {}, it.subtitle) : null, roleBadge(it.senderRole), el('span', {}, longDate(it.occurredAt || it.updatedAt))),
     it.fields.length ? el('dl', { class: 'kv' }, it.fields.map(([key, value]) => [el('dt', {}, key), el('dd', {}, value)])) : null,
     it.body ? el('p', { class: 'pre', style: 'max-width:65ch' }, it.body) : null,
+    attachMedia(it.kind, it.id, it.attachments),
     attachTable(it.kind, it.id, it.attachments),
     msgs ? (msgs.length
       ? el('div', {}, msgs.map((m) => el('div', { class: 'msg' },
@@ -1183,6 +1204,7 @@ function renderDetail() {
           el('div', { style: 'min-width:0' },
             el('div', { class: 'msg-head' }, el('span', { style: 'display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('strong', {}, m.from || 'Ukendt afsender'), roleBadge(m.role)), el('span', { class: 'muted num' }, rel(m.at))),
             el('p', { class: 'msg-body pre' }, m.body),
+            attachMedia('message', m.id, m.attachments),
             attachTable('message', m.id, m.attachments)))))
       : el('p', { class: 'muted small' }, 'Beskederne i tråden er ikke hentet endnu. De kommer med næste synkronisering.')) : null,
     it.unread ? el('p', { class: 'muted small', style: 'margin-top:6px' }, 'Tråden står stadig som ulæst i Aula. aula-mcp ændrer det ikke.') : null,
@@ -1817,12 +1839,7 @@ function postAlbumView(id) {
         el('h1', { style: 'overflow-wrap:anywhere' }, p.title),
         el('p', { class: 'lede' }, [p.date ? dayText(p.date) : 'Uden dato', p.author, plural(p.media.length, 'fil', 'filer')].filter(Boolean).join(' · ')))),
     banner('info', 'info', el('p', {}, 'Albummet er lavet her ud fra billederne i opslaget. Det findes ikke i Aulas galleri.')),
-    el('div', { class: 'media-grid' }, p.media.map((m, i) => {
-      const video = m.mediaType.startsWith('video/');
-      return el('a', { class: 'thumb', href: attachUrl('post', p.postId, m.index), target: '_blank', rel: 'noopener', 'aria-label': (video ? 'Video ' : 'Billede ') + (i + 1), title: m.name },
-        isPicture(m.mediaType) ? lazyImg(attachUrl('post', p.postId, m.index), 'image') : coverEmpty(video ? 'play' : 'image'),
-        video ? el('span', { class: 'vid' }, icon('play'), 'Video') : null);
-    })),
+    attachMedia('post', p.postId, p.media) || el('section', { class: 'panel empty' }, el('p', {}, 'Ingen billeder, browseren kan vise.')),
   ];
 }
 function albumInHash() {
@@ -2040,7 +2057,9 @@ function thumbTile(a, m, i) {
   video ? el('span', { class: 'vid' }, icon('play'), 'Video') : null,
   m.downloaded ? null : el('span', { class: 'queued' + (m.error ? ' failed' : '') }, m.error ? 'Fejlet' : 'Ikke hentet'));
 }
-function openLightbox(i) {
+/** Opens the viewer on an album's media, or on a list of {src, video, name, download} from a post or message. */
+function openLightbox(i, list) {
+  state.gallery.lbList = list || null;
   state.gallery.lb = i;
   renderLightbox();
   const dlg = $('lightbox');
@@ -2048,12 +2067,31 @@ function openLightbox(i) {
 }
 function stepLightbox(step) {
   const d = state.gallery.album;
-  const n = d ? d.media.length : 0;
+  const list = state.gallery.lbList;
+  const n = list ? list.length : d ? d.media.length : 0;
   if (n < 2) return;
   state.gallery.lb = (state.gallery.lb + step + n) % n;
   renderLightbox();
 }
+function renderListLightbox(list) {
+  const i = state.gallery.lb;
+  const m = list[i];
+  if (!m) { $('lightbox').close(); return; }
+  const n = list.length;
+  $('lightbox').setAttribute('aria-label', m.name);
+  fill($('lbBody'),
+    el('div', { class: 'lb-stage' },
+      m.video ? el('video', { src: m.src, controls: true, preload: 'metadata', playsinline: true }) : el('img', { src: m.src, alt: m.name }),
+      n > 1 ? [el('button', { class: 'lb-nav lb-prev', 'aria-label': 'Forrige', onclick: () => stepLightbox(-1) }, icon('left')),
+        el('button', { class: 'lb-nav lb-next', 'aria-label': 'Næste', onclick: () => stepLightbox(1) }, icon('chev'))] : null,
+      el('button', { class: 'lb-close', 'aria-label': 'Luk', onclick: () => $('lightbox').close() }, icon('x'))),
+    el('div', { class: 'lb-info' },
+      el('div', { style: 'min-width:0' }, el('strong', { style: 'overflow-wrap:anywhere' }, m.name), el('span', { class: 'muted num' }, ' · ' + (i + 1) + ' af ' + n),
+        m.size ? el('div', { class: 'muted small' }, size(m.size)) : null),
+      el('a', { class: 'btn btn-sm', href: m.download, download: m.name }, icon('download'), 'Hent fil')));
+}
 function renderLightbox() {
+  if (state.gallery.lbList) { renderListLightbox(state.gallery.lbList); return; }
   const d = state.gallery.album;
   const m = d && d.media[state.gallery.lb];
   if (!m) { $('lightbox').close(); return; }
