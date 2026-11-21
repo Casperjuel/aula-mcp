@@ -66,7 +66,7 @@ import {
 } from './oidc.ts';
 import { ParentContexts } from './parent-contexts.ts';
 import { resolveServerMode, ServerModeError } from './server-mode.ts';
-import { createMcpApp, type McpApp } from './setup.ts';
+import { createMcpApp, type LoginRequired, type McpApp } from './setup.ts';
 import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
@@ -94,9 +94,16 @@ const multiParent =
         oidc: mode.oidc,
         setupLogin: mode.setupLogin,
         verify: createOidcVerifier(mode.oidc),
-        contexts: new ParentContexts({ logger }),
+        contexts: new ParentContexts({
+          logger,
+          loginHint: mode.setupLogin
+            ? `Log in to Aula again at ${mode.setupLogin.publicUrl}, then ask again.`
+            : 'Ask whoever runs aula-mcp to log you in to Aula again.',
+        }),
       }
     : null;
+
+const keepAliveEnabled = process.env.AULA_MCP_KEEPALIVE !== '0';
 
 // In multi-parent mode every request is authenticated, so the server is no
 // longer "anyone who reaches /mcp is the user" and may bind remotely.
@@ -115,6 +122,29 @@ function contextFor(caller: Caller | null): AulaContext {
   if (sharedContext) return sharedContext;
   if (!multiParent || !caller) throw new Error('No caller to pick an Aula session for.');
   return multiParent.contexts.get(caller);
+}
+
+/**
+ * Multi-parent: a parent with no Aula tokens yet gets a session with just the
+ * login tool (see LoginRequired in setup.ts). A token file that can't be read
+ * counts as logged in, so its error reaches the parent through the tools.
+ */
+async function loginRequiredFor(caller: Caller | null): Promise<LoginRequired | undefined> {
+  if (!multiParent || !caller) return undefined;
+  const store = multiParent.contexts.store(caller);
+  const hasTokens = async () => (await store.load().catch(() => 'unreadable')) !== null;
+  if (await hasTokens()) return undefined;
+  return { setupUrl: multiParent.setupLogin?.publicUrl ?? null, loggedIn: hasTokens };
+}
+
+/** A new session's McpApp: the caller's own context, or just the login tool. */
+async function sessionAppFor(caller: Caller | null): Promise<McpApp> {
+  const loginRequired = await loginRequiredFor(caller);
+  return createMcpApp({
+    logger,
+    context: contextFor(caller),
+    ...(loginRequired ? { loginRequired } : {}),
+  });
 }
 
 /** The caller (null in single-parent mode), or the 401/503 to send instead. */
@@ -276,7 +306,7 @@ async function handleMcp(request: Request): Promise<Response> {
 
   let createdSessionId: string | undefined;
 
-  const sessionApp = createMcpApp({ logger, context: contextFor(caller) });
+  const sessionApp = await sessionAppFor(caller);
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
@@ -445,7 +475,7 @@ app.get('/sse', async (c) => {
     });
     // McpServer.connect() binds a single transport, so we instantiate a
     // fresh server per SSE connection; the AulaContext is shared.
-    const sessionApp = createMcpApp({ logger, context: contextFor(caller) });
+    const sessionApp = await sessionAppFor(caller);
     sseSessions.set(sessionId, {
       transport: sseTransport,
       app: sessionApp,
@@ -507,9 +537,11 @@ app.post('/messages', async (c) => {
 
 // Keep the access token renewed in the background so an idle server doesn't
 // let the refresh_token chain go stale. Opt out with AULA_MCP_KEEPALIVE=0.
-// Single-parent only for now; multi-parent contexts have no keep-alive yet.
-if (sharedContext && process.env.AULA_MCP_KEEPALIVE !== '0') {
-  startTokenKeepAlive({ context: sharedContext, logger });
+// Multi-parent mode renews each parent's own context and never reads the
+// shared one.
+if (keepAliveEnabled) {
+  if (multiParent) startTokenKeepAlive({ contexts: () => multiParent.contexts.all(), logger });
+  else if (sharedContext) startTokenKeepAlive({ context: sharedContext, logger });
 }
 
 logger.info('aula-mcp.listening', { host: HOST, port: PORT, mode: mode.kind });
@@ -553,8 +585,9 @@ if (INGRESS_PORT_RAW) {
             storeFor: (caller) => multiParent.contexts.store(caller),
             changed: (caller) => multiParent.contexts.invalidate(caller),
           },
+          autoRenew: keepAliveEnabled,
         }
-      : { logger },
+      : { logger, autoRenew: keepAliveEnabled },
   );
   setupServer = Bun.serve({
     port: ingressPort,

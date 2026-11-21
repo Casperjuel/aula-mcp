@@ -48,6 +48,7 @@ import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
 import { type Caller, callerId } from './oidc.ts';
 import type { SetupLogin } from './setup-login.ts';
+import { DEFAULT_RENEW_WITHIN_SECONDS } from './token-keepalive.ts';
 
 /** Max time we'll hold a login session waiting on the user to pick their
  *  MitID identity after the picker is shown. After this the login rejects
@@ -59,6 +60,8 @@ export interface SetupAppOptions {
   /** Override the token store (tests). Production uses the addon's
    *  EncryptedFileTokenStore under `AULA_MCP_DIR`. */
   store?: TokenStore;
+  /** The background keep-alive renews the tokens (AULA_MCP_KEEPALIVE). */
+  autoRenew?: boolean;
   /** Multi-parent mode: the sign-in, and each parent's own token store. */
   parents?: {
     login: SetupLogin;
@@ -141,13 +144,20 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const record = await storeOf(c).load();
     if (!record) return c.json({ logged_in: false });
     const now = Math.floor(Date.now() / 1000);
+    const { expires_at } = record.tokens;
+    // The keep-alive renews once less than DEFAULT_RENEW_WITHIN_SECONDS is
+    // left, at its next check (every few minutes).
+    const renewsAt = options.autoRenew ? expires_at - DEFAULT_RENEW_WITHIN_SECONDS : null;
     return c.json({
       logged_in: true,
       username: record.username,
       identity_name: record.identityName ?? null,
-      expires_at: record.tokens.expires_at,
-      seconds_remaining: Math.max(0, record.tokens.expires_at - now),
+      expires_at,
+      seconds_remaining: Math.max(0, expires_at - now),
       saved_at: record.saved_at,
+      auto_renew: options.autoRenew === true,
+      renews_at: renewsAt,
+      seconds_until_renew: renewsAt === null ? null : Math.max(0, renewsAt - now),
     });
   });
 
@@ -516,8 +526,18 @@ async function refreshStatus() {
     statusDot.classList.remove('err');
     statusText.textContent = 'Logget ind';
     const expiresMin = Math.round(data.seconds_remaining / 60);
+    let renewal;
+    if (data.auto_renew) {
+      const renewMin = Math.round(data.seconds_until_renew / 60);
+      renewal = 'Automatisk fornyelse er slået til. ' + (renewMin > 0
+        ? 'Næste fornyelse om ca. ' + renewMin + ' min.'
+        : 'Fornyes inden for få minutter.');
+    } else {
+      renewal = 'Automatisk fornyelse er slået fra: access token udløber om ' + expiresMin +
+        ' min. og fornyes først ved næste brug.';
+    }
     statusDetail.textContent = (data.identity_name ? data.identity_name + ' — ' : '') +
-      (data.username) + '. Access token udløber om ' + expiresMin + ' min.';
+      (data.username) + '. ' + renewal;
     statusActions.innerHTML = '';
     const logoutBtn = document.createElement('button');
     logoutBtn.textContent = 'Log ud';
@@ -627,8 +647,7 @@ startBtn.onclick = async () => {
     setStage('Logget ind 🎉', 'success');
     const data = JSON.parse(ev.data);
     progressDetail.textContent = 'Tokens gemt. ' +
-      (data.identityName ? 'Identitet: ' + data.identityName + '. ' : '') +
-      'Access udløber om ' + Math.round((data.expiresInSec || 0) / 60) + ' min.';
+      (data.identityName ? 'Identitet: ' + data.identityName + '. ' : '');
     currentSource.close();
     startBtn.disabled = false;
     await refreshStatus();

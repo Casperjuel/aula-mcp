@@ -14,6 +14,8 @@
  * one entry per machine, which every parent would share.
  */
 
+import type { Dirent } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { EncryptedFileTokenStore, type Logger } from '@aula-mcp/aula-auth';
@@ -37,33 +39,63 @@ export interface ParentContextsOptions {
   logger: Logger;
   /** Defaults to AULA_MCP_DIR, then ~/.config/aula-mcp. */
   baseDir?: string;
+  /** Passed to each parent's AulaContext. */
+  loginHint?: string;
 }
 
 export class ParentContexts {
   private readonly logger: Logger;
   private readonly baseDir: string;
+  private readonly loginHint: string | undefined;
   private readonly contexts = new Map<string, AulaContext>();
 
   constructor(options: ParentContextsOptions) {
     this.logger = options.logger;
     this.baseDir =
       options.baseDir ?? process.env.AULA_MCP_DIR ?? join(homedir(), '.config', 'aula-mcp');
+    this.loginHint = options.loginHint;
   }
 
   /** The caller's own context, created on first use. */
   get(caller: Caller): AulaContext {
-    const id = callerId(caller);
-    let context = this.contexts.get(id);
-    if (!context) {
-      context = new AulaContext({ logger: this.logger, store: this.store(caller) });
-      this.contexts.set(id, context);
-      this.logger.info('aula-mcp.parent_context_created', { parent: id });
-    }
-    return context;
+    return this.forDirectory(callerId(caller));
   }
 
   store(caller: Caller): EncryptedFileTokenStore {
     return parentStore(this.baseDir, caller);
+  }
+
+  /** The context of every parent who has a directory, for the keep-alive. */
+  async all(): Promise<AulaContext[]> {
+    let entries: Dirent[];
+    try {
+      entries = await readdir(join(this.baseDir, 'parents'), { withFileTypes: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    return entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => this.forDirectory(entry.name));
+  }
+
+  /** `id` is a callerId, which is also the parent's directory name. */
+  private forDirectory(id: string): AulaContext {
+    let context = this.contexts.get(id);
+    if (!context) {
+      const dir = join(this.baseDir, 'parents', id);
+      context = new AulaContext({
+        logger: this.logger,
+        store: new EncryptedFileTokenStore({
+          filePath: join(dir, 'tokens.json'),
+          keyFilePath: join(dir, '.key'),
+        }),
+        ...(this.loginHint ? { loginHint: this.loginHint } : {}),
+      });
+      this.contexts.set(id, context);
+      this.logger.info('aula-mcp.parent_context_created', { parent: id });
+    }
+    return context;
   }
 
   /** Drop the caller's cached client, so the next call reads their tokens again. */

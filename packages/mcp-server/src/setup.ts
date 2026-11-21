@@ -8,7 +8,7 @@
 import type { Logger } from '@aula-mcp/aula-auth';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AulaContext } from './aula-context.ts';
-import { type ToolNameStyle, toolNameStyle, underscoreTools } from './tool-names.ts';
+import { type ToolNameStyle, toolName, toolNameStyle, underscoreTools } from './tool-names.ts';
 import { registerTools } from './tools.ts';
 import { VERSION } from './version.ts';
 
@@ -39,6 +39,21 @@ const INSTRUCTIONS = [
   'to poll for it.',
 ].join('\n');
 
+/**
+ * A parent who has not logged in to Aula yet (multi-parent mode). Their
+ * session gets one small tool instead of the whole Aula tool set: every tool
+ * schema is sent to the model with each request, so this keeps a chat that
+ * can't reach Aula anyway cheap, and the model can answer with the login link
+ * straight from the tool description. Once the parent has logged in, calling
+ * the tool swaps in the Aula tools (the client is told the tool list changed).
+ */
+export interface LoginRequired {
+  /** Where the parent logs in to Aula; null without a setup UI. */
+  setupUrl: string | null;
+  /** True once the parent's Aula tokens are saved. */
+  loggedIn(): Promise<boolean>;
+}
+
 export interface McpAppOptions {
   logger: Logger;
   /** Reuse this context instead of creating one. The HTTP server passes one
@@ -47,6 +62,8 @@ export interface McpAppOptions {
   context?: AulaContext;
   /** Defaults to AULA_MCP_TOOL_NAMES; see tool-names.ts. */
   toolNames?: ToolNameStyle;
+  /** Start the session with only the login tool. */
+  loginRequired?: LoginRequired;
 }
 
 export interface McpApp {
@@ -58,9 +75,19 @@ export function createMcpApp({
   logger,
   context = new AulaContext({ logger }),
   toolNames = toolNameStyle(),
+  loginRequired,
 }: McpAppOptions): McpApp {
   const tools =
     toolNames === 'underscore' ? underscoreTools((server) => registerTools(server, context)) : null;
+  const registerAulaTools = (server: McpServer) => {
+    if (tools) tools.registerOn(server);
+    else registerTools(server, context);
+  };
+  const instructions = loginRequired
+    ? loginMessage(loginRequired.setupUrl)
+    : tools
+      ? tools.rewrite(INSTRUCTIONS)
+      : INSTRUCTIONS;
   const mcp = new McpServer(
     {
       name: 'aula-mcp',
@@ -68,10 +95,47 @@ export function createMcpApp({
     },
     {
       capabilities: { tools: {} },
-      instructions: tools ? tools.rewrite(INSTRUCTIONS) : INSTRUCTIONS,
+      instructions,
     },
   );
-  if (tools) tools.registerOn(mcp);
-  else registerTools(mcp, context);
+  if (loginRequired) registerLoginTool(mcp, loginRequired, toolNames, registerAulaTools);
+  else registerAulaTools(mcp);
   return { mcp, context };
+}
+
+export function loginMessage(setupUrl: string | null): string {
+  const where = setupUrl
+    ? `Tell the parent to log in to Aula with MitID at ${setupUrl} and then ask again.`
+    : 'Tell the parent to ask whoever runs aula-mcp to log them in to Aula, then ask again.';
+  return (
+    `The parent is not logged in to Aula, so no Aula data is available. ${where} ` +
+    'Reply with just that, in their language, and do not try anything else.'
+  );
+}
+
+function registerLoginTool(
+  mcp: McpServer,
+  login: LoginRequired,
+  style: ToolNameStyle,
+  registerAulaTools: (server: McpServer) => void,
+): void {
+  const text = (value: string) => ({ content: [{ type: 'text' as const, text: value }] });
+  const tool = mcp.registerTool(
+    toolName('aula.login_required', style),
+    {
+      title: 'Log in to Aula',
+      // The description carries the whole answer, so the model needs no call.
+      description: `${loginMessage(login.setupUrl)} Call this only if the parent says they have logged in now.`,
+      inputSchema: {},
+    },
+    async () => {
+      if (!(await login.loggedIn())) return text(loginMessage(login.setupUrl));
+      tool.remove();
+      registerAulaTools(mcp);
+      return text(
+        'The parent is logged in to Aula now and the Aula tools are available. ' +
+          `Call ${toolName('aula.discover', style)} first, then answer.`,
+      );
+    },
+  );
 }
