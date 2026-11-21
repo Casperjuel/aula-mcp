@@ -16,7 +16,12 @@
 
 import { createHash } from 'node:crypto';
 import { type Logger, silentLogger } from '@aula-mcp/aula-auth';
-import { AulaApiError, type AulaClient, AulaStepUpRequiredError } from '@aula-mcp/aula-client';
+import {
+  AulaApiError,
+  type AulaClient,
+  AulaStepUpRequiredError,
+  type CalendarEvent,
+} from '@aula-mcp/aula-client';
 import { addDays, aulaTs, startOfDayCopenhagen } from './calendar-range.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
 import type { ItemInput, ParentStorage, Storage } from './storage.ts';
@@ -208,16 +213,21 @@ const syncPresence: SyncJob = async ({ client, store, childIds, now }) => {
 };
 
 const syncCalendar: SyncJob = async ({ client, store, now }) => {
-  // Aula 403s calendar reads unless the guardian's own institution profile
-  // is in the list, so use the family ids (guardian + children) like posts.
   const profileIds = await resolveFamilyProfileIds(client);
   if (profileIds.length === 0) return { fetched: 0, changed: 0 };
+  // Aula answers 403 to a window much past four weeks (63 days fails, 28
+  // works on a live account), so read today−7d … +56d in 3-week chunks.
   const today = startOfDayCopenhagen(now);
-  const events = await client.getCalendarEvents({
-    profileIds,
-    start: aulaTs(addDays(today, -7)),
-    end: aulaTs(addDays(today, 56)),
-  });
+  const events: CalendarEvent[] = [];
+  for (let from = -7; from < 56; from += 21) {
+    events.push(
+      ...(await client.getCalendarEvents({
+        profileIds,
+        start: aulaTs(addDays(today, from)),
+        end: aulaTs(addDays(today, Math.min(from + 21, 56))),
+      })),
+    );
+  }
   const byId = new Map<string, ItemInput>();
   for (const event of events) {
     const id = (event as { id?: number | string }).id;
