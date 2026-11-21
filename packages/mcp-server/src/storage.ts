@@ -138,6 +138,8 @@ export interface AuditQuery {
   /** Unix milliseconds: only events before it, for the next page. */
   before?: number;
   limit?: number;
+  /** Events to skip, newest first, for numbered pages. */
+  offset?: number;
 }
 
 /** Which key seals a parent's rows, and how many still wait for it. */
@@ -695,19 +697,13 @@ export class ParentStorage {
   /** Newest first. Empty in a shared view: the owner's log is not shared. */
   async auditLog(query: AuditQuery = {}): Promise<AuditEvent[]> {
     if (this.viewerId !== null) return [];
-    const params: Array<string | number> = [this.parentId];
-    const where = ['parent_id = $1'];
-    const add = (clause: string, value: string | number) => {
-      params.push(value);
-      where.push(clause.replace('?', `$${params.length}`));
-    };
-    if (query.category) add('category = ?', query.category);
-    if (query.ok !== undefined) add('ok = ?', query.ok ? 1 : 0);
-    if (query.before !== undefined) add('at < ?', query.before);
+    const { where, params } = this.auditWhere(query);
     params.push(Math.min(Math.max(query.limit ?? 100, 1), 500));
+    const limit = `$${params.length}`;
+    params.push(Math.max(Math.floor(query.offset ?? 0), 0));
     const rows = await this.db.all<Record<string, unknown>>(
       `SELECT id, at, category, action, ok, duration_ms, details FROM audit_log
-       WHERE ${where.join(' AND ')} ORDER BY at DESC, id LIMIT $${params.length}`,
+       WHERE ${where} ORDER BY at DESC, id LIMIT ${limit} OFFSET $${params.length}`,
       params,
     );
     return rows.map((row) => ({
@@ -719,6 +715,30 @@ export class ParentStorage {
       durationMs: numberOrNull(row.duration_ms),
       details: JSON.parse(String(row.details)) as AuditDetails,
     }));
+  }
+
+  /** How many events match, ignoring `limit` and `offset`. */
+  async auditCount(query: Omit<AuditQuery, 'limit' | 'offset'> = {}): Promise<number> {
+    if (this.viewerId !== null) return 0;
+    const { where, params } = this.auditWhere(query);
+    const rows = await this.db.all<{ count: unknown }>(
+      `SELECT COUNT(*) AS count FROM audit_log WHERE ${where}`,
+      params,
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  private auditWhere(query: AuditQuery): { where: string; params: Array<string | number> } {
+    const params: Array<string | number> = [this.parentId];
+    const where = ['parent_id = $1'];
+    const add = (clause: string, value: string | number) => {
+      params.push(value);
+      where.push(clause.replace('?', `$${params.length}`));
+    };
+    if (query.category) add('category = ?', query.category);
+    if (query.ok !== undefined) add('ok = ?', query.ok ? 1 : 0);
+    if (query.before !== undefined) add('at < ?', query.before);
+    return { where: where.join(' AND '), params };
   }
 
   /** Which key seals this parent's rows. Reads no content. */

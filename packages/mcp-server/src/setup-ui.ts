@@ -905,18 +905,24 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const ok = c.req.query('ok');
     const before = Number(c.req.query('before'));
     const limit = Number(c.req.query('limit'));
-    const [events, key] = await Promise.all([
+    const offset = Number(c.req.query('offset'));
+    const filter = {
+      ...(category && (AUDIT_CATEGORIES as readonly string[]).includes(category)
+        ? { category: category as AuditCategory }
+        : {}),
+      ...(ok === 'true' || ok === 'false' ? { ok: ok === 'true' } : {}),
+      ...(Number.isFinite(before) && before > 0 ? { before } : {}),
+    };
+    const [events, total, key] = await Promise.all([
       store.auditLog({
-        ...(category && (AUDIT_CATEGORIES as readonly string[]).includes(category)
-          ? { category: category as AuditCategory }
-          : {}),
-        ...(ok === 'true' || ok === 'false' ? { ok: ok === 'true' } : {}),
-        ...(Number.isFinite(before) && before > 0 ? { before } : {}),
+        ...filter,
         ...(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
+        ...(Number.isFinite(offset) && offset > 0 ? { offset } : {}),
       }),
+      store.auditCount(filter),
       store.keyStatus(),
     ]);
-    return c.json({ available: true, categories: AUDIT_CATEGORIES, events, key });
+    return c.json({ available: true, categories: AUDIT_CATEGORIES, events, total, key });
   });
 
   // Starts the jobs and answers at once; the page follows them in /data/sync.

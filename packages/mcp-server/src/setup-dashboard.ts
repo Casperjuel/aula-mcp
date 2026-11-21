@@ -236,6 +236,11 @@ main {
 .chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 4px 11px; font-size: .82rem; cursor: pointer; color: var(--ink); }
 .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
 .chip .c { opacity: .7; margin-left: 4px; font-variant-numeric: tabular-nums; }
+.pager-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; margin-top: 12px; }
+.pager { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pager-btn { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; }
+.pager-btn:disabled { opacity: .4; cursor: default; }
+.pager-gap { padding: 0 4px; color: var(--muted); }
 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; min-width: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -803,7 +808,7 @@ const state = {
   summary: null,
   summaryError: null,
   sync: null,
-  audit: { loaded: false, loading: false, available: false, events: [], more: false, category: '', failed: false, key: null, error: null },
+  audit: { loaded: false, loading: false, available: false, events: [], page: 1, total: 0, category: '', failed: false, key: null, error: null },
   live: null,
   liveError: null,
   tools: null,
@@ -2399,33 +2404,58 @@ const AUDIT_DETAIL = {
 };
 const TRIGGER = { schedule: 'tidsplan', manual: 'dig, Kør nu', tool: 'AI-assistent', dashboard: 'dashboard' };
 const auditAction = (e) => (e.category === 'sync' ? (e.action === 'check' ? 'Tjek af login' : jobLabel(e.action)) : e.action.replace(/_/g, ' '));
-async function loadAudit(more) {
+const AUDIT_PAGE = 25;
+async function loadAudit() {
   const a = state.audit;
   if (a.loading) return;
   a.loading = true;
-  const q = new URLSearchParams({ limit: '100' });
+  const q = new URLSearchParams({ limit: String(AUDIT_PAGE), offset: String((a.page - 1) * AUDIT_PAGE) });
   if (a.category) q.set('category', a.category);
   if (a.failed) q.set('ok', 'false');
-  const last = more && a.events.length ? a.events[a.events.length - 1] : null;
-  if (last) q.set('before', String(last.at));
   try {
     const data = await getJson('data/audit?' + q);
     a.available = data.available;
     a.key = data.key || null;
-    a.events = last ? a.events.concat(data.events) : data.events;
-    a.more = data.events.length === 100;
+    a.events = data.events;
+    a.total = data.total ?? data.events.length;
     a.error = null;
   } catch (err) { a.error = err.message; }
   a.loading = false;
   a.loaded = true;
+  // Past the end after the log shrank: go to the last page there is.
+  const pages = Math.max(1, Math.ceil(a.total / AUDIT_PAGE));
+  if (a.page > pages) { a.page = pages; return loadAudit(); }
   rerender('log');
 }
-function auditFilter(patch) { Object.assign(state.audit, patch, { events: [], more: false }); loadAudit(false); rerender('log'); }
+function auditFilter(patch) { Object.assign(state.audit, { page: 1 }, patch); loadAudit(); rerender('log'); }
+function auditPage(page) { state.audit.page = page; loadAudit(); window.scrollTo({ top: 0 }); }
+/** Page numbers to show: five around the current page, plus the first and last; null is a gap. */
+function pageList(page, pages) {
+  const from = Math.max(1, Math.min(page - 2, pages - 4));
+  const to = Math.min(pages, from + 4);
+  const list = [];
+  if (from > 1) list.push(1);
+  if (from > 2) list.push(null);
+  for (let p = from; p <= to; p++) list.push(p);
+  if (to < pages - 1) list.push(null);
+  if (to < pages) list.push(pages);
+  return list;
+}
+function pager(page, pages, go, busy) {
+  if (pages <= 1) return null;
+  const btn = (label, target, extra) => el('button', Object.assign({ class: 'chip pager-btn', disabled: busy || target < 1 || target > pages, onclick: () => go(target) }, extra), label);
+  return el('nav', { class: 'pager', 'aria-label': 'Sider' },
+    btn('‹', page - 1, { 'aria-label': 'Forrige side' }),
+    pageList(page, pages).map((p) => p === null
+      ? el('span', { class: 'pager-gap', 'aria-hidden': 'true' }, '…')
+      : btn(String(p), p, p === page ? { 'aria-current': 'page', 'aria-pressed': 'true' } : { 'aria-label': 'Side ' + p })),
+    btn('›', page + 1, { 'aria-label': 'Næste side' }));
+}
 R.log = () => {
   const a = state.audit;
   const top = head('Log', 'Hvad aula-mcp har gjort for dig de seneste 30 dage: synkroniseringer, handlinger i Aula, login, deling og sletning. Kun antal og numre, aldrig indholdet af beskeder.',
-    el('button', { class: 'btn', disabled: a.loading, onclick: () => auditFilter({}) }, icon('sync'), 'Opdater'));
-  if (!a.loaded) { loadAudit(false); return [top, skeleton()]; }
+    el('button', { class: 'btn', disabled: a.loading, onclick: () => loadAudit() }, icon('sync'), 'Opdater'));
+  if (!a.loaded) { loadAudit(); return [top, skeleton()]; }
   if (a.error && !a.events.length) return [top, banner('warn', 'warn', el('p', {}, 'Kunne ikke hente loggen: ' + a.error))];
   if (!a.available) return [top, storageOff()];
   const k = a.key;
@@ -2454,7 +2484,9 @@ R.log = () => {
               el('span', { class: 'muted' }, (AUDIT_DETAIL[d] || d) + ': '),
               d === 'trigger' ? (TRIGGER[e.details[d]] || String(e.details[d])) : typeof e.details[d] === 'boolean' ? (e.details[d] ? 'ja' : 'nej') : String(e.details[d])))))))))
         : el('p', { class: 'muted' }, a.failed ? 'Ingen fejl i perioden.' : 'Intet i loggen endnu.'),
-      a.more ? el('div', { style: 'margin-top:12px' }, el('button', { class: 'btn btn-sm', disabled: a.loading, onclick: () => loadAudit(true) }, a.loading ? 'Henter…' : 'Vis ældre')) : null),
+      a.total > AUDIT_PAGE ? el('div', { class: 'pager-row' },
+        el('span', { class: 'muted small' }, fmt((a.page - 1) * AUDIT_PAGE + 1) + '–' + fmt(Math.min(a.page * AUDIT_PAGE, a.total)) + ' af ' + fmt(a.total)),
+        pager(a.page, Math.ceil(a.total / AUDIT_PAGE), auditPage, a.loading)) : null),
   ];
 };
 

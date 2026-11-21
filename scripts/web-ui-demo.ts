@@ -596,6 +596,21 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
       changed: [2, 1, 1, 2, 0, 0, 3][i] ?? 0,
     };
   });
+  // Earlier rounds, so the log has more than one page.
+  for (let round = 0; round < 8; round++) {
+    for (const s of syncStatus) {
+      await mine.audit({
+        category: 'sync',
+        action: s.job,
+        ok: !(round === 5 && s.job === 'posts'),
+        durationMs: 280 + ((round * 7 + s.fetched) % 9) * 60,
+        details:
+          round === 5 && s.job === 'posts'
+            ? { error: 'Aula svarede 503' }
+            : { fetched: (s.fetched + round) % 7, changed: round % 3 === 0 ? 1 : 0 },
+      });
+    }
+  }
   for (const s of syncStatus) {
     await mine.audit({
       category: 'sync',

@@ -82,11 +82,21 @@ for (const [name, driver] of backends) {
       expect((await a.auditLog({ category: 'aula' })).map((e) => e.action)).toEqual(['mark_read']);
       expect(await a.auditLog({ before: all[2]?.at ?? 0 })).toEqual([]);
       expect(await store.forParent('b').auditLog()).toHaveLength(1);
+      // Numbered pages: an offset into the same order, and a count of the whole filter.
+      expect((await a.auditLog({ limit: 2, offset: 1 })).map((e) => e.action)).toEqual([
+        'posts',
+        'messages',
+      ]);
+      expect(await a.auditLog({ offset: 3 })).toEqual([]);
+      expect(await a.auditCount()).toBe(3);
+      expect(await a.auditCount({ category: 'sync' })).toBe(2);
+      expect(await a.auditCount({ ok: false })).toBe(1);
 
       await store.shares.grant('a', 'A', 'b@example.dk');
       await store.shares.claim('b', 'b@example.dk');
       const view = await store.sharedWith('b', 'a');
       expect(await view?.auditLog()).toEqual([]);
+      expect(await view?.auditCount()).toBe(0);
       await expect(view?.audit({ category: 'sync', action: 'x', ok: true })).rejects.toThrow();
     });
 

@@ -562,6 +562,12 @@ describe('setup UI sign-in', () => {
     const bLog = (await get('/data/audit', b)).body.events as Array<{ action: string }>;
     expect(bLog.map((e) => e.action)).toEqual(['claim']);
     expect((await get('/data/audit?ok=false', a)).body.events).toEqual([]);
+    const page = (await get('/data/audit?category=sharing&limit=1&offset=1', a)).body as {
+      events: Array<{ action: string }>;
+      total: number;
+    };
+    expect(page.events.map((e) => e.action)).toEqual(['grant']);
+    expect(page.total).toBe(2);
   });
 
   test('a login session belongs to the parent who started it', async () => {
