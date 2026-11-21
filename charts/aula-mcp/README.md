@@ -45,6 +45,7 @@ kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
 | `oidc.issuer` / `oidc.audience` | `""` / `aula-mcp` | Token issuer and required `aud`, multi-parent only. |
 | `oidc.acceptIdToken` | `false` | Also accept Keycloak ID tokens (needed with kagent). |
 | `writeTools` | `false` | Enable write tools (`AULA_MCP_WRITE=1`). |
+| `toolNames` | `""` | `dotted` or `underscore` (`AULA_MCP_TOOL_NAMES`). Empty: `underscore` with `kagent.enabled`, since the Anthropic API refuses tool names with dots. |
 | `encryptionKey.existingSecret` | `""` | Secret with `AULA_MCP_KEY` for the token store. |
 | `persistence.*` | 1Gi PVC | Token store. Kept on uninstall. |
 | `setupUi.enabled` | `false` | Browser login UI on port 8099. **No authentication** in single-parent mode. |
