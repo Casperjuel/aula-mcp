@@ -394,7 +394,7 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_GALLERY_S3_PREFIX` | — | Fx `aula-mcp/`, skal slutte med `/`. |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — | Nøgler til bucketten. |
 | `AULA_MCP_SQLITE_PATH` | `<AULA_MCP_DIR>/aula.db` | SQLite-filen. |
-| `AULA_MCP_DATABASE_URL` | – | PostgreSQL-URL (fx fra en CNPG-secret). Kræves med `AULA_MCP_STORAGE=postgres`. |
+| `AULA_MCP_DATABASE_URL` | – | PostgreSQL-URL (fx fra en CNPG-secret). Kræves med `AULA_MCP_STORAGE=postgres`. Flyt fra sqlite med `bun packages/mcp-server/src/storage-copy.ts <aula.db>` (samme `storage.key`; rækker, der allerede findes, beholdes, og den kan køres igen). |
 | `AULA_MCP_STORAGE_KEY` | `<AULA_MCP_DIR>/storage.key` | Nøglen (base64, 32 bytes) data krypteres med. Uden den genereres en nøglefil. Tag backup af nøglen sammen med databasen; uden den kan data ikke læses. |
 
 ### Wire-transcripts
