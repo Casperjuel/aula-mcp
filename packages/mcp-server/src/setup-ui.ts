@@ -158,13 +158,12 @@ const HENTEFORM = ['picked_up_by', 'self_decider', 'send_home', 'go_home_with'] 
 
 /** This Monday to Sunday next week, in local time. */
 function twoWeeks(now = new Date()): { from: string; to: string } {
-  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 13);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const last = new Date(today);
+  last.setDate(today.getDate() + 13);
   const day = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-  return { from: day(monday), to: day(sunday) };
+  return { from: day(today), to: day(last) };
 }
 
 /** A one-day komme/gå change from the dashboard, or what is wrong with it. */
@@ -401,7 +400,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     }
   });
 
-  // The komme/gå plan, this week and next unless `from` and `to` say otherwise.
+  // The komme/gå plan, today and the next 13 days unless `from` and `to` say otherwise.
   app.get('/data/children/plan', async (c) => {
     const child = Number(c.req.query('child'));
     const from = c.req.query('from');

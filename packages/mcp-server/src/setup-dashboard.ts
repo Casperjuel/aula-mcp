@@ -979,7 +979,9 @@ function loginPanel() {
 }
 /* ---------- genveje for et barn: syg, komme/gå, plan ---------- */
 const HENTEFORM = [['picked_up_by', 'Hentes af'], ['go_home_with', 'Går hjem med'], ['send_home', 'Sendes hjem'], ['self_decider', 'Selvbestemmer']];
-const henteLabel = (a) => (HENTEFORM.find((h) => h[0] === a) || [])[1] || '';
+
+const GO_VERB = { picked_up_by: 'Hentes', go_home_with: 'Går hjem', send_home: 'Sendes hjem' };
+const goText = (a, time, who) => (GO_VERB[a] || 'Går') + ' ' + tm(time) + (who ? (a === 'go_home_with' ? ' med ' : ' af ') + who : '');
 const tm = (s) => { const m = s ? String(s).match(/([0-9]{2}):([0-9]{2})/) : null; return m ? m[1] + ':' + m[2] : ''; };
 const todayKey = () => { const t = new Date(); return keyOf(t.getFullYear(), t.getMonth() + 1, t.getDate()); };
 const KID_ERR = { unknown_child: 'Barnet hører ikke til din login i Aula.', not_reported_sick: 'Aula melder ikke barnet sygt lige nu.', 'not your child': 'Barnet hører ikke til din login i Aula.' };
@@ -1001,7 +1003,7 @@ function kidPill(k) {
 function kidTodayLine(k) {
   const come = k.checkInTime ? 'Kom ' + tm(k.checkInTime) : k.entryTime ? 'Kommer ' + tm(k.entryTime) : '';
   const leave = k.checkOutTime ? 'Gik ' + tm(k.checkOutTime)
-    : k.exitTime ? (henteLabel(k.activityType) || 'Går') + ' ' + tm(k.exitTime) + (k.exitWith ? ' · ' + k.exitWith : '') : '';
+    : k.exitTime ? goText(k.activityType, k.exitTime, k.exitWith) : '';
   const line = [come, leave].filter(Boolean).join(' · ');
   return line ? el('p', { class: 'kid-today' }, 'I dag: ' + line) : null;
 }
@@ -1068,7 +1070,7 @@ function openKid(c) {
           ? item('sun', 'Meld rask igen', 'Tag sygemeldingen tilbage i Aula', () => askSick(false))
           : item('warn', 'Meld syg i dag', 'Institutionen får besked i Aula med det samme', () => askSick(true), true),
         item('door', 'Ændr komme/gå', 'Afleverings- og hentetid for én dag', () => planForm(todayKey())),
-        item('week', 'Se komme/gå-plan', 'Denne og næste uge', () => planList()),
+        item('week', 'Se komme/gå-plan', 'De næste 14 dage', () => planList()),
         item('cal', 'Åbn kalender', 'Begivenheder for familien', () => { d.close(); go('kalender'); })));
   };
   const planRow = (p) => el('button', { class: 'li menu-li', onclick: () => planForm(p.date) },
@@ -1078,7 +1080,7 @@ function openKid(c) {
       el('span', { class: 'li-sub', style: 'display:block' }, p.onVacation ? 'Ferie/fri'
         : [p.entryTime ? 'Kommer ' + tm(p.entryTime) : '',
           p.activityType === 'self_decider' ? 'Selvbestemmer ' + tm(p.selfDeciderStartTime) + '–' + tm(p.selfDeciderEndTime)
-            : p.exitTime ? (henteLabel(p.activityType) || 'Går') + ' ' + tm(p.exitTime) + (p.exitWith ? ' · ' + p.exitWith : '') : '',
+            : p.exitTime ? goText(p.activityType, p.exitTime, p.exitWith) : '',
           p.comment || ''].filter(Boolean).join(' · ') || 'Intet registreret')),
     icon('chev'));
   const planList = async () => {
@@ -1087,7 +1089,7 @@ function openKid(c) {
       const plan = await getJson('data/children/plan?child=' + c.id);
       fill(body, head('Komme/gå for ' + first, true),
         plan.days.length ? el('div', { class: 'list', style: 'max-height:55vh;overflow:auto' }, plan.days.map(planRow))
-          : el('p', { class: 'muted' }, 'Intet registreret i Aula de næste to uger.'),
+          : el('p', { class: 'muted' }, 'Intet registreret i Aula de næste 14 dage.'),
         el('div', { class: 'dlg-actions' }, el('button', { class: 'btn btn-primary', onclick: () => planForm(todayKey()) }, 'Ændr en dag')));
     } catch (err) { fill(body, head('Komme/gå for ' + first, true), el('p', { class: 'error-text' }, 'Kunne ikke hente: ' + kidErr(err))); }
   };
