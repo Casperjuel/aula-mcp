@@ -1020,10 +1020,10 @@ R.oversigt = () => {
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Synkronisering'), el('span', { class: 'v small-v' }, syncPill()), el('button', { class: 'linkish', 'data-go': 'sync' }, 'Se jobs')),
       galleryStat())
       : state.summary ? storageOff() : null,
+    nextEventsPanel(),
     db ? el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, 'Senest gemt'), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Se alt')),
       recent) : null,
-    nextEventsPanel(),
   ];
 };
 
