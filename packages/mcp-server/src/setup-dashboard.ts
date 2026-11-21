@@ -1938,7 +1938,7 @@ R.log = () => {
       a.events.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'count-table' },
         el('thead', {}, el('tr', {}, el('th', {}, 'Tid'), el('th', {}, 'Hvad'), el('th', {}, 'Status'), el('th', { class: 'hide-sm' }, 'Detaljer'))),
         el('tbody', {}, a.events.map((e) => el('tr', {},
-          el('td', { style: 'white-space:nowrap' }, rel(e.at), el('br'), el('span', { class: 'muted small' }, hm(new Date(e.at)) + ':' + pad(new Date(e.at).getSeconds()))),
+          el('td', { style: 'white-space:nowrap' }, rel(new Date(e.at)), el('br'), el('span', { class: 'muted small' }, hm(new Date(e.at)) + ':' + pad(new Date(e.at).getSeconds()))),
           el('td', {}, el('strong', {}, auditAction(e)), el('br'), el('span', { class: 'muted small' }, AUDIT_LABEL[e.category] || e.category)),
           el('td', {}, el('span', { class: 'pill ' + (e.ok ? 'ok' : 'err') }, e.ok ? 'OK' : 'Fejl'),
             e.durationMs ? el('div', { class: 'muted small' }, e.durationMs < 1000 ? e.durationMs + ' ms' : (e.durationMs / 1000).toFixed(1) + ' s') : null),
