@@ -735,9 +735,9 @@ describe('AulaClient ferie requests', () => {
     expect(url).toContain('childIds%5B%5D=42');
     await c.deleteVacation(901);
     const post = http.requested.at(-1);
-    expect(post?.url).toContain('method=calendar.deleteVacation');
+    expect(post?.url).toContain('method=calendar.deleteEvent');
     expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
-    expect(JSON.parse(String(post?.body))).toEqual({ vacationId: 901 });
+    expect(JSON.parse(String(post?.body))).toEqual({ id: 901 });
   });
 });
 

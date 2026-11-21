@@ -357,9 +357,8 @@ export class AulaClient {
    * guardian announced (calendar.addVacation), grouped by child:
    * `[{ child, vacationAnnouncements: [{ vacationId, startDate, endDate,
    * description, isEditable }] }]`. Method and response shape are from the
-   * decompiled Aula app (eisbaw/aulalibre, MIT). NOT verified against the
-   * live API: the parameter name is not known, so `childIds[]` is used as
-   * by getVacationRegistrations, which the same app service sends.
+   * decompiled Aula app (eisbaw/aulalibre, MIT); `childIds[]` as in
+   * getVacationRegistrations, checked against the live API.
    */
   async getVacationAnnouncements(childIds: readonly number[]): Promise<unknown[]> {
     if (childIds.length === 0) return [];
@@ -371,16 +370,17 @@ export class AulaClient {
   }
 
   /**
-   * `calendar.deleteVacation` — remove an announced ferie/fri by the
-   * `vacationId` from getVacationAnnouncements. Method and `{ vacationId }`
-   * body are from the decompiled Aula app (eisbaw/aulalibre, MIT); NOT
-   * verified against the live API.
+   * Remove an announced ferie/fri by the `vacationId` from
+   * getVacationAnnouncements. A ferie is a calendar event whose id is the
+   * vacationId, and the guardian portal removes it with `calendar.deleteEvent`
+   * and `{ id }` (read from the portal's JavaScript). The app's
+   * `calendar.deleteVacation` (eisbaw/aulalibre) answers 404 on the web API.
    *
    * This is a write to the live Aula platform — the MCP server gates the
    * tool that calls it behind `AULA_MCP_WRITE=1`.
    */
   async deleteVacation(vacationId: number): Promise<unknown> {
-    return this.postJson<unknown>('calendar.deleteVacation', JSON.stringify({ vacationId }));
+    return this.postJson<unknown>('calendar.deleteEvent', JSON.stringify({ id: vacationId }));
   }
 
   async getCalendarEvents(args: GetCalendarEventsArgs): Promise<CalendarEvent[]> {
