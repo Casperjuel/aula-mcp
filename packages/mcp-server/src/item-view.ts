@@ -19,9 +19,15 @@ export interface ItemSummary {
   subtitle: string;
   /** A message thread not read in Aula. */
   unread?: boolean;
+  /** Who wrote a message, or the latest message in a thread. */
+  senderRole?: SenderRole;
   /** What the calendar page needs to place and badge an event. */
   event?: EventSummary;
 }
+
+/** Aula's portalRole on a message sender; `other` is system and auto messages. */
+export type SenderRole = 'guardian' | 'employee' | 'child' | 'other';
+export const SENDER_ROLES: readonly SenderRole[] = ['guardian', 'employee', 'child', 'other'];
 
 export interface EventSummary {
   /** Aula's event type, e.g. `event`, `lesson`, `presence_holiday`. */
@@ -54,6 +60,7 @@ export interface ThreadMessageView {
   at: number | null;
   body: string;
   attachments: string[];
+  role: SenderRole;
 }
 
 type Data = Record<string, unknown>;
@@ -87,6 +94,7 @@ export function summarize(item: StoredItem): ItemSummary {
         title: str(d.subject) || 'Uden emne',
         subtitle: str(asData(last.sender).fullName),
         ...(d.read === false ? { unread: true } : {}),
+        senderRole: threadRole(d),
       };
     }
     case 'message':
@@ -94,6 +102,7 @@ export function summarize(item: StoredItem): ItemSummary {
         ...base,
         title: str(asData(d.sender).fullName) || 'Besked',
         subtitle: clip(messageText(d)),
+        senderRole: personRole(d.sender) ?? 'other',
       };
     case 'post':
       return {
@@ -224,7 +233,34 @@ export function threadMessage(item: StoredItem): ThreadMessageView {
     at: item.occurredAt,
     body: messageText(d),
     attachments: attachmentNames(d.attachments),
+    role: personRole(d.sender) ?? 'other',
   };
+}
+
+/** The role a message or thread is filtered and badged by; null for other kinds. */
+export function senderRole(item: StoredItem): SenderRole | null {
+  const d = asData(item.data);
+  if (item.kind === 'message') return personRole(d.sender) ?? 'other';
+  if (item.kind === 'message_thread') return threadRole(d);
+  return null;
+}
+
+/** The latest message's sender, else whoever started the thread. */
+function threadRole(d: Data): SenderRole {
+  return (
+    personRole(asData(d.latestMessage).sender) ??
+    personRole(asData(d.lastMessage).sender) ??
+    personRole(d.creator) ??
+    'other'
+  );
+}
+
+/** A sender's portalRole, on it or on its mailBoxOwner; null when it has none. */
+function personRole(person: unknown): SenderRole | null {
+  const p = asData(person);
+  const raw = (str(p.portalRole) || str(asData(p.mailBoxOwner).portalRole)).toLowerCase();
+  if (!raw) return null;
+  return raw === 'guardian' || raw === 'employee' || raw === 'child' ? raw : 'other';
 }
 
 export const EVENT_TYPE_LABELS: Record<string, string> = {

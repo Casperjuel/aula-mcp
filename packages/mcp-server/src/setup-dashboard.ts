@@ -352,7 +352,7 @@ button.li { width: 100%; background: none; border-left: 0; border-right: 0; bord
 .empty-icon svg { width: 26px; height: 26px; }
 .error-text { color: var(--err); }
 
-/* kalender: a calm hue per event type */
+/* kalender and sender roles: a calm hue per event type and per role */
 :root {
   --hue-blue: #2f5f9e; --hue-blue-soft: #e2ebf7; --hue-teal: #1f7373; --hue-teal-soft: #dbefee;
   --hue-violet: #6b4fa0; --hue-violet-soft: #ece6f5; --hue-rose: #a83b56; --hue-rose-soft: #f6e1e7;
@@ -457,6 +457,14 @@ button.li { width: 100%; background: none; border-left: 0; border-right: 0; bord
   .mo-dow { padding: 6px 2px; font-size: .66rem; }
 }
 
+.role-badge { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 6px; font-size: .74rem; font-weight: 700; white-space: nowrap; border: 0; background: var(--surface-2); color: var(--muted); }
+.role-guardian { background: var(--hue-blue-soft); color: var(--hue-blue); }
+.role-employee { background: var(--accent-soft); color: var(--accent); }
+.role-child { background: var(--hue-violet-soft); color: var(--hue-violet); }
+button.role-badge { cursor: pointer; }
+button.role-badge:hover { text-decoration: underline; }
+.role-counts { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+#roleChips[hidden] { display: none; }
 
 .jobs { display: grid; }
 .job { border-top: 1px solid var(--line); }
@@ -850,7 +858,7 @@ R.oversigt = () => {
     kidsPanel(),
     db ? el('div', { class: 'stats' },
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Gemt i alt'), el('span', { class: 'v' }, fmt(totalCount())), el('button', { class: 'linkish', 'data-go': 'gemt' }, 'Se hvad')),
-      el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Beskedtråde'), el('span', { class: 'v' }, fmt(countOf('message_thread'))), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Gennemse')),
+      el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Beskedtråde'), el('span', { class: 'v' }, fmt(countOf('message_thread'))), roleCounts(), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Gennemse')),
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Synkronisering'), el('span', { class: 'v small-v' }, syncPill()), el('button', { class: 'linkish', 'data-go': 'sync' }, 'Se jobs')),
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Galleri'), el('span', { class: 'v small-v' }, el('span', { class: 'pill neutral' }, 'Kommer snart')), el('button', { class: 'linkish', 'data-go': 'galleri' }, 'Læs mere')))
       : state.summary ? storageOff() : null,
@@ -920,6 +928,7 @@ function browseQuery(offset) {
   const p = new URLSearchParams({ offset: String(offset), limit: '30' });
   if (b.kind) p.set('kind', b.kind);
   if (b.q.trim()) p.set('q', b.q.trim());
+  if (b.role && isMsgKind(b.kind)) p.set('role', b.role);
   const now = Math.floor(Date.now() / 1000);
   if (b.range === '7') { p.set('since', String(now - 7 * 86400)); p.set('until', String(now)); }
   if (b.range === '30') { p.set('since', String(now - 30 * 86400)); p.set('until', String(now)); }
@@ -983,7 +992,8 @@ R.gennemse = () => {
         el('div', { class: 'field' }, el('label', { for: 'q' }, 'Søg'), search),
         el('div', { class: 'field' }, el('label', { for: 'frange' }, 'Dato'), range)),
       el('div', { class: 'chips', role: 'group', 'aria-label': 'Type' },
-        chip('', 'Alle', totalCount()), kinds.map((k) => chip(k, KINDS[k].label, countOf(k))))),
+        chip('', 'Alle', totalCount()), kinds.map((k) => chip(k, KINDS[k].label, countOf(k)))),
+      el('div', { class: 'chips', id: 'roleChips', role: 'group', 'aria-label': 'Afsender', hidden: true })),
     el('div', { class: 'browse', id: 'browse' },
       el('section', { class: 'panel result-panel', style: 'padding:0', id: 'results' }),
       el('section', { class: 'panel detail', id: 'detail' })),
@@ -992,6 +1002,7 @@ R.gennemse = () => {
 function renderResults() {
   const box = $('results'); if (!box) return;
   const b = state.browse;
+  renderRoleChips();
   const title = b.loading && !b.items.length ? 'Henter…' : b.items.length ? 'Viser ' + fmt(b.items.length) + (b.more ? '+' : '') : 'Ingen resultater';
   const rows = b.items.map((it) => {
     const key = it.kind + '/' + it.id;
@@ -1000,7 +1011,7 @@ function renderResults() {
       el('span', { style: 'min-width:0;display:block' },
         el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, it.unread ? el('span', { class: 'unread-dot' }, '● ') : null, it.title), el('span', { class: 'result-date' }, rel(it.occurredAt || it.updatedAt))),
         it.subtitle ? el('span', { class: 'li-sub', style: 'display:block' }, it.subtitle) : null,
-        el('span', { class: 'result-foot' }, el('span', { class: 'tag' }, kindOf(it.kind).one))));
+        el('span', { class: 'result-foot' }, el('span', { class: 'tag' }, kindOf(it.kind).one), roleBadge(it.senderRole))));
   });
   fill(box, 
     el('div', { class: 'panel-head', style: 'padding:14px 16px 0;margin-bottom:6px' }, el('h2', {}, title)),
@@ -1039,7 +1050,7 @@ function renderDetail() {
     back,
     el('p', { class: 'eyebrow' }, k.one),
     el('h2', { style: 'font-size:1.35rem;margin-top:4px;overflow-wrap:anywhere' }, it.title),
-    el('div', { class: 'detail-meta' }, it.subtitle ? el('span', {}, it.subtitle) : null, el('span', {}, longDate(it.occurredAt || it.updatedAt))),
+    el('div', { class: 'detail-meta' }, it.subtitle ? el('span', {}, it.subtitle) : null, roleBadge(it.senderRole), el('span', {}, longDate(it.occurredAt || it.updatedAt))),
     it.fields.length ? el('dl', { class: 'kv' }, it.fields.map(([key, value]) => [el('dt', {}, key), el('dd', {}, value)])) : null,
     it.body ? el('p', { class: 'pre', style: 'max-width:65ch' }, it.body) : null,
     attachList(it.attachments),
@@ -1047,7 +1058,7 @@ function renderDetail() {
       ? el('div', {}, msgs.map((m) => el('div', { class: 'msg' },
           el('div', { class: 'avatar', 'aria-hidden': 'true' }, (m.from || '?').split(' ').map((w) => w.slice(0, 1)).join('').slice(0, 2)),
           el('div', { style: 'min-width:0' },
-            el('div', { class: 'msg-head' }, el('strong', {}, m.from || 'Ukendt afsender'), el('span', { class: 'muted num' }, rel(m.at))),
+            el('div', { class: 'msg-head' }, el('span', { style: 'display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('strong', {}, m.from || 'Ukendt afsender'), roleBadge(m.role)), el('span', { class: 'muted num' }, rel(m.at))),
             el('p', { class: 'msg-body pre' }, m.body),
             attachList(m.attachments)))))
       : el('p', { class: 'muted small' }, 'Beskederne i tråden er ikke hentet endnu. De kommer med næste synkronisering.')) : null,
@@ -1438,6 +1449,42 @@ function nextEventsPanel() {
     list === null ? el('div', { class: 'skel-panel' }, el('div', { class: 'skeleton', style: 'width:60%' }), el('div', { class: 'skeleton', style: 'width:40%' }))
       : list.length ? el('div', { class: 'ev-cards' }, list.map((e) => evRow(e, true)))
         : el('p', { class: 'muted small' }, 'Intet i kalenderen de næste otte uger.'));
+}
+
+/* ---------- afsendere: forælder, personale, barn eller system ---------- */
+const ROLES = [['guardian', 'Forældre', 'Forælder'], ['employee', 'Personale', 'Personale'], ['child', 'Børn', 'Barn'], ['other', 'System', 'System']];
+const roleOne = (r) => (ROLES.find((x) => x[0] === r) || [])[2];
+const roleBadge = (r) => (roleOne(r) ? el('span', { class: 'role-badge role-' + r }, roleOne(r)) : null);
+const isMsgKind = (k) => k === 'message' || k === 'message_thread';
+state.roles = null;
+let rolesAt = 0;
+function ensureRoles(after) {
+  if (!database() || Date.now() - rolesAt < 60000) return;
+  rolesAt = Date.now();
+  getJson('data/messages/roles').then((d) => { state.roles = d; after(); }).catch(() => {});
+}
+function browseRole(kind, role) {
+  state.browse = Object.assign(state.browse, { q: '', kind, range: '', role, items: [], offset: 0, more: false, sel: null, detail: null });
+  go('gennemse');
+}
+function roleCounts() {
+  ensureRoles(() => rerender('oversigt'));
+  const n = state.roles && state.roles.threads;
+  if (!n) return null;
+  return el('span', { class: 'role-counts' }, ROLES.filter(([r]) => r !== 'other' || n.other).map(([r, many]) =>
+    el('button', { class: 'role-badge role-' + r, onclick: () => browseRole('message_thread', r), title: 'Vis tråde, hvor ' + many.toLowerCase() + ' skrev sidst' }, many + ' ', el('span', { class: 'num' }, fmt(n[r])))));
+}
+function renderRoleChips() {
+  const box = $('roleChips'); if (!box) return;
+  const b = state.browse;
+  box.hidden = !isMsgKind(b.kind);
+  if (box.hidden) { fill(box); return; }
+  ensureRoles(renderRoleChips);
+  const n = state.roles && (b.kind === 'message' ? state.roles.messages : state.roles.threads);
+  const cur = b.role || '';
+  fill(box, el('span', { class: 'muted small', style: 'align-self:center;margin-right:2px' }, 'Afsender'),
+    [['', 'Alle']].concat(ROLES).map(([r, many]) => el('button', { class: 'chip', 'aria-pressed': String(cur === r),
+      onclick: () => { b.role = r; loadResults(false); } }, many, n && r ? el('span', { class: 'c' }, fmt(n[r])) : null)));
 }
 
 /* ---------- sync ---------- */
