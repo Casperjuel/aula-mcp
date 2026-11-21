@@ -19,3 +19,26 @@ spec:
     requests:
       storage: {{ .Values.persistence.size }}
 {{- end }}
+{{- with .Values.gallery.persistence }}
+{{- if and .enabled (not .existingClaim) }}
+---
+# Downloaded gallery files. Kept on uninstall like the data volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "aula-mcp.fullname" $ }}-gallery
+  labels:
+    {{- include "aula-mcp.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes:
+    {{- toYaml .accessModes | nindent 4 }}
+  {{- with .storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .size }}
+{{- end }}
+{{- end }}

@@ -100,6 +100,16 @@ spec:
                   name: {{ . }}
                   key: {{ $.Values.encryptionKey.secretKey }}
             {{- end }}
+            {{- if .Values.gallery.persistence.enabled }}
+            - name: AULA_MCP_GALLERY_DIR
+              value: /gallery
+            {{- end }}
+            {{- if not .Values.gallery.downloads }}
+            - name: AULA_MCP_GALLERY
+              value: "0"
+            {{- end }}
+            - name: AULA_MCP_GALLERY_STOP_AT
+              value: {{ .Values.gallery.stopAt | quote }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
@@ -133,6 +143,10 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.gallery.persistence.enabled }}
+            - name: gallery
+              mountPath: /gallery
+            {{- end }}
       volumes:
         - name: data
           {{- if .Values.persistence.enabled }}
@@ -143,6 +157,11 @@ spec:
           {{- end }}
         - name: tmp
           emptyDir: {}
+        {{- if .Values.gallery.persistence.enabled }}
+        - name: gallery
+          persistentVolumeClaim:
+            claimName: {{ .Values.gallery.persistence.existingClaim | default (printf "%s-gallery" (include "aula-mcp.fullname" .)) }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

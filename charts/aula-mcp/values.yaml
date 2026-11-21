@@ -55,6 +55,21 @@ persistence:
   size: 1Gi
   accessModes: ["ReadWriteOnce"]
 
+# Photos and videos from the parents' Aula albums, downloaded by the gallery
+# sync job in original quality with a thumbnail (see README, AULA_MCP_GALLERY_*).
+gallery:
+  # false: albums are still listed, no files are downloaded.
+  downloads: true
+  # Disk use (0-1) of the gallery volume at which downloads pause.
+  stopAt: 0.9
+  # Its own volume, mounted at /gallery. Disabled: files go to /data/gallery.
+  persistence:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    size: 50Gi
+    accessModes: ["ReadWriteOnce"]
+
 service:
   type: ClusterIP
   port: 7878

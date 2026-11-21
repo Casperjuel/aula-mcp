@@ -49,6 +49,9 @@ kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
 | `tokenKeepAlive` | `true` | Renew each parent's Aula access token in the background (`AULA_MCP_KEEPALIVE`). With `false`, tokens are only renewed when a tool is called. |
 | `encryptionKey.existingSecret` | `""` | Secret with `AULA_MCP_KEY` for the token store. |
 | `persistence.*` | 1Gi PVC | Token store. Kept on uninstall. |
+| `gallery.persistence.*` | 50Gi PVC at `/gallery` | Downloaded Aula photos and videos. Kept on uninstall. Disabled: files go under `/data/gallery`. |
+| `gallery.downloads` | `true` | `false` lists albums without downloading files. |
+| `gallery.stopAt` | `0.9` | Disk use of the gallery volume at which downloads pause. |
 | `setupUi.enabled` | `false` | Browser login UI on port 8099. **No authentication** in single-parent mode. |
 | `setupUi.login.url` / `.clientId` / `.clientSecret` | `""` / `aula-mcp-setup` / none | Multi-parent: the UI's public origin and its OIDC client. |
 | `httpRoute.mcp` / `httpRoute.setupUi` | off | Gateway API routes; need `parentRefs`. |
