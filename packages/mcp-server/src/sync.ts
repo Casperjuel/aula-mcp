@@ -16,7 +16,7 @@
 
 import { createHash } from 'node:crypto';
 import { type Logger, silentLogger } from '@aula-mcp/aula-auth';
-import { type AulaClient, AulaStepUpRequiredError } from '@aula-mcp/aula-client';
+import { AulaApiError, type AulaClient, AulaStepUpRequiredError } from '@aula-mcp/aula-client';
 import { addDays, aulaTs, startOfDayCopenhagen } from './calendar-range.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
 import type { ItemInput, ParentStorage, Storage } from './storage.ts';
@@ -207,8 +207,10 @@ const syncPresence: SyncJob = async ({ client, store, childIds, now }) => {
   return { fetched: entries.length, changed: result.changed };
 };
 
-const syncCalendar: SyncJob = async ({ client, store, childIds, now }) => {
-  const profileIds = await childIds();
+const syncCalendar: SyncJob = async ({ client, store, now }) => {
+  // Aula 403s calendar reads unless the guardian's own institution profile
+  // is in the list, so use the family ids (guardian + children) like posts.
+  const profileIds = await resolveFamilyProfileIds(client);
   if (profileIds.length === 0) return { fetched: 0, changed: 0 };
   const today = startOfDayCopenhagen(now);
   const events = await client.getCalendarEvents({
@@ -245,11 +247,17 @@ const syncDirectory: SyncJob = async ({ client, store, childIds }) => {
     const seen = new Set<string>();
     // 1-based pages; stop at an empty page or one that repeats the last.
     for (let page = 1; page <= 20; page++) {
-      const members = findArray(await client.getContactList({ groupId, page }), [
-        'results',
-        'profiles',
-        'contacts',
-      ]).filter((m) => idOf(m) && !seen.has(idOf(m) as string));
+      let list: unknown;
+      try {
+        list = await client.getContactList({ groupId, page });
+      } catch (err) {
+        // Some groups have no contact list (Aula answers 404); skip just that group.
+        if (err instanceof AulaApiError && err.status === 404) break;
+        throw err;
+      }
+      const members = findArray(list, ['results', 'profiles', 'contacts']).filter(
+        (m) => idOf(m) && !seen.has(idOf(m) as string),
+      );
       if (members.length === 0) break;
       for (const member of members) seen.add(idOf(member) as string);
       fetched += members.length;
