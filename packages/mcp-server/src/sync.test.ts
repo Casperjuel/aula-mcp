@@ -154,6 +154,23 @@ describe('other jobs', () => {
     expect(presence?.childId).toBe('11');
   });
 
+  test('calendar reads in windows Aula accepts', async () => {
+    const windows: Array<[string, string]> = [];
+    const client = fakeClient({
+      rawRequest: async () => [{ institutionProfile: { id: 5, role: 'guardian' } }],
+      getCalendarEvents: async ({ start, end }) => {
+        windows.push([start, end]);
+        return [];
+      },
+    });
+    await SYNC_JOB_RUNNERS.calendar(input(client));
+    expect(windows).toHaveLength(3);
+    for (const [start, end] of windows) {
+      expect(Date.parse(end) - Date.parse(start)).toBeLessThanOrEqual(22 * 86_400_000);
+    }
+    expect(windows[1]?.[0]).toBe(windows[0]?.[1] as string);
+  });
+
   test('directory skips a group without a contact list', async () => {
     const client = fakeClient({
       getGroups: async () => [{ id: 40 }, { id: 41 }],
