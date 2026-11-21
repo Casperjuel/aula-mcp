@@ -255,6 +255,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       return c.json({
         user: manifest.user,
         children: manifest.children.map((child) => ({
+          id: child.id,
           name: child.name,
           institution: child.institution?.name ?? null,
         })),

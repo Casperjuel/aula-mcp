@@ -19,6 +19,26 @@ export interface ItemSummary {
   subtitle: string;
   /** A message thread not read in Aula. */
   unread?: boolean;
+  /** What the calendar page needs to place and badge an event. */
+  event?: EventSummary;
+}
+
+export interface EventSummary {
+  /** Aula's event type, e.g. `event`, `lesson`, `presence_holiday`. */
+  type: string;
+  /** Danish label for the type. */
+  typeLabel: string;
+  /** Aula's own ISO times, Danish offset. */
+  start: string;
+  end: string;
+  allDay: boolean;
+  place: string;
+  /** Institution profile ids of the children the event belongs to. */
+  profiles: number[];
+  responseRequired: boolean;
+  /** Danish text for the parent's answer, empty when none is asked for. */
+  response: string;
+  responseDeadline: string;
 }
 
 export interface ItemDetail extends ItemSummary {
@@ -87,11 +107,15 @@ export function summarize(item: StoredItem): ItemSummary {
           .join(' · '),
       };
     case 'calendar_event': {
-      const time = [hhmm(d.startDateTime), hhmm(d.endDateTime)].filter(Boolean).join(' til ');
+      const time =
+        d.allDay === true
+          ? 'Hele dagen'
+          : [hhmm(d.startDateTime), hhmm(d.endDateTime)].filter(Boolean).join(' til ');
       return {
         ...base,
         title: str(d.title) || 'Begivenhed',
-        subtitle: [time, str(asData(d.primaryResource).name)].filter(Boolean).join(' · '),
+        subtitle: [time, eventPlace(d)].filter(Boolean).join(' · '),
+        event: eventSummary(d),
       };
     }
     case 'presence': {
@@ -149,15 +173,26 @@ export function detail(item: StoredItem): ItemDetail {
       attachments = attachmentNames(d.attachments);
       if (d.isImportant === true) field('Vigtigt', 'Ja');
       break;
-    case 'calendar_event':
+    case 'calendar_event': {
+      const event = eventSummary(d);
+      field('Type', event.typeLabel);
       field('Starter', d.startDateTime);
       field('Slutter', d.endDateTime);
-      field('Sted', asData(d.primaryResource).name);
-      field('Type', d.type);
+      if (event.allDay) field('Hele dagen', 'Ja');
+      field('Sted', event.place);
       for (const p of asArray(asData(d.lesson).participants)) {
         field('Lærer', asData(p).teacherName);
       }
+      field('Oprettet af', firstStr(d, ['creatorName']) || str(asData(d.creator).name));
+      field('Institution', d.institutionName);
+      field('Inviterede', names(d.invitedGroups));
+      if (event.responseRequired) field('Svar', event.response);
+      field('Svarfrist', d.responseDeadline);
+      if (d.repeating && typeof d.repeating === 'object') field('Gentages', 'Ja');
+      if (d.private === true) field('Privat', 'Ja');
+      body = htmlToText(firstStr(d, ['description', 'text']));
       break;
+    }
     case 'presence':
       field('Dato', d.date);
       field('Status', summary.subtitle.split(' · ')[0]);
@@ -190,6 +225,58 @@ export function threadMessage(item: StoredItem): ThreadMessageView {
     body: messageText(d),
     attachments: attachmentNames(d.attachments),
   };
+}
+
+export const EVENT_TYPE_LABELS: Record<string, string> = {
+  event: 'Begivenhed',
+  holiday: 'Helligdag/fridag',
+  presence_holiday: 'Ferie/fri (fremmøde)',
+  vacation_registration: 'Ferieregistrering',
+  birthday: 'Fødselsdag',
+  excursion: 'Udflugt',
+  other: 'Andet',
+  school_home_meeting: 'Skole-hjem-samtale',
+  parental_meeting: 'Forældremøde',
+  performance_meeting: 'Udviklingssamtale',
+  lesson: 'Lektion',
+};
+
+const RESPONSE_LABELS: Record<string, string> = {
+  accepted: 'Deltager',
+  declined: 'Deltager ikke',
+  tentative: 'Måske',
+  waiting: 'Ikke besvaret',
+};
+
+function eventSummary(d: Data): EventSummary {
+  const type = str(d.type) || 'event';
+  const status = str(d.responseStatus).toLowerCase();
+  return {
+    type,
+    typeLabel: EVENT_TYPE_LABELS[type] ?? type,
+    start: str(d.startDateTime),
+    end: str(d.endDateTime),
+    allDay: d.allDay === true,
+    place: eventPlace(d),
+    profiles: asArray(d.belongsToProfiles)
+      .map((p) => (typeof p === 'string' && p.trim() ? Number(p) : p))
+      .filter((p): p is number => typeof p === 'number' && Number.isFinite(p)),
+    responseRequired: d.responseRequired === true,
+    response: status ? (RESPONSE_LABELS[status] ?? status) : 'Ikke besvaret',
+    responseDeadline: str(d.responseDeadline),
+  };
+}
+
+function eventPlace(d: Data): string {
+  return str(d.primaryResourceText) || str(asData(d.primaryResource).name);
+}
+
+/** Names from a list of strings or `{ name }` objects. */
+function names(value: unknown): string {
+  return asArray(value)
+    .map((v) => (typeof v === 'string' ? v.trim() : firstStr(asData(v), ['name', 'displayName'])))
+    .filter(Boolean)
+    .join(', ');
 }
 
 /** What a search matches against: the text the parent sees. */
