@@ -5,10 +5,14 @@
  */
 
 import { afterEach, describe, expect, test } from 'bun:test';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Logger, StoredTokenRecord, TokenStore } from '@aula-mcp/aula-auth';
+import { GalleryFiles, GalleryView } from './gallery.ts';
 import { renderDashboard } from './setup-dashboard.ts';
 import { createSetupApp } from './setup-ui.ts';
-import { createStorage, type Storage } from './storage.ts';
+import { createStorage, type ParentStorage, type Storage } from './storage.ts';
 import { sqliteDriver } from './storage-sql.ts';
 import type { ParentSync, SyncJobName, SyncJobStatus } from './sync.ts';
 
@@ -74,12 +78,74 @@ function fakeSync() {
 }
 
 let storage: Storage | undefined;
+let galleryDir: string | undefined;
 afterEach(async () => {
   await storage?.close();
   storage = undefined;
+  if (galleryDir) await rm(galleryDir, { recursive: true, force: true });
+  galleryDir = undefined;
 });
 
-async function setup(options: { login?: boolean; logger?: Logger } = {}) {
+const PHOTO = 'Anna/2026/2026-11-18 Skovtur/IMG_1.jpg';
+const THUMB = '.thumbs/11-1.jpg';
+
+/** One album with a downloaded photo and a video that failed to download. */
+async function seedGallery(store: ParentStorage, root: string) {
+  await store.put([
+    {
+      kind: 'gallery_album',
+      id: '11',
+      occurredAt: 1763453520,
+      data: {
+        album: {
+          id: 11,
+          title: 'Skovtur',
+          creationDate: '2026-11-18T09:12:00+01:00',
+          creator: { name: 'Lærer Lis' },
+          sharedWithGroups: [{ id: 3, name: '2.A' }],
+        },
+        child: 'Anna',
+        folder: 'Anna/2026/2026-11-18 Skovtur',
+        mediaCount: 2,
+      },
+    },
+    {
+      kind: 'gallery_media',
+      id: '11:1',
+      occurredAt: 1763453520,
+      data: {
+        albumId: 11,
+        media: { id: 1, mediaType: 'image', file: { id: 1, name: 'IMG_1.jpg' } },
+        path: PHOTO,
+        thumb: THUMB,
+        sha256: 'ab',
+        bytes: 5,
+        downloadedAt: 1763453600,
+      },
+    },
+    {
+      kind: 'gallery_media',
+      id: '11:2',
+      occurredAt: 1763453530,
+      data: {
+        albumId: 11,
+        media: { id: 2, mediaType: 'video', file: { id: 2, name: 'MOV_2.mp4' } },
+        path: null,
+        thumb: null,
+        sha256: null,
+        bytes: 0,
+        downloadedAt: null,
+        error: 'HTTP 403',
+      },
+    },
+  ]);
+  await mkdir(join(root, 'Anna/2026/2026-11-18 Skovtur'), { recursive: true });
+  await mkdir(join(root, '.thumbs'), { recursive: true });
+  await writeFile(join(root, PHOTO), 'photo');
+  await writeFile(join(root, THUMB), 'th');
+}
+
+async function setup(options: { login?: boolean; logger?: Logger; gallery?: boolean } = {}) {
   storage = await createStorage(sqliteDriver(':memory:'), Buffer.alloc(32, 3), {
     type: 'sqlite',
     location: ':memory:',
@@ -116,6 +182,10 @@ async function setup(options: { login?: boolean; logger?: Logger } = {}) {
       data: { title: `Opslag nummer ${i}` },
     })),
   ]);
+  galleryDir = await mkdtemp(join(tmpdir(), 'aula-gallery-'));
+  const files = new GalleryFiles({ dir: galleryDir, downloads: true, stopAt: 1 });
+  const parentFiles = files.forParent('default');
+  if (options.gallery !== false) await seedGallery(mine, parentFiles.root);
   const store = new MemoryStore();
   if (options.login !== false) await store.save(LOGIN);
   const sync = fakeSync();
@@ -128,9 +198,12 @@ async function setup(options: { login?: boolean; logger?: Logger } = {}) {
       },
       storage: { info: storage.info, forParent: () => mine },
       sync: { forParent: () => sync.sync },
+      ...(options.gallery !== false
+        ? { gallery: { forParent: () => new GalleryView(mine, parentFiles) } }
+        : {}),
     },
   });
-  return { app, mine, sync };
+  return { app, mine, sync, galleryRoot: parentFiles.root };
 }
 
 const json = (body: unknown, headers: Record<string, string> = {}) => ({
@@ -150,6 +223,23 @@ describe('dashboard page', () => {
     for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
       expect(() => new Function(script ?? '')).not.toThrow();
     }
+  });
+
+  test('has the Galleri page instead of a placeholder', () => {
+    const html = renderDashboard();
+    expect(html).not.toContain('Kommer snart');
+    for (const route of [
+      "'data/gallery'",
+      "'data/gallery/albums/'",
+      "'data/gallery/delete'",
+      "'data/gallery/' + variant",
+      "'?download=1'",
+      "runJobs(['gallery'])",
+    ]) {
+      expect(html).toContain(route);
+    }
+    expect(html).toContain('id="lightbox"');
+    expect(html).toContain('Intet slettes i Aula.');
   });
 });
 
@@ -196,7 +286,7 @@ describe('dashboard data routes', () => {
   });
 
   test('deletes one kind or everything, only with a JSON SLET', async () => {
-    const { app, mine } = await setup();
+    const { app, mine, galleryRoot } = await setup();
     const form = await app.request('/data/delete', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -210,11 +300,18 @@ describe('dashboard data routes', () => {
 
     const posts = await app.request('/data/delete', json({ confirm: 'SLET', kind: 'post' }));
     expect(await posts.json()).toEqual({ deleted: 5 });
-    expect((await mine.stats()).map((s) => s.kind).sort()).toEqual(['message', 'message_thread']);
+    expect((await mine.stats()).map((s) => s.kind).sort()).toEqual([
+      'gallery_album',
+      'gallery_media',
+      'message',
+      'message_thread',
+    ]);
 
+    // Everything includes the gallery's rows and its files on disk.
     const all = await app.request('/data/delete', json({ confirm: 'SLET', all: true }));
-    expect(await all.json()).toEqual({ deleted: 4 });
+    expect(await all.json()).toEqual({ deleted: 7 });
     expect(await mine.stats()).toEqual([]);
+    expect(await readdir(galleryRoot)).toEqual([]);
   });
 
   test('starts a sync in the background and shows it queued', async () => {
@@ -275,5 +372,131 @@ describe('dashboard data routes', () => {
     expect(logged).not.toContain('madpakke');
     expect(logged).not.toContain('Skovtur');
     expect(logged).not.toContain('Lærer Lis');
+  });
+});
+
+type GalleryBody = {
+  status: { albums: number; media: number; downloaded: number; waiting: number; failed: number };
+  albums: Array<{
+    id: number;
+    title: string;
+    child: string;
+    downloaded: number;
+    coverMediaId: number | null;
+  }>;
+};
+
+describe('dashboard gallery routes', () => {
+  test('shows the status and albums, filtered by child', async () => {
+    const { app } = await setup();
+    const res = await app.request('/data/gallery');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as GalleryBody;
+    expect(body.status).toMatchObject({
+      albums: 1,
+      media: 2,
+      downloaded: 1,
+      waiting: 1,
+      failed: 1,
+    });
+    expect(body.albums).toEqual([
+      expect.objectContaining({
+        id: 11,
+        title: 'Skovtur',
+        child: 'Anna',
+        downloaded: 1,
+        coverMediaId: 1,
+      }),
+    ]);
+    const none = (await (await app.request('/data/gallery?child=Bo')).json()) as GalleryBody;
+    expect(none.albums).toEqual([]);
+  });
+
+  test('shows an album with its media', async () => {
+    const { app } = await setup();
+    const res = await app.request('/data/gallery/albums/11');
+    const body = (await res.json()) as {
+      album: { title: string; creator: string; groups: string[] };
+      media: Array<{ id: number; type: string; downloaded: boolean; error: string | null }>;
+    };
+    expect(body.album).toMatchObject({ title: 'Skovtur', creator: 'Lærer Lis', groups: ['2.A'] });
+    expect(body.media.map((m) => [m.id, m.type, m.downloaded, m.error])).toEqual([
+      [1, 'image', true, null],
+      [2, 'video', false, 'HTTP 403'],
+    ]);
+    expect((await app.request('/data/gallery/albums/12')).status).toBe(404);
+    expect((await app.request('/data/gallery/albums/elleve')).status).toBe(400);
+  });
+
+  test('serves a stored file and its thumbnail, inline or as a download', async () => {
+    const { app } = await setup();
+    const file = await app.request('/data/gallery/file/11/1');
+    expect(file.status).toBe(200);
+    expect(file.headers.get('content-type')).toBe('image/jpeg');
+    expect(file.headers.get('content-disposition')).toStartWith('inline;');
+    expect(await file.text()).toBe('photo');
+    const download = await app.request('/data/gallery/file/11/1?download=1');
+    expect(download.headers.get('content-disposition')).toBe(
+      "attachment; filename*=UTF-8''IMG_1.jpg",
+    );
+    expect(await (await app.request('/data/gallery/thumb/11/1')).text()).toBe('th');
+    // Not downloaded, or not there at all.
+    expect((await app.request('/data/gallery/file/11/2')).status).toBe(404);
+    expect((await app.request('/data/gallery/file/11/9')).status).toBe(404);
+    expect((await app.request('/data/gallery/file/x/1')).status).toBe(400);
+  });
+
+  test('deletes an album only with a JSON SLET, and keeps it from coming back', async () => {
+    const { app, galleryRoot } = await setup();
+    const form = await app.request('/data/gallery/delete', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'confirm=SLET&albumId=11',
+    });
+    expect(form.status).toBe(415);
+    expect((await app.request('/data/gallery/delete', json({ albumId: 11 }))).status).toBe(400);
+    expect(
+      (await app.request('/data/gallery/delete', json({ confirm: 'slet', all: true }))).status,
+    ).toBe(400);
+    expect((await app.request('/data/gallery/delete', json({ confirm: 'SLET' }))).status).toBe(400);
+    expect(
+      (
+        await app.request(
+          '/data/gallery/delete',
+          json({ confirm: 'SLET', all: true }, { 'sec-fetch-site': 'cross-site' }),
+        )
+      ).status,
+    ).toBe(403);
+    expect((await app.request('/data/gallery/file/11/1')).status).toBe(200);
+
+    const res = await app.request('/data/gallery/delete', json({ confirm: 'SLET', albumId: 11 }));
+    expect(await res.json()).toEqual({ deleted: { albums: 1, files: 1 } });
+    expect((await app.request('/data/gallery/file/11/1')).status).toBe(404);
+    expect(await readdir(galleryRoot)).toEqual([]);
+    const after = (await (await app.request('/data/gallery')).json()) as GalleryBody;
+    expect(after.albums).toEqual([]);
+    // Still shown on its own page, marked as deleted here.
+    const album = (await (await app.request('/data/gallery/albums/11')).json()) as {
+      album: { removed: boolean };
+      media: unknown[];
+    };
+    expect(album).toEqual({ album: expect.objectContaining({ removed: true }), media: [] });
+  });
+
+  test('the generic delete leaves gallery rows to the gallery route', async () => {
+    const { app } = await setup();
+    const res = await app.request('/data/delete', json({ confirm: 'SLET', kind: 'gallery_album' }));
+    expect(res.status).toBe(400);
+    expect((await app.request('/data/gallery/file/11/1')).status).toBe(200);
+  });
+
+  test('is a 404 when the gallery is off', async () => {
+    const { app } = await setup({ gallery: false });
+    expect((await app.request('/data/gallery')).status).toBe(404);
+    expect((await app.request('/data/gallery/albums/11')).status).toBe(404);
+    expect((await app.request('/data/gallery/file/11/1')).status).toBe(404);
+    expect(
+      (await app.request('/data/gallery/delete', json({ confirm: 'SLET', all: true }))).status,
+    ).toBe(404);
   });
 });

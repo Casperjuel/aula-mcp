@@ -76,6 +76,7 @@ export function renderDashboard(signedInAs?: string): string {
 
 <dialog id="confirmDlg" aria-labelledby="confirmTitle"><form method="dialog" class="dlg" id="confirmForm"></form></dialog>
 <dialog id="mitidDlg" aria-labelledby="mitidTitle"><div class="dlg" id="mitidBody"></div></dialog>
+<dialog id="lightbox" aria-label="Billede"><div class="lb" id="lbBody"></div></dialog>
 <dialog id="moreDlg" aria-label="Flere sider"><div class="dlg" id="moreBody"></div></dialog>
 <div class="toast" id="toast" role="status" hidden></div>
 <script>${SCRIPT}</script>
@@ -419,6 +420,48 @@ dialog::backdrop { background: var(--scrim); }
 .otp { font-family: var(--font-mono); font-size: 1.6rem; text-align: center; letter-spacing: .12em; }
 .identity-options { display: grid; gap: 8px; }
 
+.storage-bar { position: relative; height: 14px; border-radius: 99px; background: var(--surface-2); margin: 14px 0 28px; }
+.storage-bar .fill { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--accent); max-width: 100%; }
+.storage-bar .fill.other { background: color-mix(in srgb, var(--muted) 45%, var(--surface-2)); }
+.storage-bar .stop { position: absolute; top: -5px; bottom: -5px; width: 2px; margin-left: -1px; background: var(--err); }
+.storage-bar .stop span { position: absolute; top: 100%; right: 0; margin-top: 4px; font-size: .72rem; color: var(--err); font-weight: 700; white-space: nowrap; }
+.storage-bar .stop.low span { right: auto; left: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .82rem; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.panel-foot { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; margin-top: 14px; }
+.albums { display: grid; gap: 18px 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 160px), 1fr)); }
+.album { background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--ink); display: grid; gap: 4px; align-content: start; min-width: 0; }
+.album-cover { aspect-ratio: 4 / 3; width: 100%; border-radius: 12px; overflow: hidden; position: relative; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); margin-bottom: 4px; }
+.album-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.album-cover > svg, .thumb > svg { width: 28px; height: 28px; }
+.album:hover .album-cover { outline: 2px solid var(--accent); outline-offset: 2px; }
+.album-title { font-weight: 700; font-size: .92rem; line-height: 1.3; overflow-wrap: anywhere; }
+.album-sub { font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.dl-badge { position: absolute; right: 8px; bottom: 8px; background: var(--scrim); color: #fff; font-size: .72rem; padding: 2px 8px; border-radius: 99px; font-weight: 700; }
+.media-grid { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 108px), 1fr)); }
+.thumb { aspect-ratio: 1; width: 100%; border: 0; padding: 0; border-radius: 8px; overflow: hidden; position: relative; cursor: pointer; background: var(--surface-2); color: var(--muted); display: grid; place-items: center; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.thumb:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.thumb .vid { position: absolute; left: 6px; top: 6px; background: var(--scrim); color: #fff; font-size: .7rem; padding: 1px 7px; border-radius: 99px; display: flex; gap: 4px; align-items: center; font-weight: 700; }
+.thumb .vid svg { width: 10px; height: 10px; }
+.thumb .queued { position: absolute; inset: auto 0 0; padding: 4px 6px; background: color-mix(in srgb, var(--surface) 82%, transparent); color: var(--muted); font-size: .72rem; font-weight: 700; text-align: center; }
+.thumb .queued.failed { color: var(--err); }
+#lightbox { max-width: min(1100px, calc(100vw - 24px)); }
+.lb { background: var(--surface); border-radius: 16px; overflow: hidden; border: 1px solid var(--line); }
+.lb-stage { position: relative; background: #0b0f0d; display: grid; place-items: center; min-height: 220px; }
+.lb-stage img, .lb-stage video { width: 100%; max-height: 72vh; object-fit: contain; display: block; }
+.lb-missing { color: #d6dfda; padding: 48px 24px; text-align: center; display: grid; gap: 6px; justify-items: center; max-width: 46ch; }
+.lb-missing svg { width: 32px; height: 32px; }
+.lb-nav, .lb-close { position: absolute; border: 0; background: rgba(255,255,255,.88); color: #17221e; display: grid; place-items: center; cursor: pointer; border-radius: 50%; }
+.lb-nav { top: 50%; transform: translateY(-50%); width: 42px; height: 42px; }
+.lb-nav svg { width: 20px; height: 20px; }
+.lb-prev { left: 10px; } .lb-next { right: 10px; }
+.lb-close { top: 10px; right: 10px; width: 36px; height: 36px; }
+.lb-close svg { width: 18px; height: 18px; }
+.lb-info { padding: 14px 18px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 18px; font-size: .86rem; }
+.lb-info strong { overflow-wrap: anywhere; }
+a.btn { text-decoration: none; }
+
 .toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(86px + env(safe-area-inset-bottom, 0px)); z-index: 60; background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 999px; font-size: .9rem; font-weight: 700; box-shadow: var(--shadow); max-width: calc(100vw - 32px); }
 @media (min-width: 900px) { .toast { bottom: 28px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } }
@@ -461,6 +504,8 @@ const I = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/>',
+  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
+  download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
 };
 const icon = (name, cls) => {
   const span = document.createElement('span');
@@ -492,6 +537,15 @@ const $ = (id) => document.getElementById(id);
 const fill = (node, ...kids) => node.replaceChildren(...kids.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false));
 const fmt = (n) => Number(n || 0).toLocaleString('da-DK');
 const plural = (n, one, many) => fmt(n) + ' ' + (n === 1 ? one : many);
+const UNITS = ['B', 'kB', 'MB', 'GB', 'TB'];
+/** Bytes for people: 1,2 GB. */
+function size(bytes) {
+  let n = Number(bytes || 0);
+  let i = 0;
+  while (n >= 1000 && i < UNITS.length - 1) { n /= 1000; i++; }
+  return n.toLocaleString('da-DK', { maximumFractionDigits: i < 2 ? 0 : 1 }) + ' ' + UNITS[i];
+}
+const pct = (x) => Math.round(Math.min(Math.max(Number(x) || 0, 0), 1) * 100) + ' %';
 
 /* ---------- server ---------- */
 const getJson = async (path) => {
@@ -523,8 +577,8 @@ const KINDS = {
   group: { label: 'Grupper', one: 'Gruppe', icon: 'group', synced: true },
   weekly_plan: { label: 'Ugeplaner', one: 'Ugeplan', icon: 'week', synced: false },
   task: { label: 'Opgaver og lektier', one: 'Opgave', icon: 'task', synced: false },
-  gallery_album: { label: 'Fotoalbum', one: 'Album', icon: 'image', synced: false },
-  gallery_media: { label: 'Billeder og video', one: 'Medie', icon: 'image', synced: false },
+  gallery_album: { label: 'Fotoalbum', one: 'Album', icon: 'image', synced: true },
+  gallery_media: { label: 'Billeder og video', one: 'Medie', icon: 'image', synced: true },
 };
 const kindOf = (k) => KINDS[k] || { label: k, one: k, icon: 'db', synced: false };
 const JOBS = {
@@ -594,6 +648,7 @@ const state = {
   toolFilter: { q: '', access: 'alle', open: new Set() },
   syncOpen: new Set(),
   wasRunning: new Set(),
+  gallery: { data: null, error: null, loading: false, stale: true, child: '', year: '', album: null, albumFor: null, albumError: null, albumLoading: false, lb: 0 },
 };
 const loggedIn = () => Boolean(state.summary && state.summary.login && state.summary.login.logged_in);
 const database = () => (state.summary ? state.summary.database : null);
@@ -620,7 +675,7 @@ async function loadLive(force) {
 /* ---------- shell ---------- */
 const main = $('main');
 function current() { const h = location.hash.slice(1).split('/')[0]; return VIEWS.some((v) => v.id === h) ? h : 'oversigt'; }
-function go(id) { if (current() === id) route(); else location.hash = id; }
+function go(id) { if (location.hash.slice(1) === id) route(); else location.hash = id; }
 function navButton(v, cur, cls) {
   const count = v.id === 'gennemse' && database() ? el('span', { class: 'count' }, fmt(totalCount()))
     : v.id === 'sync' && state.summary && !loggedIn() ? el('span', { class: 'count', style: 'color:var(--warn)' }, 'venter') : null;
@@ -644,6 +699,7 @@ function renderNav(cur) {
 }
 function route() {
   const cur = current();
+  if (cur === 'galleri' || cur === 'slet') state.gallery.stale = true;
   renderNav(cur);
   fill(main, el('div', { class: 'view' }, R[cur]()));
   if (window.innerWidth < 900) window.scrollTo(0, 0);
@@ -745,7 +801,7 @@ R.oversigt = () => {
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Gemt i alt'), el('span', { class: 'v' }, fmt(totalCount())), el('button', { class: 'linkish', 'data-go': 'gemt' }, 'Se hvad')),
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Beskedtråde'), el('span', { class: 'v' }, fmt(countOf('message_thread'))), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Gennemse')),
       el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Synkronisering'), el('span', { class: 'v small-v' }, syncPill()), el('button', { class: 'linkish', 'data-go': 'sync' }, 'Se jobs')),
-      el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Galleri'), el('span', { class: 'v small-v' }, el('span', { class: 'pill neutral' }, 'Kommer snart')), el('button', { class: 'linkish', 'data-go': 'galleri' }, 'Læs mere')))
+      galleryStat())
       : state.summary ? storageOff() : null,
     db ? el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, 'Senest gemt'), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Se alt')),
@@ -959,7 +1015,7 @@ async function runJobs(jobs) {
   try {
     await postJson('data/sync/run', jobs ? { jobs } : {});
     await loadSync();
-    rerender('sync');
+    rerender(current());
     pollSync();
   } catch (err) { toast('Kunne ikke starte: ' + err.message); }
 }
@@ -1011,19 +1067,298 @@ function pollSync() {
     }
   }
   const finished = busy && [...state.wasRunning].some((job) => !busy.includes(job));
+  const galleryDone = busy && state.wasRunning.has('gallery') && !busy.includes('gallery');
   state.wasRunning = new Set(busy || []);
+  if (galleryDone && current() !== 'galleri') loadGallery();
+  else if (galleryDone) state.gallery.stale = true;
   if (finished) { loadSummary().then(() => { renderNav(current()); if (current() !== 'gennemse') route(); }); }
-  if (busy && busy.length) pollTimer = setTimeout(async () => { await loadSync(); rerender('sync'); rerender('oversigt'); pollSync(); }, 2500);
+  if (busy && busy.length) pollTimer = setTimeout(async () => { await loadSync(); rerender('sync'); rerender('oversigt'); rerender('galleri'); pollSync(); }, 2500);
 }
 
 /* ---------- galleri ---------- */
-R.galleri = () => [
-  head('Galleri', 'Billeder og videoer fra Aula, hentet i original kvalitet og ordnet pr. barn og år.'),
-  el('section', { class: 'panel empty' },
+const GALLERY_LEDE = 'Billeder og videoer fra Aula, hentet i original kvalitet og ordnet pr. barn og år.';
+const mediaUrl = (variant, albumId, mediaId, download) =>
+  'data/gallery/' + variant + '/' + encodeURIComponent(String(albumId)) + '/' + encodeURIComponent(String(mediaId)) + (download ? '?download=1' : '');
+const isVideo = (m) => String(m.type || '').toLowerCase().includes('video');
+const galleryStatus = () => (state.gallery.data ? state.gallery.data.status : null);
+const galleryJob = () => (state.sync && state.sync.jobs ? state.sync.jobs.find((j) => j.job === 'gallery') : null);
+const galleryBusy = () => { const j = galleryJob(); return Boolean(j && (j.running || j.queued)); };
+/** 2026-11-18 as 18. nov. 2026, without a trip through time zones. */
+function dayText(ymd) {
+  const [y, m, d] = String(ymd || '').split('-').map(Number);
+  return y && m && d ? d + '. ' + MON[m - 1] + ' ' + y : 'Uden dato';
+}
+function albumInHash() {
+  const part = location.hash.slice(1).split('/')[1];
+  const id = Number(part);
+  return part && Number.isSafeInteger(id) ? id : null;
+}
+async function loadGallery() {
+  const g = state.gallery;
+  g.loading = true;
+  g.stale = false;
+  const child = g.child;
+  try {
+    const d = await getJson('data/gallery' + (child ? '?child=' + encodeURIComponent(child) : ''));
+    if (child === g.child) { g.data = d; g.error = null; } else g.stale = true;
+  } catch (err) {
+    g.error = { status: err.status, message: err.message };
+  }
+  g.loading = false;
+  for (const view of ['galleri', 'oversigt', 'slet']) rerender(view);
+}
+async function loadAlbum(id) {
+  const g = state.gallery;
+  g.albumLoading = true;
+  g.stale = false;
+  if (g.albumFor !== id) { g.album = null; g.albumError = null; g.albumFor = id; }
+  try {
+    const d = await getJson('data/gallery/albums/' + encodeURIComponent(String(id)));
+    if (g.albumFor === id) { g.album = d; g.albumError = null; }
+  } catch (err) {
+    if (g.albumFor === id) g.albumError = { status: err.status, message: err.message };
+  }
+  g.albumLoading = false;
+  rerender('galleri');
+}
+const coverEmpty = (name) => icon(name || 'image');
+/** A thumbnail that turns into the placeholder icon when the file is gone. */
+const lazyImg = (src, fallback) => el('img', { src, alt: '', loading: 'lazy', decoding: 'async', onerror: (e) => e.target.replaceWith(coverEmpty(fallback)) });
+function galleryStat() {
+  const g = state.gallery;
+  const st = galleryStatus();
+  const link = el('button', { class: 'linkish', 'data-go': 'galleri' }, 'Se galleri');
+  if (st) return el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Galleri'), el('span', { class: 'v' }, fmt(st.downloaded)),
+    el('span', { class: 'l num' }, 'af ' + fmt(st.media) + ' hentet · ' + size(st.bytes)), link);
+  return el('div', { class: 'stat' }, el('span', { class: 'l' }, 'Galleri'),
+    el('span', { class: 'v small-v' }, g.error ? el('span', { class: 'pill neutral' }, g.error.status === 404 ? 'Slået fra' : 'Ukendt') : '–'), link);
+}
+function galleryOff() {
+  return el('section', { class: 'panel empty' },
     el('div', { class: 'empty-icon' }, icon('image')),
-    el('h2', {}, 'Kommer snart'),
-    el('p', { style: 'max-width:46ch' }, 'aula-mcp henter ikke billeder og videoer endnu. Når det er klar, kan du se dem her, og de bliver gemt på serveren, til du selv sletter dem.')),
-];
+    el('h2', {}, 'Galleriet er ikke slået til'),
+    el('p', { style: 'max-width:50ch' }, 'Galleriet bruger den lokale lagring på serveren. Når den er slået til med ', el('code', {}, 'AULA_MCP_STORAGE=sqlite'), ' eller ', el('code', {}, 'postgres'),
+      ', henter aula-mcp billeder og videoer fra Aula og gemmer dem her, til du selv sletter dem.'));
+}
+function runGallery() {
+  return el('button', { class: 'btn btn-primary', disabled: !loggedIn() || galleryBusy() || !(state.sync && state.sync.available),
+    title: loggedIn() ? null : 'Log ind på Aula først', onclick: () => { runJobs(['gallery']); toast('Galleriet hentes nu.'); } },
+  icon('sync'), galleryBusy() ? 'Henter…' : 'Hent nu');
+}
+function galleryPill(st) {
+  if (galleryBusy()) return el('span', { class: 'pill run' }, 'Henter');
+  if (!st.downloads) return el('span', { class: 'pill neutral' }, 'Filer hentes ikke');
+  if (st.disk && st.disk.used >= st.stopAt) return el('span', { class: 'pill warn' }, 'Sat på pause');
+  if (!loggedIn()) return el('span', { class: 'pill warn' }, 'Venter på login');
+  if (st.sync && st.sync.failures > 0) return el('span', { class: 'pill err' }, 'Fejl');
+  if (!st.sync) return el('span', { class: 'pill neutral' }, 'Ikke kørt endnu');
+  if (st.waiting) return el('span', { class: 'pill neutral' }, fmt(st.waiting) + ' venter');
+  return el('span', { class: 'pill ok' }, 'Alt hentet');
+}
+function storagePanel(st) {
+  const disk = st.disk;
+  const share = disk && disk.totalBytes ? Math.min(st.bytes / disk.totalBytes, disk.used) : 0;
+  const w = (x) => (Math.min(Math.max(x, 0), 1) * 100).toFixed(2) + '%';
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head', style: 'margin-bottom:0' }, el('h2', {}, 'Plads'),
+      el('span', { class: 'num' }, el('strong', {}, size(st.bytes)), el('span', { class: 'muted' }, ' i galleriet'))),
+    disk ? [
+      el('div', { class: 'storage-bar', role: 'img', 'aria-label': pct(disk.used) + ' af disken er brugt. Hentningen stopper ved ' + pct(st.stopAt) + '.' },
+        el('div', { class: 'fill other', style: 'width:' + w(disk.used) }),
+        el('div', { class: 'fill', style: 'width:' + w(share) }),
+        el('div', { class: 'stop' + (st.stopAt < 0.25 ? ' low' : ''), style: 'left:' + w(st.stopAt) }, el('span', {}, 'stop ' + pct(st.stopAt)))),
+      el('div', { class: 'legend' },
+        el('span', {}, el('i', { style: 'background:var(--accent)' }), 'Galleri ' + size(st.bytes)),
+        el('span', {}, el('i', { style: 'background:color-mix(in srgb, var(--muted) 45%, var(--surface-2))' }), 'Andet ' + size(Math.max(disk.totalBytes - disk.freeBytes - st.bytes, 0))),
+        el('span', {}, el('i', { style: 'background:var(--surface-2);border:1px solid var(--line)' }), 'Fri ' + size(disk.freeBytes))),
+      el('p', { class: 'muted small', style: 'margin-top:10px' }, 'Disken er ' + pct(disk.used) + ' fuld (' + size(disk.totalBytes - disk.freeBytes) + ' af ' + size(disk.totalBytes) + '). Når ' + pct(st.stopAt) + ' er brugt, holder hentningen pause. Intet slettes af sig selv.'),
+    ] : el('p', { class: 'muted small', style: 'margin-top:12px' }, 'Kunne ikke læse, hvor meget plads der er på disken.'));
+}
+function downloadPanel(st) {
+  const sync = st.sync;
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head' }, el('h2', {}, 'Hentning'), galleryPill(st)),
+    el('dl', { class: 'kv' },
+      el('dt', {}, 'Album'), el('dd', { class: 'num' }, fmt(st.albums)),
+      el('dt', {}, 'Medier'), el('dd', { class: 'num' }, fmt(st.media)),
+      el('dt', {}, 'Hentet'), el('dd', { class: 'num' }, el('strong', {}, fmt(st.downloaded)), st.media ? ' (' + pct(st.downloaded / st.media) + ')' : null),
+      el('dt', {}, 'Venter'), el('dd', { class: 'num' }, fmt(st.waiting)),
+      el('dt', {}, 'Fejlet'), el('dd', { class: 'num' + (st.failed ? ' error-text' : '') }, fmt(st.failed), st.failed ? el('span', { class: 'muted' }, ', prøves igen ved næste kørsel') : null),
+      el('dt', {}, 'Seneste'), el('dd', { class: 'num' }, sync && sync.lastRunAt ? rel(sync.lastRunAt) : 'aldrig'),
+      el('dt', {}, 'Næste'), el('dd', { class: 'num' }, !loggedIn() ? 'efter login' : sync && sync.nextRunAt ? rel(sync.nextRunAt) : 'snart')),
+    sync && sync.failures > 0 && sync.lastError ? el('div', { class: 'errbox', style: 'margin-top:12px' }, el('strong', {}, 'Fejl ved seneste kørsel. '), sync.lastError,
+      sync.failures > 1 ? ' (' + sync.failures + ' gange i træk)' : '') : null,
+    el('p', { class: 'muted small', style: 'margin-top:12px' }, 'Op til 300 filer pr. kørsel. Et billede, der ligger i flere album, gemmes kun én gang på disken.'));
+}
+function albumCard(a) {
+  const missing = a.mediaCount - a.downloaded;
+  return el('button', { class: 'album', onclick: () => { location.hash = 'galleri/' + a.id; } },
+    el('span', { class: 'album-cover' },
+      a.coverMediaId !== null && a.coverMediaId !== undefined ? lazyImg(mediaUrl('thumb', a.id, a.coverMediaId)) : coverEmpty(),
+      missing > 0 ? el('span', { class: 'dl-badge' }, fmt(missing) + ' venter') : null),
+    el('span', { class: 'album-title' }, a.title),
+    el('span', { class: 'album-sub' }, (a.date ? dayText(a.date) : 'Uden dato') + ' · ' + a.child),
+    el('span', { class: 'album-sub num' }, fmt(a.downloaded) + ' af ' + fmt(a.mediaCount) + ' hentet' + (a.bytes ? ' · ' + size(a.bytes) : '')));
+}
+R.galleri = () => {
+  const g = state.gallery;
+  if (state.summary && !database()) return [head('Galleri', GALLERY_LEDE), galleryOff()];
+  const albumId = albumInHash();
+  if (albumId !== null) return albumView(albumId);
+  if ((g.stale || (!g.data && !g.error)) && !g.loading) loadGallery();
+  const top = head('Galleri', GALLERY_LEDE, g.data ? runGallery() : null);
+  if (g.error && !g.data) return [top, g.error.status === 404 ? galleryOff() : banner('warn', 'warn', el('p', {}, 'Kunne ikke hente galleriet: ' + g.error.message))];
+  if (!g.data) return [top, el('div', { class: 'grid-2' }, skeleton(), skeleton())];
+  const st = g.data.status;
+  const paused = st.disk && st.disk.used >= st.stopAt;
+  const years = [...new Set(g.data.albums.map((a) => a.year).concat(g.year ? [g.year] : []))].sort().reverse();
+  const list = g.data.albums.filter((a) => !g.year || a.year === g.year);
+  const kids = st.children.filter((c) => c.albums > 0);
+  const chip = (value, label, n) => el('button', { class: 'chip', 'aria-pressed': String(g.child === value),
+    onclick: () => { if (g.child === value) return; g.child = value; g.stale = true; rerender('galleri'); } }, label, el('span', { class: 'c' }, fmt(n)));
+  const year = el('select', { class: 'input', id: 'gyear', onchange: (e) => { g.year = e.target.value; rerender('galleri'); } },
+    el('option', { value: '' }, 'Alle år'), years.map((y) => el('option', { value: y, selected: g.year === y ? true : null }, y)));
+  return [
+    top,
+    !st.downloads ? banner('info', 'info', el('p', {}, el('strong', {}, 'Filerne hentes ikke på denne server. '), 'Albummene vises fra listen i Aula, men billeder og videoer bliver ikke gemt, så længe serveren kører med ', el('code', {}, 'AULA_MCP_GALLERY=0'), '.')) : null,
+    st.downloads && paused ? banner('warn', 'warn', el('p', {}, el('strong', {}, 'Hentningen holder pause. '), 'Disken er ' + pct(st.disk.used) + ' fuld, og grænsen er ' + pct(st.stopAt) + '. Slet album her, eller giv serveren mere plads, så fortsætter den ved næste kørsel.')) : null,
+    el('div', { class: 'grid-2' }, storagePanel(st), downloadPanel(st)),
+    st.albums ? el('section', { class: 'panel filters' },
+      el('div', { class: 'filter-row' },
+        el('div', { class: 'field', role: 'group', 'aria-labelledby': 'gkidLabel' }, el('label', { id: 'gkidLabel' }, 'Barn'),
+          el('div', { class: 'chips' }, chip('', 'Alle', st.albums), kids.map((c) => chip(c.child, c.child, c.albums)))),
+        el('div', { class: 'field' }, el('label', { for: 'gyear' }, 'År'), year))) : null,
+    !st.albums
+      ? el('section', { class: 'panel empty' }, el('div', { class: 'empty-icon' }, icon('image')), el('h2', {}, 'Ingen album endnu'),
+        el('p', { style: 'max-width:46ch' }, 'Galleriet bliver fyldt, når synkroniseringen har hentet album fra Aula. Den kører af sig selv, når du er logget ind.'))
+      : list.length
+        ? el('section', { 'aria-label': 'Album' },
+          el('div', { class: 'panel-head' }, el('h2', {}, plural(list.length, 'album', 'album')), g.loading ? el('span', { class: 'muted small' }, 'Henter…') : null),
+          el('div', { class: 'albums' }, list.map(albumCard)))
+        : el('section', { class: 'panel empty' }, el('p', {}, el('strong', {}, 'Ingen album for det valg.')),
+          el('button', { class: 'btn btn-sm', onclick: () => { g.child = ''; g.year = ''; g.stale = true; rerender('galleri'); } }, 'Nulstil filtre')),
+    st.albums || st.downloaded ? el('section', { class: 'danger-zone' },
+      el('h2', {}, 'Slet hele galleriet'),
+      el('p', {}, 'Sletter den lokale kopi af alle ' + plural(st.albums, 'album', 'album') + ' (' + size(st.bytes) + ') på serveren. Intet slettes i Aula, og de slettede album hentes ikke igen.'),
+      el('div', {}, el('button', { class: 'btn btn-danger', onclick: () => askGalleryDelete(null) }, icon('trash'), 'Slet hele galleriet'))) : null,
+  ];
+};
+function albumView(id) {
+  const g = state.gallery;
+  if ((g.stale || g.albumFor !== id) && !g.albumLoading) loadAlbum(id);
+  const back = el('div', {}, el('button', { class: 'btn btn-sm', onclick: () => { location.hash = 'galleri'; } }, icon('left'), 'Alle album'));
+  if (g.albumFor === id && g.albumError && !g.album) {
+    return [back, head('Album'), g.albumError.status === 404
+      ? el('section', { class: 'panel empty' }, el('p', {}, el('strong', {}, 'Albummet findes ikke her.')), el('p', { class: 'small' }, 'Det er måske slettet fra Aula, eller linket er forkert.'))
+      : banner('warn', 'warn', el('p', {}, 'Kunne ikke hente albummet: ' + g.albumError.message))];
+  }
+  const d = g.albumFor === id ? g.album : null;
+  if (!d) return [back, skeleton()];
+  const a = d.album;
+  const media = d.media;
+  const videos = media.filter(isVideo).length;
+  const parts = [a.date ? dayText(a.date) : 'Uden dato', plural(media.length - videos, 'billede', 'billeder')];
+  if (videos) parts.push(plural(videos, 'video', 'videoer'));
+  if (!a.removed) parts.push(a.downloaded >= a.mediaCount ? 'alt er hentet' : fmt(a.downloaded) + ' af ' + fmt(a.mediaCount) + ' hentet');
+  return [
+    back,
+    el('div', { class: 'view-head' },
+      el('div', { style: 'min-width:0' },
+        el('p', { class: 'eyebrow' }, a.child + ' · ' + a.year),
+        el('h1', { style: 'overflow-wrap:anywhere' }, a.title),
+        el('p', { class: 'lede' }, parts.join(' · '))),
+      a.removed ? null : el('button', { class: 'btn btn-ghost-danger', onclick: () => askGalleryDelete(a) }, icon('trash'), 'Slet album')),
+    a.removed ? banner('info', 'info', el('p', {}, el('strong', {}, 'Du har slettet den lokale kopi af dette album. '), 'Det ligger stadig i Aula, men aula-mcp henter det ikke igen.')) : null,
+    el('section', { class: 'panel' },
+      el('dl', { class: 'kv' },
+        el('dt', {}, 'Oprettet af'), el('dd', {}, a.creator || '–'),
+        el('dt', {}, 'Delt med'), el('dd', {}, a.groups.length ? a.groups.join(', ') : '–'),
+        el('dt', {}, 'Hentet'), el('dd', { class: 'num' }, fmt(a.downloaded) + ' af ' + fmt(a.mediaCount) + (a.bytes ? ' · ' + size(a.bytes) : '')),
+        el('dt', {}, 'Mappe'), el('dd', {}, el('code', {}, a.folder)))),
+    media.length
+      ? el('div', { class: 'media-grid' }, media.map((m, i) => thumbTile(a, m, i)))
+      : el('section', { class: 'panel empty' }, el('p', {}, a.removed ? 'Filerne er slettet her.' : 'Ingen billeder eller videoer i albummet endnu.')),
+  ];
+}
+function thumbTile(a, m, i) {
+  const video = isVideo(m);
+  const src = m.hasThumb ? mediaUrl('thumb', a.id, m.id) : m.downloaded && !video ? mediaUrl('file', a.id, m.id) : null;
+  const what = (video ? 'Video ' : 'Billede ') + (i + 1);
+  return el('button', { class: 'thumb', onclick: () => openLightbox(i),
+    'aria-label': what + (m.downloaded ? '' : m.error ? ', kunne ikke hentes' : ', ikke hentet'),
+    title: m.error ? 'Kunne ikke hentes: ' + m.error : m.title || m.name || null },
+  src ? lazyImg(src, video ? 'play' : 'image') : coverEmpty(video ? 'play' : 'image'),
+  video ? el('span', { class: 'vid' }, icon('play'), 'Video') : null,
+  m.downloaded ? null : el('span', { class: 'queued' + (m.error ? ' failed' : '') }, m.error ? 'Fejlet' : 'Ikke hentet'));
+}
+function openLightbox(i) {
+  state.gallery.lb = i;
+  renderLightbox();
+  const dlg = $('lightbox');
+  if (!dlg.open) dlg.showModal();
+}
+function stepLightbox(step) {
+  const d = state.gallery.album;
+  const n = d ? d.media.length : 0;
+  if (n < 2) return;
+  state.gallery.lb = (state.gallery.lb + step + n) % n;
+  renderLightbox();
+}
+function renderLightbox() {
+  const d = state.gallery.album;
+  const m = d && d.media[state.gallery.lb];
+  if (!m) { $('lightbox').close(); return; }
+  const a = d.album;
+  const n = d.media.length;
+  const video = isVideo(m);
+  const file = mediaUrl('file', a.id, m.id);
+  const name = m.title || m.name || (video ? 'Video' : 'Billede');
+  $('lightbox').setAttribute('aria-label', name);
+  const stage = m.downloaded
+    ? video
+      ? el('video', { src: file, controls: true, preload: 'metadata', playsinline: true })
+      : el('img', { src: file, alt: 'Billede ' + (state.gallery.lb + 1) + ' fra ' + a.title })
+    : el('div', { class: 'lb-missing' }, icon(video ? 'play' : 'image'),
+      el('p', {}, el('strong', {}, m.error ? 'Filen kunne ikke hentes.' : 'Filen er ikke hentet endnu.')),
+      el('p', { class: 'small' }, m.error ? m.error + '. Den prøves igen ved næste kørsel.' : 'Den kommer med en af de næste synkroniseringer.'));
+  const meta = [m.created ? longDate(m.created) : null, m.downloaded && m.bytes ? size(m.bytes) : null, m.tags.length ? m.tags.join(', ') : null].filter(Boolean);
+  fill($('lbBody'),
+    el('div', { class: 'lb-stage' }, stage,
+      n > 1 ? [el('button', { class: 'lb-nav lb-prev', 'aria-label': 'Forrige', onclick: () => stepLightbox(-1) }, icon('left')),
+        el('button', { class: 'lb-nav lb-next', 'aria-label': 'Næste', onclick: () => stepLightbox(1) }, icon('chev'))] : null,
+      el('button', { class: 'lb-close', 'aria-label': 'Luk', onclick: () => $('lightbox').close() }, icon('x'))),
+    el('div', { class: 'lb-info' },
+      el('div', { style: 'min-width:0' }, el('strong', {}, name), el('span', { class: 'muted num' }, ' · ' + (state.gallery.lb + 1) + ' af ' + n),
+        meta.length ? el('div', { class: 'muted small' }, meta.join(' · ')) : null),
+      m.downloaded ? el('a', { class: 'btn btn-sm', href: mediaUrl('file', a.id, m.id, true), download: true }, icon('download'), 'Hent fil') : null));
+}
+function askGalleryDelete(album) {
+  const st = galleryStatus();
+  confirmDialog({
+    danger: true, typed: true, icon: 'trash',
+    title: album ? 'Slet albummet her?' : 'Slet hele galleriet her?',
+    ok: album ? 'Slet album' : 'Slet galleriet',
+    body: [
+      album
+        ? el('p', {}, 'Den lokale kopi af ', el('strong', {}, album.title), ' slettes fra serveren: ' + plural(album.downloaded, 'fil', 'filer') + (album.bytes ? ', ' + size(album.bytes) : '') + '.')
+        : el('p', {}, st ? 'Den lokale kopi af alle ' + plural(st.albums, 'album', 'album') + ' og ' + plural(st.downloaded, 'fil', 'filer') + ' (' + size(st.bytes) + ') slettes fra serveren.' : 'Den lokale kopi af alle album og filer slettes fra serveren.'),
+      el('p', {}, el('strong', {}, 'Intet slettes i Aula. '), album
+        ? 'Albummet er der stadig, men aula-mcp henter det ikke igen.'
+        : 'Albummene er der stadig, men de slettede album hentes ikke igen. Nye album i Aula hentes stadig.'),
+      el('p', {}, el('strong', {}, 'Det kan ikke fortrydes.')),
+    ],
+    onok: async () => {
+      try {
+        const res = await postJson('data/gallery/delete', album ? { confirm: 'SLET', albumId: album.id } : { confirm: 'SLET', all: true });
+        toast(plural(res.deleted.albums, 'album', 'album') + ' og ' + plural(res.deleted.files, 'fil', 'filer') + ' slettet her.');
+        state.gallery.stale = true;
+        state.gallery.albumFor = null;
+        await loadSummary();
+        if (albumInHash() !== null) location.hash = 'galleri'; else route();
+      } catch (err) { toast('Kunne ikke slette: ' + err.message); }
+    },
+  });
+}
 
 /* ---------- værktøjer ---------- */
 const ACC = { read: 'læse', write: 'skrive', raw: 'rå' };
@@ -1124,12 +1459,19 @@ R.live = () => {
 R.slet = () => {
   if (!state.summary) return [head('Slet data'), skeleton()];
   if (!database()) return [head('Slet data'), storageOff()];
-  const kinds = Object.keys(KINDS).filter((k) => KINDS[k].synced || countOf(k) > 0);
+  const kinds = Object.keys(KINDS).filter((k) => !k.startsWith('gallery_') && (KINDS[k].synced || countOf(k) > 0));
+  const g = state.gallery;
+  if ((g.stale || (!g.data && !g.error)) && !g.loading) loadGallery();
+  const gst = galleryStatus();
+  const galleryRow = g.error && !gst ? null : el('div', { class: 'del-row' },
+    el('div', { class: 'del-name' }, typeDot('gallery_album'), el('div', { style: 'min-width:0' }, el('strong', {}, 'Galleri'),
+      el('div', { class: 'li-sub num' }, !gst ? 'Henter…' : gst.albums ? plural(gst.albums, 'album', 'album') + ' · ' + plural(gst.downloaded, 'fil', 'filer') + ' · ' + size(gst.bytes) + '. Hentes ikke igen.' : 'Intet gemt'))),
+    el('button', { class: 'btn btn-sm btn-ghost-danger', disabled: !gst || !(gst.albums || gst.downloaded), onclick: () => askGalleryDelete(null) }, icon('trash'), 'Slet'));
   return [
     head('Slet data', 'Sletter din lokale kopi hos aula-mcp. Det rører ikke noget i Aula. Næste synkronisering henter det, Aula stadig har, igen.'),
     el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, 'Slet en type')),
-      el('div', { class: 'list' }, kinds.map((k) => {
+      el('div', { class: 'list' }, galleryRow, kinds.map((k) => {
         const st = statsOf(k);
         const n = countOf(k);
         return el('div', { class: 'del-row' },
@@ -1163,12 +1505,13 @@ function confirmDialog(opts) {
 function askDelete(kind) {
   const n = kind ? countOf(kind) : totalCount();
   const what = kind ? KINDS[kind].label.toLowerCase() : 'alle dine data';
+  const counted = kind && n === 1 ? KINDS[kind].one.toLowerCase() : what;
   confirmDialog({
     danger: true, typed: true, icon: 'trash',
-    title: kind ? 'Slet ' + fmt(n) + ' ' + what + '?' : 'Slet alle dine data?',
-    ok: kind ? 'Slet ' + what : 'Slet alt for altid',
+    title: kind ? 'Slet ' + fmt(n) + ' ' + counted + '?' : 'Slet alle dine data?',
+    ok: kind ? 'Slet ' + counted : 'Slet alt for altid',
     body: [
-      el('p', {}, kind ? 'Alle gemte ' + what + ' slettes fra aula-mcp.' : 'Alle ' + fmt(n) + ' gemte ting slettes fra aula-mcp.'),
+      el('p', {}, kind ? (n === 1 ? 'Den gemte kopi slettes fra aula-mcp.' : 'Alle gemte ' + what + ' slettes fra aula-mcp.') : 'Alle ' + fmt(n) + ' gemte ting slettes fra aula-mcp, også galleriets billeder og videoer.'),
       el('p', {}, el('strong', {}, 'Det kan ikke fortrydes. '), 'Det, Aula stadig har, kan hentes igen ved næste synkronisering. Det, Aula har slettet, er væk for altid.'),
     ],
     onok: async () => {
@@ -1176,6 +1519,7 @@ function askDelete(kind) {
         const res = await postJson('data/delete', kind ? { kind, confirm: 'SLET' } : { all: true, confirm: 'SLET' });
         await loadSummary();
         state.recent = null;
+        state.gallery.stale = true;
         route();
         toast(plural(res.deleted, 'ting', 'ting') + ' slettet.');
       } catch (err) { toast('Kunne ikke slette: ' + err.message); }
@@ -1302,10 +1646,18 @@ document.addEventListener('click', (e) => {
   if (t.dataset.t) setTheme(t.dataset.t);
 });
 $('themeBtn').addEventListener('click', () => setTheme(isDark() ? 'light' : 'dark'));
-['moreDlg', 'confirmDlg', 'mitidDlg'].forEach((id) => {
+['moreDlg', 'confirmDlg', 'mitidDlg', 'lightbox'].forEach((id) => {
   const dlg = $(id);
   dlg.addEventListener('click', (e) => { if (e.target === dlg) dlg.close('cancel'); });
 });
+// Escape closes the dialog by itself; the arrows step through the album.
+document.addEventListener('keydown', (e) => {
+  if (!$('lightbox').open) return;
+  if (e.key === 'ArrowLeft') { e.preventDefault(); stepLightbox(-1); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); stepLightbox(1); }
+});
+// Emptied on close so a playing video stops.
+$('lightbox').addEventListener('close', () => fill($('lbBody')));
 
 let theme = 'system';
 try { theme = localStorage.getItem('aulamcp-theme') || 'system'; } catch (e) {}
@@ -1316,6 +1668,7 @@ route();
   route();
   pollSync();
   if (database()) {
+    if (!state.gallery.data && !state.gallery.loading) loadGallery();
     getJson('data/items?limit=5').then((d) => { state.recent = d.items; }).catch(() => { state.recent = []; }).then(() => rerender('oversigt'));
   }
   if (loggedIn()) { await loadLive(); rerender('oversigt'); }

@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { type StoredTokenRecord, silentLogger, type TokenStore } from '@aula-mcp/aula-auth';
 import { createLocalJWKSet, exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
+import { GalleryFiles, GalleryView } from './gallery.ts';
 import { type Caller, callerId } from './oidc.ts';
 import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
@@ -70,13 +74,47 @@ beforeAll(async () => {
   issuer = `http://127.0.0.1:${idp.port}/realms/home`;
 });
 
-afterAll(() => idp.stop(true));
+afterAll(async () => {
+  idp.stop(true);
+  await rm(galleryDir, { recursive: true, force: true });
+});
 
 const storage = await createStorage(sqliteDriver(':memory:'), Buffer.alloc(32, 2), {
   type: 'sqlite',
   location: 'test',
 });
 await storage.forParent('parent-a').put([{ kind: 'post', id: '1', data: 'a' }]);
+
+// Parent C has one downloaded photo; parent B has no gallery.
+const galleryDir = await mkdtemp(join(tmpdir(), 'aula-gallery-'));
+const galleryFiles = new GalleryFiles({ dir: galleryDir, downloads: true, stopAt: 1 });
+await storage.forParent('parent-c').put([
+  {
+    kind: 'gallery_album',
+    id: '11',
+    data: {
+      album: { id: 11, title: 'Skovtur' },
+      child: 'Anna',
+      folder: 'Anna/Skovtur',
+      mediaCount: 1,
+    },
+  },
+  {
+    kind: 'gallery_media',
+    id: '11:1',
+    data: {
+      albumId: 11,
+      media: { id: 1, mediaType: 'image', file: { id: 1, name: 'IMG_1.jpg' } },
+      path: 'Anna/Skovtur/IMG_1.jpg',
+      thumb: null,
+      sha256: 'ab',
+      bytes: 5,
+      downloadedAt: 1,
+    },
+  },
+]);
+await mkdir(join(galleryFiles.forParent('parent-c').root, 'Anna/Skovtur'), { recursive: true });
+await writeFile(join(galleryFiles.forParent('parent-c').root, 'Anna/Skovtur/IMG_1.jpg'), 'photo');
 
 function setup(clientSecret?: string) {
   const stores = new Map<string, MemoryStore>();
@@ -109,6 +147,13 @@ function setup(clientSecret?: string) {
       contextFor: (caller) => {
         liveFor.push(caller?.sub ?? 'none');
         throw new Error(`no Aula in tests (${caller?.sub})`);
+      },
+      gallery: {
+        forParent: (caller) =>
+          new GalleryView(
+            storage.forParent(caller?.sub ?? ''),
+            galleryFiles.forParent(caller?.sub ?? 'none'),
+          ),
       },
       sync: {
         forParent: (caller) => ({
@@ -383,6 +428,47 @@ describe('setup UI sign-in', () => {
     expect((await post('/data/sync/run', b, { jobs: ['posts'] })).status).toBe(202);
     expect((await post('/data/sync/run', b, {}, 'https://evil.example.com')).status).toBe(403);
     expect(syncRuns).toEqual([{ sub: 'parent-b', jobs: ['posts'] }]);
+  });
+
+  test('the gallery shows, serves and deletes only for the signed-in parent', async () => {
+    const { app } = setup();
+    expect((await app.request('/data/gallery')).status).toBe(401);
+    expect((await app.request('/data/gallery/file/11/1')).status).toBe(401);
+
+    const c = await signIn(app, 'parent-c');
+    const b = await signIn(app, 'parent-b');
+    const albumsOf = async (cookie: string) =>
+      (
+        (await (await app.request('/data/gallery', { headers: { cookie } })).json()) as {
+          albums: Array<{ id: number }>;
+        }
+      ).albums.map((album) => album.id);
+    expect(await albumsOf(c)).toEqual([11]);
+    expect(await albumsOf(b)).toEqual([]);
+    for (const path of ['/data/gallery/albums/11', '/data/gallery/file/11/1']) {
+      expect((await app.request(path, { headers: { cookie: c } })).status).toBe(200);
+      expect((await app.request(path, { headers: { cookie: b } })).status).toBe(404);
+    }
+
+    const post = (cookie: string, body: unknown, origin = PUBLIC_URL) =>
+      app.request('/data/gallery/delete', {
+        method: 'POST',
+        headers: { cookie, origin, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    // B deleting C's album, or everything, leaves C's alone.
+    expect(await (await post(b, { confirm: 'SLET', albumId: 11 })).json()).toEqual({
+      deleted: { albums: 0, files: 0 },
+    });
+    expect(await (await post(b, { confirm: 'SLET', all: true })).json()).toEqual({
+      deleted: { albums: 0, files: 0 },
+    });
+    expect((await post(c, { confirm: 'SLET', all: true }, 'https://evil.example.com')).status).toBe(
+      403,
+    );
+    expect(
+      await (await app.request('/data/gallery/file/11/1', { headers: { cookie: c } })).text(),
+    ).toBe('photo');
   });
 
   test('a login session belongs to the parent who started it', async () => {
