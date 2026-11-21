@@ -2200,7 +2200,7 @@ async function openEvent(e) {
       title: 'Fjern ferie/fri?',
       ok: 'Fjern i Aula',
       body: [
-        el('p', {}, 'Ferien ' + (e.sk === e.ek ? longDay(e.sk) : longDay(e.sk) + ' til ' + longDay(e.ek)) + ' fjernes i Aula, og barnet forventes igen de dage. Institutionen kan se det med det samme.'),
+        el('p', {}, 'Ferien ' + (vac.startDate === vac.endDate ? longDay(vac.startDate) : longDay(vac.startDate) + ' til ' + longDay(vac.endDate)) + ' fjernes i Aula, og barnet forventes igen de dage. Institutionen kan se det med det samme.'),
         el('p', { class: 'muted small' }, 'Det står i din log under Handlinger i Aula.'),
       ],
       onok: async () => {
@@ -2229,7 +2229,7 @@ async function openEvent(e) {
   if (e.type === 'presence_holiday') {
     // Only the parent's own ferie, and only when Aula lets them remove it.
     getJson('data/children/vacations').then((r) => {
-      vac = r.vacations.find((v) => String(v.vacationId) === String(e.id) && v.editable) || null;
+      vac = r.vacations.find((v) => String(v.vacationId) === String(e.id) && v.editable && v.startDate && v.endDate) || null;
       if (vac && d.open) draw(shown);
     }).catch(() => {});
   }
