@@ -20,7 +20,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
-import { sendSickReport, sickReportRefusal } from './child-actions.ts';
+import {
+  ownChildren,
+  sendSickReport,
+  sickReportRefusal,
+  VACATION_COMMENT_MAX,
+  vacationDays,
+  vacationProblems,
+} from './child-actions.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
 import type { GalleryView } from './gallery.ts';
@@ -801,6 +808,79 @@ export function registerTools(
           args.sick ? 'presence_report_sick' : 'presence_undo_sick',
           { children: args.institutionProfileIds.length },
           () => sendSickReport(client, args.institutionProfileIds, args.sick),
+        );
+        return jsonContent({ ok: true, result });
+      },
+    );
+
+    // --- aula.presence.add_vacation (gated, write) --------------------------
+    //
+    // Aula's calendar.addVacation, not verified against the live API (see
+    // AulaClient.addVacation). There is no known way to delete a registration
+    // through the API, so a mistake must be removed in Aula.
+
+    server.registerTool(
+      'aula.presence.add_vacation',
+      {
+        title: 'Register ferie/fri for a child',
+        description:
+          'Register a planned absence (ferie/fri) for whole days, from startDate to ' +
+          'endDate. WRITES to Aula — enabled when AULA_MCP_WRITE=1. The institution sees ' +
+          'it in its presence overview. aula-mcp cannot delete a registration: a mistake ' +
+          'must be removed in the Aula app, so confirm the child and the dates with the ' +
+          "user before calling. Uses Aula's calendar.addVacation call as the guardian " +
+          'portal sends it; it is not yet verified against the live API, so check the ' +
+          'result with aula.presence.templates (isOnVacation) afterwards. For an answer to ' +
+          "an institution's vacation request (ferieregistrering), use the Aula app.",
+        inputSchema: {
+          institutionProfileIds: z
+            .array(z.number().int().positive())
+            .min(1)
+            .describe(
+              'Child institution-profile ids (aula.discover children[].id). Must belong to ' +
+                'the logged-in guardian; anything else is rejected.',
+            ),
+          startDate: z
+            .string()
+            .describe('First day of the absence, YYYY-MM-DD, today or later (Danish time).'),
+          endDate: z
+            .string()
+            .describe('Last day of the absence, YYYY-MM-DD, within a year of startDate.'),
+          comment: z
+            .string()
+            .max(VACATION_COMMENT_MAX)
+            .optional()
+            .describe(`Optional note to the staff, at most ${VACATION_COMMENT_MAX} characters.`),
+        },
+      },
+      async (args) => {
+        const problems = vacationProblems(args);
+        if (problems.length > 0) return jsonContent({ error: 'invalid', problems });
+        const client = await context.getClient();
+        const children = await ownChildren(client);
+        const unknownIds = args.institutionProfileIds.filter((id) => !children.has(id));
+        if (unknownIds.length > 0) {
+          return jsonContent({
+            error: 'unknown_child',
+            message:
+              'Refusing to write: these institution-profile ids are not children of the ' +
+              'logged-in guardian. Call aula.discover and use children[].id.',
+            unknownIds,
+          });
+        }
+        const result = await audited(
+          'presence_add_vacation',
+          {
+            children: args.institutionProfileIds.length,
+            days: vacationDays(args.startDate, args.endDate),
+          },
+          () =>
+            client.addVacation({
+              childIds: args.institutionProfileIds,
+              startDate: args.startDate,
+              endDate: args.endDate,
+              ...(args.comment ? { comment: args.comment } : {}),
+            }),
         );
         return jsonContent({ ok: true, result });
       },

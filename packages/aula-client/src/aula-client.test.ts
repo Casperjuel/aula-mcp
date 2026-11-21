@@ -646,6 +646,29 @@ describe('AulaClient presence templates', () => {
   });
 });
 
+describe('AulaClient.addVacation', () => {
+  test('posts one interval to calendar.addVacation with CSRF', async () => {
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-9');
+    http.enqueue(
+      { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) }, // post
+    );
+    const c = makeClient(http);
+    await c.addVacation({ childIds: [42], startDate: '2026-12-21', endDate: '2027-01-01' });
+    const post = http.requested[2];
+    expect(post?.method).toBe('POST');
+    expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
+    expect(post?.url).toContain('method=calendar.addVacation');
+    expect(JSON.parse(String(post?.body))).toEqual({
+      childIds: [42],
+      intervals: [{ startDate: '2026-12-21', endDate: '2027-01-01' }],
+      comment: '',
+    });
+  });
+});
+
 describe('AulaClient.getPosts', () => {
   test('scopes the feed to parent=profile and institutionProfileIds[]', async () => {
     const http = new FakeHttp();

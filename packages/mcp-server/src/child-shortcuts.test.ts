@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test';
 import type { StoredTokenRecord, TokenStore } from '@aula-mcp/aula-auth';
 import type { AulaClient } from '@aula-mcp/aula-client';
 import type { AulaContext } from './aula-context.ts';
-import { childPlan, childrenToday } from './child-actions.ts';
+import { childPlan, childrenToday, vacationDays, vacationProblems } from './child-actions.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { createStorage } from './storage.ts';
 import { sqliteDriver } from './storage-sql.ts';
@@ -99,6 +99,10 @@ function fakeClient() {
       calls.push({ method: 'updatePresenceTemplate', args });
       return {};
     },
+    addVacation: async (args: unknown) => {
+      calls.push({ method: 'addVacation', args });
+      return {};
+    },
   };
   return { client: client as unknown as AulaClient, calls };
 }
@@ -150,6 +154,38 @@ describe('child-actions', () => {
     expect(days.map((d) => d.date)).toEqual(['2026-11-23', '2026-11-24']);
     expect(days[0]).toMatchObject({ onVacation: true, activityType: null });
     expect(days[1]).toMatchObject({ activityType: 'self_decider', selfDeciderStartTime: '13:00' });
+  });
+});
+
+describe('vacationProblems', () => {
+  const today = '2026-11-21';
+  test('takes the portal form rules', () => {
+    expect(vacationProblems({ startDate: today, endDate: today }, today)).toEqual([]);
+    expect(vacationProblems({ startDate: '2026-11-20', endDate: today }, today)).toEqual([
+      'startDate must be today or later.',
+    ]);
+    expect(vacationProblems({ startDate: '2026-11-25', endDate: '2026-11-24' }, today)).toEqual([
+      'endDate must not be before startDate.',
+    ]);
+    expect(vacationProblems({ startDate: '2026-12-01', endDate: '2027-12-01' }, today)).toEqual([]);
+    expect(vacationProblems({ startDate: '2026-12-01', endDate: '2027-12-02' }, today)).toEqual([
+      'endDate must be within a year of startDate.',
+    ]);
+    expect(
+      vacationProblems({ startDate: today, endDate: today, comment: 'x'.repeat(251) }, today),
+    ).toEqual(['comment must be at most 250 characters.']);
+    expect(vacationProblems({ startDate: '21-11-2026', endDate: today }, today)).toHaveLength(1);
+  });
+
+  test('29 February runs to 28 February of the next year', () => {
+    const leap = { startDate: '2028-02-29', endDate: '2029-02-28' };
+    expect(vacationProblems(leap, '2028-02-01')).toEqual([]);
+    expect(vacationProblems({ ...leap, endDate: '2029-03-01' }, '2028-02-01')).toHaveLength(1);
+  });
+
+  test('vacationDays counts both ends', () => {
+    expect(vacationDays('2026-12-21', '2026-12-21')).toBe(1);
+    expect(vacationDays('2026-12-21', '2027-01-01')).toBe(12);
   });
 });
 
@@ -229,6 +265,45 @@ describe('dashboard child shortcuts', () => {
     const [entry] = await audit();
     expect(entry).toMatchObject({ action: 'presence_set_template', ok: true });
     expect(entry?.details).toMatchObject({ date: '2026-11-24', activityType: 'picked_up_by' });
+  });
+
+  test('POST /data/children/vacation registers ferie/fri and audits no comment', async () => {
+    const { post, audit, calls } = await setup();
+    const res = await post('/data/children/vacation', {
+      child: 12,
+      startDate: '2099-01-01',
+      endDate: '2099-01-05',
+      comment: ' Skiferie ',
+    });
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([
+      {
+        method: 'addVacation',
+        args: {
+          childIds: [12],
+          startDate: '2099-01-01',
+          endDate: '2099-01-05',
+          comment: 'Skiferie',
+        },
+      },
+    ]);
+    const [entry] = await audit();
+    expect(entry).toMatchObject({ action: 'presence_add_vacation', ok: true });
+    expect(entry?.details).toEqual({ children: 1, days: 5, trigger: 'dashboard' });
+  });
+
+  test('POST /data/children/vacation refuses before it reaches Aula', async () => {
+    const { post, calls } = await setup();
+    const base = { child: 12, startDate: '2099-01-01', endDate: '2099-01-05' };
+    expect((await post('/data/children/vacation', { ...base, child: 99 })).status).toBe(404);
+    expect(
+      (await post('/data/children/vacation', { ...base, startDate: '2020-01-01' })).status,
+    ).toBe(400);
+    expect((await post('/data/children/vacation', { ...base, endDate: '2098-12-31' })).status).toBe(
+      400,
+    );
+    expect((await post('/data/children/vacation', { child: 12 })).status).toBe(400);
+    expect(calls).toEqual([]);
   });
 
   test('POST /data/children/plan validates before it reaches Aula', async () => {

@@ -64,6 +64,8 @@ import {
   ownChildren,
   sendSickReport,
   sickReportRefusal,
+  vacationDays,
+  vacationProblems,
 } from './child-actions.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
@@ -484,6 +486,55 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     await auditOf(c)?.({
       category: 'aula',
       action: 'presence_set_template',
+      ok: true,
+      durationMs: Date.now() - started,
+      details,
+    });
+    return c.json({ ok: true });
+  });
+
+  // Ferie/fri over whole days. Aula's calendar.addVacation, not yet verified
+  // against the live API; a registration can only be removed in Aula.
+  app.post('/data/children/vacation', async (c) => {
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const { child, startDate, endDate } = body;
+    const comment = typeof body.comment === 'string' ? body.comment.trim() : '';
+    if (
+      typeof child !== 'number' ||
+      !Number.isInteger(child) ||
+      typeof startDate !== 'string' ||
+      typeof endDate !== 'string'
+    ) {
+      return c.json({ error: 'give child (an id), startDate and endDate' }, 400);
+    }
+    const problems = vacationProblems({ startDate, endDate, comment });
+    if (problems.length > 0) return c.json({ error: problems.join(' ') }, 400);
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const started = Date.now();
+    const details = { children: 1, days: vacationDays(startDate, endDate) };
+    try {
+      if (!(await ownChildren(client)).has(child)) return c.json({ error: 'not your child' }, 404);
+      await client.addVacation({
+        childIds: [child],
+        startDate,
+        endDate,
+        ...(comment ? { comment } : {}),
+      });
+    } catch (err) {
+      await auditOf(c)?.({
+        category: 'aula',
+        action: 'presence_add_vacation',
+        ok: false,
+        durationMs: Date.now() - started,
+        details: { ...details, error: (err as Error).message.slice(0, 300) },
+      });
+      return aulaFailed(c, 'vacation', err);
+    }
+    await auditOf(c)?.({
+      category: 'aula',
+      action: 'presence_add_vacation',
       ok: true,
       durationMs: Date.now() - started,
       details,

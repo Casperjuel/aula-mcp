@@ -270,6 +270,37 @@ export class AulaClient {
     );
   }
 
+  /**
+   * `calendar.addVacation` — register a planned absence (ferie/fri) for one
+   * or more children over whole days.
+   *
+   * NOT verified against the live API. The payload is the one the guardian
+   * portal's `presence/ADD_ABSENCE` action passes to `calendar.addVacation`
+   * (read from the portal's JavaScript, as documented in nickknissen/aula
+   * PR #184, MIT): `{ childIds, intervals: [{ startDate, endDate }], comment }`
+   * with date-only `YYYY-MM-DD` dates. The success response is undocumented,
+   * so nothing is read from it, and no method to delete a registration is
+   * known: a mistake is removed in Aula itself.
+   *
+   * This is a write to the live Aula platform — the MCP server gates the
+   * tool that calls it behind `AULA_MCP_WRITE=1`.
+   */
+  async addVacation(args: {
+    childIds: number[];
+    startDate: string;
+    endDate: string;
+    comment?: string;
+  }): Promise<unknown> {
+    return this.postJson<unknown>(
+      'calendar.addVacation',
+      JSON.stringify({
+        childIds: args.childIds,
+        intervals: [{ startDate: args.startDate, endDate: args.endDate }],
+        comment: args.comment ?? '',
+      }),
+    );
+  }
+
   async getCalendarEvents(args: GetCalendarEventsArgs): Promise<CalendarEvent[]> {
     const body = JSON.stringify({
       instProfileIds: args.profileIds,

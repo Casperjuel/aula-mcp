@@ -223,7 +223,7 @@ function buildCapabilities(
     presence: {
       summary: writeEnabled
         ? 'Daily presence (arrived/sick/picked up), the recurring komme/gå schedule, ' +
-          'setting drop-off/pickup times, and reporting a child sick.'
+          'setting drop-off/pickup times, reporting a child sick, and registering ferie/fri.'
         : 'Daily presence (arrived/sick/picked up) and the recurring komme/gå ' +
           '(drop-off/pickup) schedule.',
       tools: writeEnabled
@@ -232,6 +232,7 @@ function buildCapabilities(
             'aula.presence.templates',
             'aula.presence.set_template',
             'aula.presence.report_sick',
+            'aula.presence.add_vacation',
           ]
         : ['aula.presence.today', 'aula.presence.templates'],
       ...(writeEnabled
@@ -239,12 +240,15 @@ function buildCapabilities(
             notes:
               'aula.presence.report_sick notifies the institution and applies to today. ' +
               'Confirm the child and the intent with the user before calling it — do not ' +
-              'infer a sick report from a passing mention that a child is unwell.',
+              'infer a sick report from a passing mention that a child is unwell. ' +
+              'aula.presence.add_vacation cannot be undone from aula-mcp; confirm the ' +
+              'child and the dates first.',
           }
         : {
             notes:
               'aula.presence.set_template (writing komme/gå times) and ' +
-              'aula.presence.report_sick (reporting a child sick) are available only ' +
+              'aula.presence.report_sick (reporting a child sick) and ' +
+              'aula.presence.add_vacation (registering ferie/fri) are available only ' +
               'when the server runs with AULA_MCP_WRITE=1.',
           }),
     },

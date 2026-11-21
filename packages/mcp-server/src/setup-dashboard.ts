@@ -1070,6 +1070,7 @@ function openKid(c) {
           ? item('sun', 'Meld rask igen', 'Tag sygemeldingen tilbage i Aula', () => askSick(false))
           : item('warn', 'Meld syg i dag', 'Institutionen får besked i Aula med det samme', () => askSick(true), true),
         item('door', 'Ændr komme/gå', 'Afleverings- og hentetid for én dag', () => planForm(todayKey())),
+        item('sun', 'Meld ferie/fri', 'Hele dage, en eller flere i træk', () => vacationForm()),
         item('week', 'Se komme/gå-plan', 'De næste 14 dage', () => planList()),
         item('cal', 'Åbn kalender', 'Begivenheder for familien', () => { d.close(); go('kalender'); })));
   };
@@ -1155,6 +1156,48 @@ function openKid(c) {
       el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => menu() }, 'Annuller'), save));
     shown();
     await prefill();
+  };
+  const vacationForm = () => {
+    const inp = (id, type, value) => el('input', { class: 'input', id: 'kv-' + id, type, value: value || '' });
+    const from = inp('from', 'date', todayKey());
+    const to = inp('to', 'date', todayKey());
+    const note = el('input', { class: 'input', id: 'kv-comment', type: 'text', maxlength: '250' });
+    from.min = todayKey();
+    to.min = todayKey();
+    from.addEventListener('change', () => { to.min = from.value; if (to.value < from.value) to.value = from.value; });
+    const status = el('p', { class: 'muted small', style: 'margin:0' });
+    const save = el('button', { class: 'btn btn-primary' }, 'Meld ferie/fri');
+    const span = () => from.value === to.value ? longDay(from.value) : longDay(from.value) + ' til ' + longDay(to.value);
+    save.addEventListener('click', () => {
+      if (!from.value || !to.value || to.value < from.value) { status.textContent = 'Vælg en første og en sidste dag.'; return; }
+      const comment = note.value.trim();
+      d.close();
+      confirmDialog({
+        icon: 'sun',
+        title: 'Meld ' + first + ' på ferie/fri?',
+        ok: 'Meld ferie/fri',
+        body: [
+          el('p', {}, c.name + ' meldes på ferie/fri i Aula ' + span() + '. Institutionen kan se det med det samme.'),
+          comment ? el('p', {}, 'Besked: ' + comment) : null,
+          el('p', { class: 'muted small' }, 'Du kan ikke slette ferien herfra. Er den forkert, slettes den i Aula. Det står i din log under Handlinger i Aula.'),
+        ],
+        onok: async () => {
+          try {
+            await postJson('data/children/vacation', { child: c.id, startDate: from.value, endDate: to.value, comment });
+            toast(first + ' er meldt på ferie/fri i Aula');
+          } catch (err) { toast('Kunne ikke: ' + kidErr(err)); }
+          loadKids(true);
+        },
+      });
+    });
+    fill(body, head('Ferie/fri for ' + first, true),
+      el('p', { class: 'muted small', style: 'margin:0' }, 'Hele dage, fra i dag og op til et år frem.'),
+      el('div', { class: 'form-grid' },
+        el('div', { class: 'field' }, el('label', { for: 'kv-from' }, 'Første dag'), from),
+        el('div', { class: 'field' }, el('label', { for: 'kv-to' }, 'Sidste dag'), to)),
+      el('div', { class: 'field' }, el('label', { for: 'kv-comment' }, 'Besked til personalet (valgfri)'), note),
+      status,
+      el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => menu() }, 'Annuller'), save));
   };
   menu();
   if (!d.open) d.showModal();

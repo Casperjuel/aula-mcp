@@ -191,3 +191,42 @@ export async function childPlan(
     }))
     .sort((a, b) => a.date.localeCompare(b.date));
 }
+
+/** Longest comment the guardian portal's absence form takes. */
+export const VACATION_COMMENT_MAX = 250;
+
+/** Today in Copenhagen, `YYYY-MM-DD`. */
+export function copenhagenToday(now = new Date()): string {
+  return now.toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' });
+}
+
+/**
+ * What is wrong with a ferie/fri registration, empty when nothing is. The
+ * guardian portal's form rules: from today on, the end not before the start
+ * and within a year of it, and a comment of at most 250 characters.
+ */
+export function vacationProblems(
+  args: { startDate: string; endDate: string; comment?: string | undefined },
+  today = copenhagenToday(),
+): string[] {
+  const problems: string[] = [];
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  if (!day.test(args.startDate) || !day.test(args.endDate)) {
+    return ['startDate and endDate must be YYYY-MM-DD.'];
+  }
+  if (args.startDate < today) problems.push('startDate must be today or later.');
+  if (args.endDate < args.startDate) problems.push('endDate must not be before startDate.');
+  const [y, m, d] = args.startDate.split('-');
+  // 29 February counts to 28 February of the next year.
+  const yearLater = `${Number(y) + 1}-${m}-${m === '02' && d === '29' ? '28' : d}`;
+  if (args.endDate > yearLater) problems.push('endDate must be within a year of startDate.');
+  if ((args.comment ?? '').length > VACATION_COMMENT_MAX) {
+    problems.push(`comment must be at most ${VACATION_COMMENT_MAX} characters.`);
+  }
+  return problems;
+}
+
+/** Days from startDate to endDate, both included. */
+export function vacationDays(startDate: string, endDate: string): number {
+  return Math.round((Date.parse(endDate) - Date.parse(startDate)) / 86_400_000) + 1;
+}
