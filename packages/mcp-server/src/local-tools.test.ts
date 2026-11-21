@@ -97,6 +97,7 @@ describe('aula.local tools', () => {
   test('every tool is listed with a description', async () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
+      'aula.local.activity',
       'aula.local.calendar',
       'aula.local.get',
       'aula.local.message_roles',
@@ -146,6 +147,20 @@ describe('aula.local tools', () => {
     ).json();
     expect(meetings.events).toHaveLength(1);
     expect(meetings.events[0].typeLabel).toBeTruthy();
+  });
+
+  test('activity counts per day, the month of since by default', async () => {
+    const nov = (await call('aula.local.activity', { since: '2026-11-15' })).json();
+    expect(nov.until).toBe('2026-11-30T22:59:59.000Z');
+    expect(nov.days).toEqual([{ day: '2026-11-20', counts: { message: 2 } }]);
+    expect(nov.totals).toEqual({ message: 2, gallery_media: 0, post: 0, notification: 0 });
+    const posts = (
+      await call('aula.local.activity', { since: '2026-11-01', kinds: ['post'] })
+    ).json();
+    expect(posts).toMatchObject({ totals: { post: 0 }, days: [] });
+    expect(
+      (await call('aula.local.activity', { since: '2026-01-01', until: '2027-06-01' })).isError,
+    ).toBe(true);
   });
 
   test('message_roles counts by sender', async () => {

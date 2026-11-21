@@ -59,7 +59,13 @@ import type { AulaContext } from './aula-context.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
 import { detail, SENDER_ROLES, type SenderRole, summarize } from './item-view.ts';
-import { roleCounts, searchItems, threadMessages } from './local-data.ts';
+import {
+  ACTIVITY_MAX_DAYS,
+  activityByDay,
+  roleCounts,
+  searchItems,
+  threadMessages,
+} from './local-data.ts';
 import { type Caller, callerId } from './oidc.ts';
 import { renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
@@ -334,6 +340,21 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       more: found.more,
       ...(found.truncated ? { search_truncated: true } : {}),
     });
+  });
+
+  // How many messages, media, posts and notifications arrived each day.
+  app.get('/data/activity', async (c) => {
+    const store = storageOf(c);
+    if (!store) return c.json({ error: 'local storage is off' }, 404);
+    const since = optionalInt(c.req.query('since'));
+    const until = optionalInt(c.req.query('until'));
+    if (since === undefined || until === undefined || Number.isNaN(since) || Number.isNaN(until)) {
+      return c.json({ error: 'since and until are required unix seconds' }, 400);
+    }
+    if (until < since || until - since > ACTIVITY_MAX_DAYS * 86400) {
+      return c.json({ error: `the range must be 0 to ${ACTIVITY_MAX_DAYS} days` }, 400);
+    }
+    return c.json({ days: await activityByDay(store, since, until) });
   });
 
   // How many threads and messages each kind of sender wrote, for this parent.

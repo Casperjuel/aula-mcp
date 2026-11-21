@@ -225,6 +225,25 @@ export class ParentStorage {
     return rows.map((row) => this.decode(row));
   }
 
+  /**
+   * When each item of these kinds happened, between `since` and `until`
+   * (unix seconds, inclusive). Reads only kind and time, never the content.
+   */
+  async occurrences(
+    kinds: readonly ItemKind[],
+    since: number,
+    until: number,
+  ): Promise<Array<{ kind: ItemKind; at: number }>> {
+    if (!kinds.length) return [];
+    const marks = kinds.map((_, i) => `$${i + 4}`).join(', ');
+    const rows = await this.db.all<{ kind: ItemKind; occurred_at: unknown }>(
+      `SELECT kind, occurred_at FROM items
+       WHERE parent_id = $1 AND occurred_at >= $2 AND occurred_at <= $3 AND kind IN (${marks})`,
+      [this.parentId, since, until, ...kinds],
+    );
+    return rows.map((row) => ({ kind: row.kind, at: Number(row.occurred_at) }));
+  }
+
   async stats(): Promise<KindStats[]> {
     const rows = await this.db.all<{
       kind: ItemKind;

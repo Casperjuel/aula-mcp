@@ -98,6 +98,46 @@ export async function roleCounts(store: ParentStorage): Promise<RoleCounts> {
   };
 }
 
+/** What is counted per day: what arrived in Aula, not calendar events. */
+export const ACTIVITY_KINDS = ['message', 'gallery_media', 'post', 'notification'] as const;
+export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+
+/** Most days one activity request may span. */
+export const ACTIVITY_MAX_DAYS = 400;
+
+export interface DayActivity {
+  /** YYYY-MM-DD, Danish time. */
+  day: string;
+  counts: Partial<Record<ActivityKind, number>>;
+}
+
+const CPH_DAY = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Copenhagen',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+/** How many messages, media, posts and notifications arrived each Danish day, oldest first. */
+export async function activityByDay(
+  store: ParentStorage,
+  since: number,
+  until: number,
+  kinds: readonly ActivityKind[] = ACTIVITY_KINDS,
+): Promise<DayActivity[]> {
+  const days = new Map<string, Partial<Record<ActivityKind, number>>>();
+  for (const { kind, at } of await store.occurrences(kinds, since, until)) {
+    const day = CPH_DAY.format(new Date(at * 1000));
+    const counts = days.get(day) ?? {};
+    const k = kind as ActivityKind;
+    counts[k] = (counts[k] ?? 0) + 1;
+    days.set(day, counts);
+  }
+  return [...days.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([day, counts]) => ({ day, counts }));
+}
+
 /** The stored messages of a thread, oldest first. */
 export async function threadMessages(store: ParentStorage, threadId: string) {
   return (await store.list({ kind: 'message', idPrefix: `${threadId}:`, limit: 500 }))

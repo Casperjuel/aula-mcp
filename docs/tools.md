@@ -18,6 +18,7 @@ Every MCP tool the server offers. Read tools are always on; write tools need
 | [`aula.local.search`](#aulalocalsearch) | read | Search stored Aula data |
 | [`aula.local.get`](#aulalocalget) | read | One stored item in full |
 | [`aula.local.calendar`](#aulalocalcalendar) | read | Stored calendar |
+| [`aula.local.activity`](#aulalocalactivity) | read | What arrived each day |
 | [`aula.local.message_roles`](#aulalocalmessage_roles) | read | Who writes the messages |
 | [`aula.discover`](#auladiscover) | read | Discover Aula context |
 | [`aula.profiles.list`](#aulaprofileslist) | read | List Aula profiles |
@@ -155,6 +156,18 @@ The caller's stored Aula calendar events in a date range, oldest first, with typ
 | `since` | string | no | From, default today: an ISO date (Copenhagen midnight) or date-time. |
 | `until` | string | no | Until, default 14 days after since: an ISO date (Copenhagen midnight) or date-time. |
 | `types` | array | no | Only these event types. |
+
+## `aula.local.activity`
+
+**What arrived each day** · read
+
+How much arrived in the caller's Aula each day, from the local database: per Danish day the number of messages (single messages, by send time), gallery_media (photos and videos, by upload time), posts (by publish time) and notifications. Only days with something are listed, oldest first, plus totals for the range. Defaults to the current month; at most 400 days. Use it for "what happened in November" or "which days had many photos", then aula.local.search with kind, since and until set to that day for the items themselves. Calendar events are in aula.local.calendar. Only as far back as the sync has stored. Never calls Aula.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `since` | string | no | From, default the first of this month: an ISO date (Copenhagen midnight) or date-time. |
+| `until` | string | no | Until, default the end of the month of since: an ISO date (Copenhagen midnight) or date-time. |
+| `kinds` | array | no | Only these: message, gallery_media, post, notification. Default all. |
 
 ## `aula.local.message_roles`
 

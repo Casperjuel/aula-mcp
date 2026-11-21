@@ -9,7 +9,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { addDays, startOfDayCopenhagen } from './calendar-range.ts';
 import { detail, type ItemSummary, summarize } from './item-view.ts';
-import { roleCounts, searchItems, threadMessages } from './local-data.ts';
+import {
+  ACTIVITY_KINDS,
+  ACTIVITY_MAX_DAYS,
+  activityByDay,
+  roleCounts,
+  searchItems,
+  threadMessages,
+} from './local-data.ts';
 import { ITEM_KINDS, type ParentStorage } from './storage.ts';
 
 const KIND_TEXT =
@@ -190,6 +197,49 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
   );
 
   server.registerTool(
+    'aula.local.activity',
+    {
+      title: 'What arrived each day',
+      description:
+        "How much arrived in the caller's Aula each day, from the local database: per " +
+        'Danish day the number of messages (single messages, by send time), gallery_media ' +
+        '(photos and videos, by upload time), posts (by publish time) and notifications. ' +
+        'Only days with something are listed, oldest first, plus totals for the range. ' +
+        'Defaults to the current month; at most 400 days. Use it for "what happened in ' +
+        'November" or "which days had many photos", then aula.local.search with kind, ' +
+        'since and until set to that day for the items themselves. Calendar events are ' +
+        'in aula.local.calendar. Only as far back as the sync has stored. Never calls Aula.',
+      inputSchema: {
+        since: dateArg('From, default the first of this month'),
+        until: dateArg('Until, default the end of the month of since'),
+        kinds: z
+          .array(z.enum(ACTIVITY_KINDS))
+          .optional()
+          .describe('Only these: message, gallery_media, post, notification. Default all.'),
+      },
+    },
+    async (args) => {
+      const since = parseDate(args.since) ?? startOfMonthCopenhagen(new Date());
+      const until =
+        parseDate(args.until) ??
+        startOfMonthCopenhagen(
+          addDays(new Date(startOfMonthCopenhagen(new Date(since * 1000)) * 1000), 32),
+        ) - 1;
+      if (until < since || until - since > ACTIVITY_MAX_DAYS * 86400) {
+        return errorContent(
+          `until must be after since and at most ${ACTIVITY_MAX_DAYS} days later.`,
+        );
+      }
+      const kinds = args.kinds?.length ? args.kinds : ACTIVITY_KINDS;
+      const days = await activityByDay(store, since, until, kinds);
+      const totals: Record<string, number> = Object.fromEntries(kinds.map((k) => [k, 0]));
+      for (const d of days)
+        for (const [k, n] of Object.entries(d.counts)) totals[k] = (totals[k] ?? 0) + n;
+      return jsonContent({ since: iso(since), until: iso(until), totals, days });
+    },
+  );
+
+  server.registerTool(
     'aula.local.message_roles',
     {
       title: 'Who writes the messages',
@@ -202,6 +252,16 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
     },
     async () => jsonContent(await roleCounts(store)),
   );
+}
+
+/** Unix seconds of midnight, Danish time, on the first of the month `d` falls in there. */
+function startOfMonthCopenhagen(d: Date): number {
+  const month = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Copenhagen',
+    year: 'numeric',
+    month: '2-digit',
+  }).format(d);
+  return parseDate(`${month}-01`) as number;
 }
 
 /** A summary for an agent: ISO times instead of unix seconds. */

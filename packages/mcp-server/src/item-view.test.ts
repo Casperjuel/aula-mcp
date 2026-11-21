@@ -264,6 +264,39 @@ describe('GET /data/messages/roles', () => {
   });
 });
 
+describe('GET /data/activity', () => {
+  const nov = `since=${Date.parse('2026-11-01T00:00:00+01:00') / 1000}&until=${Date.parse('2026-12-01T00:00:00+01:00') / 1000 - 1}`;
+
+  test('counts per Danish day and kind, for this parent only', async () => {
+    const a = await app();
+    await storage?.forParent('default').put([
+      // 23:30 and 00:30 in Copenhagen: two different days.
+      { kind: 'post', id: 'p', occurredAt: '2026-11-20T22:30:00Z', data: {} },
+      { kind: 'gallery_media', id: 'm1', occurredAt: '2026-11-20T23:30:00Z', data: {} },
+      { kind: 'gallery_media', id: 'm2', occurredAt: '2026-11-21T10:00:00Z', data: {} },
+      { kind: 'calendar_event', id: 'e', occurredAt: '2026-11-21T10:00:00Z', data: {} },
+      { kind: 'gallery_media', id: 'old', occurredAt: '2026-10-31T10:00:00Z', data: {} },
+    ]);
+    await storage
+      ?.forParent('other')
+      .put([{ kind: 'post', id: 'x', occurredAt: '2026-11-20T10:00:00Z', data: {} }]);
+    const body = await (await a.request(`/data/activity?${nov}`)).json();
+    expect(body).toEqual({
+      days: [
+        { day: '2026-11-20', counts: { post: 1 } },
+        { day: '2026-11-21', counts: { gallery_media: 2 } },
+      ],
+    });
+  });
+
+  test('needs a range of at most 400 days', async () => {
+    const a = await app();
+    expect((await a.request('/data/activity')).status).toBe(400);
+    expect((await a.request('/data/activity?since=10&until=5')).status).toBe(400);
+    expect((await a.request(`/data/activity?since=0&until=${401 * 86400}`)).status).toBe(400);
+  });
+});
+
 describe('gallery summaries', () => {
   test('albums and media get a readable title, not the kind name', () => {
     const album = summarize(

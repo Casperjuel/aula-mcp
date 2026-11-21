@@ -451,10 +451,18 @@ button.li { width: 100%; background: none; border-left: 0; border-right: 0; bord
 .mo-dots { display: none; gap: 3px; flex-wrap: wrap; justify-content: center; }
 .mo-dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
 .mo-note { padding: 12px 16px; border-top: 1px solid var(--line); }
+.act { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: .72rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.act span { display: inline-flex; align-items: center; gap: 2px; }
+.act svg { width: 12px; height: 12px; }
+.mo-day .act { margin-top: auto; padding: 0 2px; }
+.mo-total { display: none; font-size: .64rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wk-head .act { justify-content: center; text-transform: none; letter-spacing: 0; }
+.act-links { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.act-links .chip svg { width: 14px; height: 14px; }
 @media (max-width: 699px) {
   .mo-day { min-height: 52px; padding: 4px 2px; justify-items: center; }
-  .mo-chip, .mo-more { display: none; }
-  .mo-dots { display: flex; }
+  .mo-chip, .mo-more, .mo-day .act { display: none; }
+  .mo-dots, .mo-total { display: flex; }
   .mo-dow { padding: 6px 2px; font-size: .66rem; }
 }
 
@@ -989,6 +997,10 @@ function browseQuery(offset) {
   if (b.range === '7') { p.set('since', String(now - 7 * 86400)); p.set('until', String(now)); }
   if (b.range === '30') { p.set('since', String(now - 30 * 86400)); p.set('until', String(now)); }
   if (b.range === 'kommende') p.set('since', String(now));
+  if (b.range.startsWith('dag:')) {
+    const k = b.range.slice(4);
+    p.set('since', String(Math.floor(midnight(k) / 1000))); p.set('until', String(Math.floor(midnight(addDays(k, 1)) / 1000) - 1));
+  }
   return 'data/items?' + p.toString();
 }
 let browseSeq = 0;
@@ -1036,7 +1048,7 @@ R.gennemse = () => {
   const search = el('input', { class: 'input', id: 'q', type: 'search', placeholder: 'Søg i titler, afsendere og tekst', value: b.q,
     oninput: (e) => { b.q = e.target.value; clearTimeout(timer); timer = setTimeout(() => loadResults(false), 300); } });
   const range = el('select', { class: 'input', id: 'frange', onchange: (e) => { b.range = e.target.value; loadResults(false); } },
-    RANGES.map(([v, l]) => el('option', { value: v, selected: b.range === v ? true : null }, l)));
+    (b.range.startsWith('dag:') ? [[b.range, longDay(b.range.slice(4))]] : []).concat(RANGES).map(([v, l]) => el('option', { value: v, selected: b.range === v ? true : null }, l)));
   const chip = (value, label, n) => el('button', { class: 'chip', 'aria-pressed': String(b.kind === value),
     onclick: () => { b.kind = value; document.querySelectorAll('[data-fkind]').forEach((c) => c.setAttribute('aria-pressed', String(c.dataset.fkind === value))); loadResults(false); },
     'data-fkind': value }, label, el('span', { class: 'c' }, fmt(n)));
@@ -1230,8 +1242,16 @@ async function calFetch(since, until) {
   return out;
 }
 
-state.cal = { view: 'uge', anchor: '', hidden: new Set(), child: '', key: '', items: null, error: null, day: '' };
-const CAL_VIEWS = [['uge', 'Uge'], ['maaned', 'Måned'], ['liste', 'Begivenheder']];
+const CAL_VIEWS = [['maaned', 'Måned'], ['uge', 'Uge'], ['liste', 'Begivenheder']];
+// What arrived in Aula each day, counted beside the events.
+const ACT_KINDS = [['message', 'beskeder', 'besked', 'Beskeder'], ['gallery_media', 'billeder og videoer', 'billede eller video', 'Billeder'], ['post', 'opslag', 'opslag', 'Opslag'], ['notification', 'notifikationer', 'notifikation', 'Notifikationer']];
+const saved = (key, fallback) => { try { return localStorage.getItem(key) ?? fallback; } catch (e) { return fallback; } };
+const save = (key, value) => { try { localStorage.setItem(key, value); } catch (e) {} };
+state.cal = {
+  view: CAL_VIEWS.some(([v]) => v === saved('aulamcp-cal-view', '')) ? saved('aulamcp-cal-view', '') : 'maaned',
+  anchor: '', hidden: new Set(), child: '', key: '', items: null, error: null, day: '',
+  act: null, actOff: new Set(saved('aulamcp-cal-act-off', '').split(',').filter(Boolean)),
+};
 function calRange(c) {
   if (c.view === 'maaned') {
     const from = weekStart(c.anchor.slice(0, 8) + '01');
@@ -1266,15 +1286,20 @@ async function calLoad() {
   if (c.key !== key) {
     c.key = key; c.items = null; c.error = null;
     renderCal();
+    c.act = null;
     const seq = ++calSeq;
+    const until = Math.floor(midnight(to) / 1000) - 1;
+    const act = c.view === 'liste' ? Promise.resolve({ days: [] })
+      : getJson('data/activity?since=' + Math.floor(midnight(from) / 1000) + '&until=' + until).catch(() => ({ days: [] }));
     try {
       // Starts up to two weeks earlier, so a holiday that began before still shows.
-      const rows = await calFetch(Math.floor(midnight(addDays(from, -14)) / 1000), Math.floor(midnight(to) / 1000) - 1);
+      const [rows, a] = await Promise.all([calFetch(Math.floor(midnight(addDays(from, -14)) / 1000), until), act]);
       if (seq !== calSeq) return;
       c.items = rows.map(calEv).filter((e) => e && e.ek >= from && e.sk < to).sort(byStart);
+      c.act = new Map((a.days || []).map((d) => [d.day, d.counts]));
     } catch (err) {
       if (seq !== calSeq) return;
-      c.items = []; c.error = err.message;
+      c.items = []; c.error = err.message; c.act = new Map();
     }
   }
   renderCal();
@@ -1300,7 +1325,7 @@ R.kalender = () => {
     el('section', { class: 'panel cal-tools' },
       el('div', { class: 'cal-bar' },
         el('div', { class: 'seg', role: 'group', 'aria-label': 'Visning' }, CAL_VIEWS.map(([v, l]) => el('button', { 'aria-pressed': String(c.view === v),
-          onclick: () => { c.view = v; c.day = ''; if (v === 'liste') c.anchor = dayKey(Date.now()); route(); } }, l))),
+          onclick: () => { c.view = v; c.day = ''; save('aulamcp-cal-view', v); if (v === 'liste') c.anchor = dayKey(Date.now()); route(); } }, l))),
         el('div', { class: 'cal-nav' },
           el('button', { class: 'icon-btn', 'aria-label': 'Forrige', onclick: () => calStep(-1) }, icon('left')),
           el('button', { class: 'btn btn-sm', onclick: () => { c.anchor = dayKey(Date.now()); c.day = ''; calLoad(); } }, 'I dag'),
@@ -1317,7 +1342,12 @@ function renderCalFilters(c) {
   const label = (t) => (EV_TYPES[t] ? EV_TYPES[t][0] : ((c.items || []).find((e) => e.type === t) || {}).label || t);
   const kids = childNames();
   const ids = [...new Set((c.items || []).flatMap((e) => e.profiles.map(String)))].filter((id) => kids.has(id));
+  const acts = c.view === 'liste' ? [] : ACT_KINDS.filter(([k]) => c.actOff.has(k) || [...(c.act || new Map()).values()].some((n) => n[k]));
+  const toggleAct = (k) => { c.actOff.has(k) ? c.actOff.delete(k) : c.actOff.add(k); save('aulamcp-cal-act-off', [...c.actOff].join(',')); renderCal(); };
   fill(box,
+    acts.length ? el('div', { class: 'chips', role: 'group', 'aria-label': 'Aktivitet' },
+      el('span', { class: 'muted small', style: 'align-self:center' }, 'Vis antal:'),
+      acts.map(([k, , , label]) => el('button', { class: 'chip', 'aria-pressed': String(!c.actOff.has(k)), onclick: () => toggleAct(k) }, icon(kindOf(k).icon), ' ' + label))) : null,
     types.length ? el('div', { class: 'chips', role: 'group', 'aria-label': 'Type' },
       el('button', { class: 'chip', 'aria-pressed': String(!c.hidden.size), onclick: () => { c.hidden.clear(); renderCal(); } }, 'Alle typer'),
       types.map((t) => el('button', { class: 'chip ev-chip ev-' + evHue(t), 'aria-pressed': String(!c.hidden.has(t)),
@@ -1344,6 +1374,21 @@ function calEmpty(title, text) {
 }
 const SYNC_NOTE = 'Synkroniseringen henter kalenderen fra en uge tilbage til otte uger frem.';
 
+/** The day's counts that are switched on, as [kind, n, many, one, label]. */
+function actOf(c, k) {
+  const n = (c.act && c.act.get(k)) || {};
+  return ACT_KINDS.filter(([kind]) => n[kind] && !c.actOff.has(kind)).map(([kind, many, one, label]) => [kind, n[kind], many, one, label]);
+}
+const actText = (list) => list.map(([, n, many, one]) => plural(n, one, many)).join(', ');
+function actRow(list) {
+  if (!list.length) return null;
+  return el('span', { class: 'act', title: actText(list) }, list.map(([kind, n]) => el('span', {}, icon(kindOf(kind).icon), fmt(n))));
+}
+function browseDay(kind, k) {
+  state.browse = Object.assign(state.browse, { q: '', kind, range: 'dag:' + k, role: '', items: [], offset: 0, more: false, sel: null, detail: null });
+  go('gennemse');
+}
+
 /* uge: an all-day row, then timed events placed by the clock */
 const HOUR = 44;
 function calWeek(c, evs) {
@@ -1358,7 +1403,7 @@ function calWeek(c, evs) {
   }
   const anyAll = days.some((k) => allDay.get(k).length);
   const anyTimed = days.some((k) => timed.get(k).length);
-  if (!anyAll && !anyTimed) {
+  if (!anyAll && !anyTimed && !days.some((k) => actOf(c, k).length)) {
     return el('section', { class: 'panel' }, calEmpty('Ingen begivenheder i denne uge', 'Der er ikke gemt noget i kalenderen for uge ' + isoWeek(from) + '. ' + SYNC_NOTE));
   }
   const mins = (ms, k) => { const p = cphParts(ms); return dayKey(ms) === k ? p.h * 60 + p.min : 24 * 60; };
@@ -1386,7 +1431,7 @@ function calWeek(c, evs) {
   };
   const grid = el('section', { class: 'panel wk-panel' }, el('div', { class: 'wk' },
     el('div', { class: 'wk-corner' }),
-    days.map((k) => el('div', { class: 'wk-head' + (k === today ? ' today' : '') }, el('span', {}, DAY[dow(k)]), el('b', {}, +k.slice(8, 10)))),
+    days.map((k) => el('div', { class: 'wk-head' + (k === today ? ' today' : '') }, el('span', {}, DAY[dow(k)]), el('b', {}, +k.slice(8, 10)), actRow(actOf(c, k)))),
     anyAll ? [el('div', { class: 'wk-gut wk-adl' }, 'Hele dagen'), days.map((k) => el('div', { class: 'wk-ad' },
       allDay.get(k).map((e) => el('button', { class: 'wk-chip ev-' + evHue(e.type), onclick: () => openEvent(e), title: e.title }, e.title))))] : null,
     anyTimed ? [el('div', { class: 'wk-gut wk-hours', style: 'height:' + (h1 - h0) * HOUR + 'px' },
@@ -1395,7 +1440,7 @@ function calWeek(c, evs) {
   const phone = el('section', { class: 'panel wk-list' }, el('div', { class: 'list' }, days.map((k) => {
     const list = allDay.get(k).concat(timed.get(k));
     return el('div', { class: 'wk-day' },
-      el('div', { class: 'wk-day-head' }, el('strong', {}, longDay(k)), k === today ? el('span', { class: 'pill run' }, 'I dag') : null),
+      el('div', { class: 'wk-day-head' }, el('strong', {}, longDay(k)), k === today ? el('span', { class: 'pill run' }, 'I dag') : null, actRow(actOf(c, k))),
       list.length ? list.map((e) => evRow(e, false)) : el('p', { class: 'muted small' }, 'Ingen begivenheder'));
   })));
   return [grid, phone];
@@ -1418,21 +1463,28 @@ function calMonth(c, evs) {
   for (let k = from; k < to; k = addDays(k, 1)) days.push(k);
   const cell = (k) => {
     const list = by.get(k) || [];
+    const act = actOf(c, k);
+    const total = act.reduce((sum, [, n]) => sum + n, 0);
     return el('button', { class: 'mo-day' + (k.slice(0, 7) !== month ? ' out' : '') + (k === today ? ' today' : ''), 'aria-pressed': String(c.day === k),
-      'aria-label': longDay(k) + ', ' + plural(list.length, 'begivenhed', 'begivenheder'), onclick: () => { c.day = k; renderCal(); } },
+      'aria-label': [longDay(k), plural(list.length, 'begivenhed', 'begivenheder'), actText(act)].filter(Boolean).join(', '), onclick: () => { c.day = k; renderCal(); } },
       el('span', { class: 'mo-num' }, +k.slice(8, 10)),
       list.slice(0, 3).map((e) => el('span', { class: 'mo-chip ev-' + evHue(e.type) }, e.title)),
       list.length > 3 ? el('span', { class: 'mo-more' }, '+' + (list.length - 3) + ' flere') : null,
-      list.length ? el('span', { class: 'mo-dots', 'aria-hidden': 'true' }, list.slice(0, 4).map((e) => el('i', { class: 'ev-' + evHue(e.type) }))) : null);
+      list.length ? el('span', { class: 'mo-dots', 'aria-hidden': 'true' }, list.slice(0, 4).map((e) => el('i', { class: 'ev-' + evHue(e.type) }))) : null,
+      actRow(act),
+      total ? el('span', { class: 'mo-total', 'aria-hidden': 'true' }, fmt(total)) : null);
   };
   const sel = c.day ? (by.get(c.day) || []) : null;
+  const selAct = c.day ? actOf(c, c.day) : [];
   return [
     el('section', { class: 'panel mo-panel' }, el('div', { class: 'mo' },
       ['man.', 'tir.', 'ons.', 'tor.', 'fre.', 'lør.', 'søn.'].map((d) => el('div', { class: 'mo-dow' }, d)),
       days.map(cell)),
-      !evs.length ? el('p', { class: 'muted small mo-note' }, 'Ingen begivenheder i ' + MONTH[+month.slice(5, 7) - 1] + '. ' + SYNC_NOTE) : null),
+      !evs.length && !c.act?.size ? el('p', { class: 'muted small mo-note' }, 'Ingen begivenheder i ' + MONTH[+month.slice(5, 7) - 1] + '. ' + SYNC_NOTE) : null),
     sel ? el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, longDay(c.day).replace(/^./, (ch) => ch.toUpperCase())), el('span', { class: 'muted small' }, plural(sel.length, 'begivenhed', 'begivenheder'))),
+      selAct.length ? el('div', { class: 'act-links', role: 'group', 'aria-label': 'Aktivitet denne dag' },
+        selAct.map(([kind, n, many, one]) => el('button', { class: 'chip', onclick: () => browseDay(kind, c.day), title: 'Vis dagens ' + many }, icon(kindOf(kind).icon), ' ' + plural(n, one, many)))) : null,
       sel.length ? el('div', { class: 'list' }, sel.map((e) => evRow(e, false))) : el('p', { class: 'muted small' }, 'Ingen begivenheder denne dag.'))
       : el('p', { class: 'muted small' }, 'Vælg en dag for at se dens begivenheder.'),
   ];
