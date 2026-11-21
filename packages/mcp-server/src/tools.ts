@@ -21,6 +21,7 @@ import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
 import {
+  announcedVacations,
   childrenToday,
   ownChildren,
   sendSickReport,
@@ -554,6 +555,33 @@ export function registerTools(
     },
   );
 
+  // --- aula.presence.vacations --------------------------------------------
+  //
+  // presence.getVacationAnnouncementsByChildren, not verified against the
+  // live API (see AulaClient.getVacationAnnouncements).
+
+  server.registerTool(
+    'aula.presence.vacations',
+    {
+      title: 'Ferie/fri the guardian registered',
+      description:
+        'The ferie/fri (planned absence) the logged-in guardian registered for their own ' +
+        'children, soonest first: child, vacationId, startDate, endDate, the comment to ' +
+        'the staff and editable (Aula lets the guardian remove it). Remove one with ' +
+        'aula.presence.delete_vacation. Not the holiday periods the institution set, and ' +
+        'not its ferie requests (aula.presence.vacation_requests). Uses ' +
+        "Aula's presence.getVacationAnnouncementsByChildren as the Aula app reads it; it " +
+        'is not yet verified against the live API, so an empty list may also mean the ' +
+        'call is not understood: compare with aula.presence.templates (isOnVacation). ' +
+        'Read-only.',
+      inputSchema: {},
+    },
+    async () => {
+      const client = await context.getClient();
+      return jsonContent({ vacations: await announcedVacations(client) });
+    },
+  );
+
   // --- aula.messages.mark_read / mark_unread (write, on by default) -------
   //
   // Writes to Aula, but only the guardian's own read state, and each can undo
@@ -870,8 +898,7 @@ export function registerTools(
     // --- aula.presence.add_vacation (gated, write) --------------------------
     //
     // Aula's calendar.addVacation, not verified against the live API (see
-    // AulaClient.addVacation). There is no known way to delete a registration
-    // through the API, so a mistake must be removed in Aula.
+    // AulaClient.addVacation). aula.presence.delete_vacation removes one.
 
     server.registerTool(
       'aula.presence.add_vacation',
@@ -880,9 +907,10 @@ export function registerTools(
         description:
           'Register a planned absence (ferie/fri) for whole days, from startDate to ' +
           'endDate. WRITES to Aula — enabled when AULA_MCP_WRITE=1. The institution sees ' +
-          'it in its presence overview. aula-mcp cannot delete a registration: a mistake ' +
-          'must be removed in the Aula app, so confirm the child and the dates with the ' +
-          "user before calling. Uses Aula's calendar.addVacation call as the guardian " +
+          'it in its presence overview, so confirm the child and the dates with the user ' +
+          'before calling. A mistake can be removed with aula.presence.delete_vacation ' +
+          '(also unverified), or in the Aula app. ' +
+          "Uses Aula's calendar.addVacation call as the guardian " +
           'portal sends it; it is not yet verified against the live API, so check the ' +
           'result with aula.presence.templates (isOnVacation) afterwards. To answer an ' +
           "institution's ferie request (ferieregistrering), use " +
@@ -936,6 +964,65 @@ export function registerTools(
               endDate: args.endDate,
               ...(args.comment ? { comment: args.comment } : {}),
             }),
+        );
+        return jsonContent({ ok: true, result });
+      },
+    );
+
+    // --- aula.presence.delete_vacation (gated, write) -----------------------
+    //
+    // calendar.deleteVacation, not verified against the live API (see
+    // AulaClient.deleteVacation). Only ids from the guardian's own list.
+
+    server.registerTool(
+      'aula.presence.delete_vacation',
+      {
+        title: 'Remove a registered ferie/fri',
+        description:
+          'Remove a ferie/fri the logged-in guardian registered, by its vacationId from ' +
+          'aula.presence.vacations. WRITES to Aula — enabled when AULA_MCP_WRITE=1. The ' +
+          'child is expected again on those days and the institution sees the change, so ' +
+          'confirm the child and the dates with the user before calling. Only ferie Aula ' +
+          "marks as editable can be removed. Uses Aula's calendar.deleteVacation as the " +
+          'Aula app sends it; it is not yet verified against the live API, so read ' +
+          'aula.presence.vacations again afterwards and check that it is gone.',
+        inputSchema: {
+          vacationId: z
+            .number()
+            .int()
+            .positive()
+            .describe('The vacationId from aula.presence.vacations.'),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        const vacation = (await announcedVacations(client)).find(
+          (v) => v.vacationId === args.vacationId,
+        );
+        if (!vacation) {
+          return jsonContent({
+            error: 'unknown_vacation',
+            message:
+              'Refusing to write: no ferie/fri with this vacationId for the logged-in ' +
+              "guardian's children. Call aula.presence.vacations.",
+          });
+        }
+        if (!vacation.editable) {
+          return jsonContent({
+            error: 'not_editable',
+            message: 'Aula does not allow removing this ferie/fri; it can only be changed in Aula.',
+          });
+        }
+        const result = await audited(
+          'presence_delete_vacation',
+          {
+            children: 1,
+            days:
+              vacation.startDate && vacation.endDate
+                ? vacationDays(vacation.startDate, vacation.endDate)
+                : 0,
+          },
+          () => client.deleteVacation(vacation.vacationId),
         );
         return jsonContent({ ok: true, result });
       },

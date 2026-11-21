@@ -158,6 +158,7 @@ describe('buildDiscoverManifest', () => {
       'aula.presence.today',
       'aula.presence.templates',
       'aula.presence.vacation_requests',
+      'aula.presence.vacations',
     ]);
     expect(m.capabilities.presence?.notes).toContain('AULA_MCP_WRITE');
   });

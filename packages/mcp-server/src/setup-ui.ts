@@ -60,6 +60,7 @@ import { isInline } from './attachments.ts';
 import type { AulaContext } from './aula-context.ts';
 import { feedEvents, toIcs } from './calendar-feed.ts';
 import {
+  announcedVacations,
   childPlan,
   childrenToday,
   ownChildren,
@@ -598,6 +599,54 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     await auditOf(c)?.({
       category: 'aula',
       action: 'presence_add_vacation',
+      ok: true,
+      durationMs: Date.now() - started,
+      details,
+    });
+    return c.json({ ok: true });
+  });
+
+  // The ferie/fri the parent registered, and removing one.
+  app.get('/data/children/vacations', async (c) => {
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    try {
+      return c.json({ vacations: await announcedVacations(client) });
+    } catch (err) {
+      return aulaFailed(c, 'vacations', err);
+    }
+  });
+
+  app.post('/data/children/vacations/delete', async (c) => {
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const { vacationId } = body;
+    if (!Number.isSafeInteger(vacationId)) return c.json({ error: 'give vacationId' }, 400);
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const started = Date.now();
+    const details: Record<string, number> = { children: 1 };
+    try {
+      const vacation = (await announcedVacations(client)).find((v) => v.vacationId === vacationId);
+      if (!vacation) return c.json({ error: 'no such ferie/fri' }, 404);
+      if (!vacation.editable) return c.json({ error: 'Aula does not allow removing it' }, 409);
+      if (vacation.startDate && vacation.endDate) {
+        details.days = vacationDays(vacation.startDate, vacation.endDate);
+      }
+      await client.deleteVacation(vacation.vacationId);
+    } catch (err) {
+      await auditOf(c)?.({
+        category: 'aula',
+        action: 'presence_delete_vacation',
+        ok: false,
+        durationMs: Date.now() - started,
+        details: { ...details, error: (err as Error).message.slice(0, 300) },
+      });
+      return aulaFailed(c, 'vacation_delete', err);
+    }
+    await auditOf(c)?.({
+      category: 'aula',
+      action: 'presence_delete_vacation',
       ok: true,
       durationMs: Date.now() - started,
       details,

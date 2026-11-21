@@ -1096,6 +1096,7 @@ function openKid(c) {
           : item('warn', 'Meld syg i dag', 'Institutionen får besked i Aula med det samme', () => askSick(true), true),
         item('door', 'Ændr komme/gå', 'For én dag, hver uge eller hver anden uge', () => planForm(todayKey())),
         item('sun', 'Meld ferie/fri', 'Hele dage, en eller flere i træk', () => vacationForm()),
+        item('moon', 'Se ferie/fri', 'Den ferie/fri du har meldt, og fjern den', () => vacationList()),
         item('task', 'Ferieregistrering', ferieOpen(c.id).length ? ferieOpen(c.id).length + ' venter på dit svar' : 'Institutionens spørgsmål om ferie', () => requestList()),
         item('week', 'Se komme/gå-plan', 'De næste 14 dage', () => planList()),
         item('cal', 'Åbn kalender', 'Begivenheder for familien', () => { d.close(); go('kalender'); })));
@@ -1235,7 +1236,7 @@ function openKid(c) {
         body: [
           el('p', {}, kids.map((k) => k.name).join(' og ') + ' meldes' + ' på ferie/fri i Aula ' + span() + '. Institutionen kan se det med det samme.'),
           comment ? el('p', {}, 'Besked: ' + comment) : null,
-          el('p', { class: 'muted small' }, 'Du kan ikke slette ferien herfra. Er den forkert, slettes den i Aula. Det står i din log under Handlinger i Aula.'),
+          el('p', { class: 'muted small' }, 'Er den forkert, kan du fjerne den under Se ferie/fri eller i Aula. Det står i din log under Handlinger i Aula.'),
         ],
         onok: async () => {
           try {
@@ -1257,6 +1258,43 @@ function openKid(c) {
       el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => menu() }, 'Annuller'), save));
   };
   const span = (a, b) => a === b ? longDay(a) : longDay(a) + ' til ' + longDay(b);
+  const vacationList = async () => {
+    fill(body, head('Ferie/fri for ' + first, true), skeleton());
+    let list;
+    try { list = (await getJson('data/children/vacations')).vacations.filter((v) => v.childId === c.id); }
+    catch (err) {
+      fill(body, head('Ferie/fri for ' + first, true), el('p', { class: 'muted small' }, 'Kunne ikke hente fra Aula: ' + kidErr(err)));
+      return;
+    }
+    const when = (v) => v.startDate && v.endDate ? span(v.startDate, v.endDate) : 'Ukendte dage';
+    const remove = (v) => {
+      d.close();
+      confirmDialog({
+        danger: true, icon: 'warn',
+        title: 'Fjern ferie/fri for ' + first + '?',
+        ok: 'Fjern i Aula',
+        body: [
+          el('p', {}, 'Ferien ' + when(v) + ' fjernes i Aula, og ' + first + ' forventes igen de dage. Institutionen kan se det med det samme.'),
+          el('p', { class: 'muted small' }, 'Det står i din log under Handlinger i Aula.'),
+        ],
+        onok: async () => {
+          try { await postJson('data/children/vacations/delete', { vacationId: v.vacationId }); toast('Ferien for ' + first + ' er fjernet i Aula'); }
+          catch (err) { toast('Kunne ikke: ' + kidErr(err)); }
+          loadKids(true);
+        },
+      });
+    };
+    const row = (v) => el('div', { class: 'li menu-li' },
+      el('span', { class: 'type-dot' }, icon('sun')),
+      el('span', { style: 'min-width:0;display:block;margin-right:auto' },
+        el('span', { class: 'li-title', style: 'display:block' }, when(v)),
+        el('span', { class: 'li-sub', style: 'display:block' }, v.comment || (v.editable ? 'Ferie/fri' : 'Kan kun ændres i Aula'))),
+      v.editable ? el('button', { class: 'btn', onclick: () => remove(v) }, 'Fjern') : null);
+    fill(body, head('Ferie/fri for ' + first, true),
+      list.length ? el('div', { class: 'list' }, list.map(row))
+        : el('p', { class: 'muted small' }, 'Aula viser ingen ferie/fri, som du har meldt for ' + first + '.'),
+      el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => menu() }, 'Tilbage'), el('button', { class: 'btn btn-primary', onclick: () => vacationForm() }, 'Meld ferie/fri')));
+  };
   const requestList = async () => {
     fill(body, head('Ferieregistrering for ' + first, true), skeleton());
     let list;

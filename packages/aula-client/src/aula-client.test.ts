@@ -716,6 +716,29 @@ describe('AulaClient ferie requests', () => {
       comment: '',
     });
   });
+
+  test('reads announced ferie by childIds[] and deletes one by vacationId', async () => {
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-9');
+    http.enqueue(
+      { status: 200, body: envelope([]) }, // probe
+      { status: 200, body: envelope([{ child: { id: 42 }, vacationAnnouncements: [] }]) },
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) },
+    );
+    const c = makeClient(http);
+    expect(await c.getVacationAnnouncements([42])).toEqual([
+      { child: { id: 42 }, vacationAnnouncements: [] },
+    ]);
+    const url = http.requested[1]?.url ?? '';
+    expect(url).toContain('method=presence.getVacationAnnouncementsByChildren');
+    expect(url).toContain('childIds%5B%5D=42');
+    await c.deleteVacation(901);
+    const post = http.requested.at(-1);
+    expect(post?.url).toContain('method=calendar.deleteVacation');
+    expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
+    expect(JSON.parse(String(post?.body))).toEqual({ vacationId: 901 });
+  });
 });
 
 describe('AulaClient.getPosts', () => {

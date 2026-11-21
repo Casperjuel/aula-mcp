@@ -271,21 +271,6 @@ export class AulaClient {
   }
 
   /**
-   * `calendar.addVacation` — register a planned absence (ferie/fri) for one
-   * or more children over whole days.
-   *
-   * NOT verified against the live API. The payload is the one the guardian
-   * portal's `presence/ADD_ABSENCE` action passes to `calendar.addVacation`
-   * (read from the portal's JavaScript, as documented in nickknissen/aula
-   * PR #184, MIT): `{ childIds, intervals: [{ startDate, endDate }], comment }`
-   * with date-only `YYYY-MM-DD` dates. The success response is undocumented,
-   * so nothing is read from it, and no method to delete a registration is
-   * known: a mistake is removed in Aula itself.
-   *
-   * This is a write to the live Aula platform — the MCP server gates the
-   * tool that calls it behind `AULA_MCP_WRITE=1`.
-   */
-  /**
    * `presence.getVacationRegistrationsByChildren` — the institution's ferie
    * requests ("Ferieregistrering": the school or SFO asks whether the child
    * comes in a holiday period). Aula groups the answer by child:
@@ -337,6 +322,20 @@ export class AulaClient {
     );
   }
 
+  /**
+   * `calendar.addVacation` — register a planned absence (ferie/fri) for one
+   * or more children over whole days.
+   *
+   * NOT verified against the live API. The payload is the one the guardian
+   * portal's `presence/ADD_ABSENCE` action passes to `calendar.addVacation`
+   * (read from the portal's JavaScript, as documented in nickknissen/aula
+   * PR #184, MIT): `{ childIds, intervals: [{ startDate, endDate }], comment }`
+   * with date-only `YYYY-MM-DD` dates. The success response is undocumented,
+   * so nothing is read from it. See deleteVacation for removing one.
+   *
+   * This is a write to the live Aula platform — the MCP server gates the
+   * tool that calls it behind `AULA_MCP_WRITE=1`.
+   */
   async addVacation(args: {
     childIds: number[];
     startDate: string;
@@ -351,6 +350,37 @@ export class AulaClient {
         comment: args.comment ?? '',
       }),
     );
+  }
+
+  /**
+   * `presence.getVacationAnnouncementsByChildren` — the ferie/fri the
+   * guardian announced (calendar.addVacation), grouped by child:
+   * `[{ child, vacationAnnouncements: [{ vacationId, startDate, endDate,
+   * description, isEditable }] }]`. Method and response shape are from the
+   * decompiled Aula app (eisbaw/aulalibre, MIT). NOT verified against the
+   * live API: the parameter name is not known, so `childIds[]` is used as
+   * by getVacationRegistrations, which the same app service sends.
+   */
+  async getVacationAnnouncements(childIds: readonly number[]): Promise<unknown[]> {
+    if (childIds.length === 0) return [];
+    const params = new URLSearchParams();
+    params.set('method', 'presence.getVacationAnnouncementsByChildren');
+    for (const id of childIds) params.append('childIds[]', String(id));
+    const data = await this.getJsonRaw<unknown>(params);
+    return Array.isArray(data) ? data : [];
+  }
+
+  /**
+   * `calendar.deleteVacation` — remove an announced ferie/fri by the
+   * `vacationId` from getVacationAnnouncements. Method and `{ vacationId }`
+   * body are from the decompiled Aula app (eisbaw/aulalibre, MIT); NOT
+   * verified against the live API.
+   *
+   * This is a write to the live Aula platform — the MCP server gates the
+   * tool that calls it behind `AULA_MCP_WRITE=1`.
+   */
+  async deleteVacation(vacationId: number): Promise<unknown> {
+    return this.postJson<unknown>('calendar.deleteVacation', JSON.stringify({ vacationId }));
   }
 
   async getCalendarEvents(args: GetCalendarEventsArgs): Promise<CalendarEvent[]> {

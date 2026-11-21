@@ -350,3 +350,47 @@ export function vacationAnswerProblems(
   }
   return problems;
 }
+
+export interface AnnouncedVacation {
+  childId: number;
+  childName: string;
+  /** What calendar.deleteVacation takes. */
+  vacationId: number;
+  startDate: string | null;
+  endDate: string | null;
+  comment: string | null;
+  /** Aula lets the guardian remove it. */
+  editable: boolean;
+}
+
+/**
+ * The ferie/fri the guardian announced for their own children, soonest
+ * first. Rows Aula sends for other children, or without an id, are dropped.
+ */
+export async function announcedVacations(client: AulaClient): Promise<AnnouncedVacation[]> {
+  const children = await ownChildren(client);
+  if (children.size === 0) return [];
+  const groups = await client.getVacationAnnouncements([...children.keys()]);
+  const out: AnnouncedVacation[] = [];
+  for (const group of groups) {
+    const g = (group ?? {}) as { child?: { id?: unknown }; vacationAnnouncements?: unknown };
+    const childId = num(g.child?.id);
+    if (childId === null || !children.has(childId) || !Array.isArray(g.vacationAnnouncements)) {
+      continue;
+    }
+    for (const row of g.vacationAnnouncements as Record<string, unknown>[]) {
+      const vacationId = num(row?.vacationId);
+      if (vacationId === null) continue;
+      out.push({
+        childId,
+        childName: children.get(childId) ?? '',
+        vacationId,
+        startDate: day(row.startDate),
+        endDate: day(row.endDate),
+        comment: str(row.description),
+        editable: row.isEditable === true,
+      });
+    }
+  }
+  return out.sort((a, b) => (a.startDate ?? '').localeCompare(b.startDate ?? ''));
+}

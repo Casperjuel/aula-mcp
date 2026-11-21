@@ -9,6 +9,7 @@ import type { StoredTokenRecord, TokenStore } from '@aula-mcp/aula-auth';
 import type { AulaClient } from '@aula-mcp/aula-client';
 import type { AulaContext } from './aula-context.ts';
 import {
+  announcedVacations,
   childPlan,
   childrenToday,
   vacationAnswerProblems,
@@ -149,6 +150,27 @@ function fakeClient() {
         vacationRegistrations: [{ vacationRegistrationId: 9, responseId: 90 }],
       },
     ],
+    getVacationAnnouncements: async () => [
+      {
+        child: { id: 12 },
+        vacationAnnouncements: [
+          {
+            vacationId: 902,
+            startDate: '2027-02-15T00:00:00',
+            endDate: '2027-02-19T00:00:00',
+            description: 'Vinterferie',
+            isEditable: true,
+          },
+          { vacationId: 901, startDate: '2026-12-28', endDate: '2026-12-30', isEditable: false },
+          { description: 'Uden id' },
+        ],
+      },
+      { child: { id: 99 }, vacationAnnouncements: [{ vacationId: 999, isEditable: true }] },
+    ],
+    deleteVacation: async (vacationId: unknown) => {
+      calls.push({ method: 'deleteVacation', args: vacationId });
+      return {};
+    },
     respondToVacationRequest: async (args: unknown) => {
       calls.push({ method: 'respondToVacationRequest', args });
       return {};
@@ -523,5 +545,39 @@ describe('ferie requests', () => {
     const [entry] = await audit();
     expect(entry).toMatchObject({ action: 'presence_answer_vacation_request', ok: true });
     expect(entry?.details).toEqual({ days: 2, coming: 1, trigger: 'dashboard' });
+  });
+});
+
+describe('announced ferie/fri', () => {
+  test('only the parent’s own children, soonest first', async () => {
+    const list = await announcedVacations(fakeClient().client);
+    expect(list.map((v) => v.vacationId)).toEqual([901, 902]);
+    expect(list[1]).toEqual({
+      childId: 12,
+      childName: 'Bo',
+      vacationId: 902,
+      startDate: '2027-02-15',
+      endDate: '2027-02-19',
+      comment: 'Vinterferie',
+      editable: true,
+    });
+  });
+
+  test('POST /data/children/vacations/delete removes only own, editable ferie', async () => {
+    const { get, post, audit, calls } = await setup();
+    const { vacations } = (await (await get('/data/children/vacations')).json()) as {
+      vacations: unknown[];
+    };
+    expect(vacations).toHaveLength(2);
+    const del = (vacationId: unknown) => post('/data/children/vacations/delete', { vacationId });
+    expect((await del('902')).status).toBe(400);
+    expect((await del(999)).status).toBe(404);
+    expect((await del(901)).status).toBe(409);
+    expect(calls).toEqual([]);
+    expect((await del(902)).status).toBe(200);
+    expect(calls).toEqual([{ method: 'deleteVacation', args: 902 }]);
+    const [entry] = await audit();
+    expect(entry).toMatchObject({ action: 'presence_delete_vacation', ok: true });
+    expect(entry?.details).toEqual({ children: 1, days: 5, trigger: 'dashboard' });
   });
 });
