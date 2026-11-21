@@ -51,6 +51,7 @@ import { buildDiscoverManifest } from './discover.ts';
 import { type Caller, callerId } from './oidc.ts';
 import type { SetupLogin } from './setup-login.ts';
 import { renderMyDataPage } from './setup-my-data.ts';
+import type { KindStats, ParentStorage, StorageInfo } from './storage.ts';
 import { DEFAULT_RENEW_WITHIN_SECONDS } from './token-keepalive.ts';
 import { type ToolInfo, toolCatalog } from './tool-catalog.ts';
 import { toolNameStyle } from './tool-names.ts';
@@ -74,6 +75,12 @@ export interface SetupAppOptions {
     tools?: ToolInfo[];
     /** The parent's own context (null caller in single-parent mode). */
     contextFor(caller: Caller | null): AulaContext;
+    /** Local storage, when it is on. */
+    storage?: {
+      info: StorageInfo;
+      /** The parent's own rows (null caller in single-parent mode). */
+      forParent(caller: Caller | null): ParentStorage;
+    };
   };
   /** Multi-parent mode: the sign-in, and each parent's own token store. */
   parents?: {
@@ -168,13 +175,26 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const store = storeOf(c);
     const login = await loginStatus(store);
     const parent = parentOf(c);
+    const storage = options.myData?.storage;
+    const database = storage
+      ? {
+          type: storage.info.type,
+          location: storage.info.location,
+          kinds: await storage.forParent(parent?.caller ?? null).stats(),
+        }
+      : null;
     return c.json({
       parent: parent ? { name: parent.name, id: callerId(parent.caller) } : null,
       login,
-      stored: storedItems(store, login.logged_in, parent !== null),
+      database,
+      stored: storedItems(store, login.logged_in, parent !== null, database),
       not_stored: [
-        'Beskeder, opslag, kalender, ugeplaner, lektier, fravær, kontakter og billeder fra Aula. ' +
-          'De hentes live fra Aula, når du spørger, og gemmes ikke.',
+        ...(database
+          ? []
+          : [
+              'Beskeder, opslag, kalender, ugeplaner, lektier, fravær, kontakter og billeder fra Aula. ' +
+                'De hentes live fra Aula, når du spørger, og gemmes ikke.',
+            ]),
         'Hvad du skriver til AI-assistenten. aula-mcp ser kun de værktøjskald, assistenten laver.',
       ],
     });
@@ -463,8 +483,25 @@ interface StoredItem {
 }
 
 /** Where the parent's data lives on this server, described for the parent. */
-function storedItems(store: TokenStore, loggedIn: boolean, multiParent: boolean): StoredItem[] {
+function storedItems(
+  store: TokenStore,
+  loggedIn: boolean,
+  multiParent: boolean,
+  database: { type: string; location: string; kinds: KindStats[] } | null,
+): StoredItem[] {
   const items: StoredItem[] = [];
+  if (database) {
+    const count = database.kinds.reduce((sum, kind) => sum + kind.count, 0);
+    items.push({
+      what: 'Dine Aula-data i den lokale database',
+      where: `${database.type === 'postgres' ? 'PostgreSQL' : 'SQLite'}: ${database.location}`,
+      detail:
+        (count === 0
+          ? 'Ingen data gemt endnu. '
+          : `${count} ting gemt, fordelt på ${database.kinds.length} typer. `) +
+        'Indholdet er krypteret med en nøgle, der kun gælder dig, og gemmes, indtil du selv sletter det.',
+    });
+  }
   const filePath = (store as { filePath?: unknown }).filePath;
   const where =
     typeof filePath === 'string'

@@ -5,6 +5,8 @@ import { createLocalJWKSet, exportJWK, generateKeyPair, type JWK, SignJWT } from
 import { type Caller, callerId } from './oidc.ts';
 import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
+import { createStorage } from './storage.ts';
+import { sqliteDriver } from './storage-sql.ts';
 
 const PUBLIC_URL = 'https://aula-setup.example.com';
 const CLIENT_ID = 'aula-mcp-setup';
@@ -69,6 +71,12 @@ beforeAll(async () => {
 
 afterAll(() => idp.stop(true));
 
+const storage = await createStorage(sqliteDriver(':memory:'), Buffer.alloc(32, 2), {
+  type: 'sqlite',
+  location: 'test',
+});
+await storage.forParent('parent-a').put([{ kind: 'post', id: '1', data: 'a' }]);
+
 function setup(clientSecret?: string) {
   const stores = new Map<string, MemoryStore>();
   const changed: string[] = [];
@@ -95,6 +103,7 @@ function setup(clientSecret?: string) {
     parents: { login, storeFor, changed: (caller) => changed.push(caller.sub) },
     myData: {
       tools: [],
+      storage: { info: storage.info, forParent: (caller) => storage.forParent(caller?.sub ?? '') },
       contextFor: (caller) => {
         liveFor.push(caller?.sub ?? 'none');
         throw new Error(`no Aula in tests (${caller?.sub})`);
@@ -279,16 +288,20 @@ describe('setup UI sign-in', () => {
     ).json()) as {
       parent: { name: string };
       login: { username?: string };
+      database: { kinds: Array<{ kind: string; count: number }> };
     };
     expect(summaryA.parent.name).toBe('Parent parent-a');
+    expect(summaryA.database.kinds).toMatchObject([{ kind: 'post', count: 1 }]);
     expect(summaryA.login.username).toBe('a');
     const summaryB = (await (
       await app.request('/data/summary', { headers: { cookie: b } })
     ).json()) as {
       parent: { name: string };
       login: { logged_in: boolean };
+      database: { kinds: unknown[] };
     };
     expect(summaryB.parent.name).toBe('Parent parent-b');
+    expect(summaryB.database.kinds).toEqual([]);
     expect(summaryB.login.logged_in).toBe(false);
 
     // B has no Aula login, so nothing is read for B; A reads through A's context.

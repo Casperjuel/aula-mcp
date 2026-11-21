@@ -50,6 +50,8 @@
  *   AULA_MCP_SETUP_CLIENT_ID  — the setup UI's OIDC client; it signs each
  *                               parent in before their Aula login. Required too.
  *   AULA_MCP_SETUP_CLIENT_SECRET — for a confidential client. Optional.
+ *   AULA_MCP_STORAGE          — local storage: sqlite (default), postgres or
+ *                               none. See storage.ts for the rest.
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
@@ -60,6 +62,7 @@ import { AulaContext } from './aula-context.ts';
 import {
   authenticateRequest,
   type Caller,
+  callerId,
   createOidcVerifier,
   protectedResourceMetadata,
   sameCaller,
@@ -70,6 +73,8 @@ import { createMcpApp, type LoginRequired, type McpApp } from './setup.ts';
 import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
+import { openStorage, SINGLE_PARENT_ID, StorageConfigError } from './storage.ts';
+import { StorageKeyError } from './storage-crypto.ts';
 import { startTokenKeepAlive } from './token-keepalive.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
@@ -104,6 +109,25 @@ const multiParent =
     : null;
 
 const keepAliveEnabled = process.env.AULA_MCP_KEEPALIVE !== '0';
+
+// Local storage (sqlite by default). A bad setting stops the server rather
+// than silently running without it.
+const storage = await (async () => {
+  try {
+    return await openStorage(process.env);
+  } catch (err) {
+    if (!(err instanceof StorageConfigError || err instanceof StorageKeyError)) throw err;
+    process.stderr.write(`${err.message}\n`);
+    process.exit(2);
+  }
+})();
+
+/** Whose rows: the caller in multi-parent mode, the one parent otherwise. */
+function parentIdOf(caller: Caller | null): string {
+  if (!multiParent) return SINGLE_PARENT_ID;
+  if (!caller) throw new Error('No caller to pick stored data for.');
+  return callerId(caller);
+}
 
 // In multi-parent mode every request is authenticated, so the server is no
 // longer "anyone who reaches /mcp is the user" and may bind remotely.
@@ -576,6 +600,17 @@ if (INGRESS_PORT_RAW) {
   // Multi-parent: each parent signs in with the identity provider first and
   // logs in to Aula for themselves only.
   const setupLogin = multiParent?.setupLogin;
+  const myData = {
+    contextFor,
+    ...(storage
+      ? {
+          storage: {
+            info: storage.info,
+            forParent: (caller: Caller | null) => storage.forParent(parentIdOf(caller)),
+          },
+        }
+      : {}),
+  };
   const setupApp = createSetupApp(
     multiParent && setupLogin
       ? {
@@ -586,9 +621,9 @@ if (INGRESS_PORT_RAW) {
             changed: (caller) => multiParent.contexts.invalidate(caller),
           },
           autoRenew: keepAliveEnabled,
-          myData: { contextFor },
+          myData,
         }
-      : { logger, autoRenew: keepAliveEnabled, myData: { contextFor } },
+      : { logger, autoRenew: keepAliveEnabled, myData },
   );
   setupServer = Bun.serve({
     port: ingressPort,
@@ -627,6 +662,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     await server.stop();
     if (setupServer) await setupServer.stop();
     multiParent?.contexts.dispose();
+    await storage?.close();
   } catch (err) {
     logger.error('aula-mcp.shutdown_error', { error: (err as Error).message });
   }
