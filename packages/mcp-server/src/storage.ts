@@ -587,9 +587,19 @@ export class ParentStorage {
     }));
   }
 
-  /** Deletes this parent's items, of one kind or all. Resolves to how many. */
-  async delete(options: { kind?: ItemKind } = {}): Promise<number> {
+  /**
+   * Deletes this parent's items: one item (kind and id), one kind, or all.
+   * Resolves to how many.
+   */
+  async delete(options: { kind?: ItemKind; id?: string } = {}): Promise<number> {
     this.writable();
+    if (options.kind && options.id !== undefined) {
+      return this.db.run('DELETE FROM items WHERE parent_id = $1 AND kind = $2 AND id = $3', [
+        this.parentId,
+        options.kind,
+        options.id,
+      ]);
+    }
     return options.kind
       ? this.db.run('DELETE FROM items WHERE parent_id = $1 AND kind = $2', [
           this.parentId,

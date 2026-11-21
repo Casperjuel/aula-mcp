@@ -634,6 +634,12 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
         details.days = vacationDays(vacation.startDate, vacation.endDate);
       }
       await client.deleteVacation(vacation.vacationId);
+      // The ferie is a stored calendar event under the same id; drop it now
+      // rather than at the next sync, so the calendar stops showing it.
+      await options.myData?.storage
+        ?.forParent(parentOf(c)?.caller ?? null)
+        .delete({ kind: 'calendar_event', id: String(vacation.vacationId) })
+        .catch(() => 0);
     } catch (err) {
       await auditOf(c)?.({
         category: 'aula',

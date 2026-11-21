@@ -2191,16 +2191,48 @@ function calDialog() {
 async function openEvent(e) {
   const d = calDialog();
   const body = $('calDlgBody');
-  const draw = (extra) => fill(body,
+  let shown = null;
+  let vac = null;
+  const removeVacation = () => {
+    d.close();
+    confirmDialog({
+      danger: true, icon: 'warn',
+      title: 'Fjern ferie/fri?',
+      ok: 'Fjern i Aula',
+      body: [
+        el('p', {}, 'Ferien ' + (e.sk === e.ek ? longDay(e.sk) : longDay(e.sk) + ' til ' + longDay(e.ek)) + ' fjernes i Aula, og barnet forventes igen de dage. Institutionen kan se det med det samme.'),
+        el('p', { class: 'muted small' }, 'Det står i din log under Handlinger i Aula.'),
+      ],
+      onok: async () => {
+        try {
+          await postJson('data/children/vacations/delete', { vacationId: vac.vacationId });
+          toast('Ferien er fjernet i Aula');
+        } catch (err) { toast('Kunne ikke: ' + err.message); return; }
+        state.cal.key = '';
+        calLoad();
+        loadNextEvents();
+      },
+    });
+  };
+  const draw = (extra) => { shown = extra; fill(body,
     el('div', { class: 'panel-head', style: 'margin:0;align-items:flex-start' }, typePill(e), el('button', { class: 'icon-btn', 'aria-label': 'Luk', onclick: () => d.close() }, icon('x'))),
     el('h2', { id: 'calDlgTitle', style: 'font-size:1.3rem;overflow-wrap:anywhere' }, e.title),
     el('p', { class: 'muted' }, (e.allDay && e.sk === e.ek ? longDay(e.sk) + ', hele dagen' : e.allDay ? evTime(e) : longDay(e.sk) + ', ' + evTime(e)) + (e.place ? ' · ' + e.place : '')),
     e.rr ? el('div', { class: 'result-foot' }, responseBadges(e)) : null,
     extra,
-    el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => { d.close(); openItem({ kind: 'calendar_event', id: e.id }); } }, 'Åbn i Gennemse'),
-      el('button', { class: 'btn btn-primary', onclick: () => d.close() }, 'Luk')));
+    el('div', { class: 'dlg-actions' },
+      vac ? el('button', { class: 'btn btn-danger', onclick: removeVacation }, 'Fjern ferie/fri') : null,
+      el('button', { class: 'btn', onclick: () => { d.close(); openItem({ kind: 'calendar_event', id: e.id }); } }, 'Åbn i Gennemse'),
+      el('button', { class: 'btn btn-primary', onclick: () => d.close() }, 'Luk'))); };
   draw(skeleton());
   if (!d.open) d.showModal();
+  if (e.type === 'presence_holiday') {
+    // Only the parent's own ferie, and only when Aula lets them remove it.
+    getJson('data/children/vacations').then((r) => {
+      vac = r.vacations.find((v) => String(v.vacationId) === String(e.id) && v.editable) || null;
+      if (vac && d.open) draw(shown);
+    }).catch(() => {});
+  }
   try {
     const it = (await getJson('data/items/calendar_event/' + encodeURIComponent(e.id))).item;
     const fields = it.fields.filter(([k]) => k !== 'Starter' && k !== 'Slutter' && k !== 'Type' && k !== 'Sted' && k !== 'Svar' && k !== 'Svarfrist');

@@ -222,6 +222,19 @@ for (const [name, driver] of backends) {
       expect((await parent.stats()).map((s) => s.kind)).toEqual(['post']);
     });
 
+    test('deletes one item by kind and id', async () => {
+      const parent = (await open()).forParent('parent-a');
+      await parent.put([
+        { kind: 'calendar_event', id: '901', data: 1 },
+        { kind: 'calendar_event', id: '902', data: 2 },
+        { kind: 'message', id: '901', data: 3 },
+      ]);
+      expect(await parent.delete({ kind: 'calendar_event', id: '901' })).toBe(1);
+      expect(await parent.get('calendar_event', '901')).toBeNull();
+      expect(await parent.get('calendar_event', '902')).not.toBeNull();
+      expect(await parent.get('message', '901')).not.toBeNull();
+    });
+
     test('lists by id prefix, with LIKE wildcards taken literally', async () => {
       const parent = (await open()).forParent('parent-a');
       await parent.put([
