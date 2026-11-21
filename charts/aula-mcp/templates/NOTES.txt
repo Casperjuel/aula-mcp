@@ -1,7 +1,14 @@
 aula-mcp ({{ .Values.mode }}) is running at {{ include "aula-mcp.mcpUrl" . }}
 {{- if include "aula-mcp.multiParent" . }}
 
+{{- if .Values.setupUi.enabled }}
+Each parent logs in to Aula at {{ .Values.setupUi.login.url }}, after signing in
+with {{ .Values.oidc.issuer }}.
+
+Or from a shell, with their IdP user id (the token's `sub`):
+{{- else }}
 Log each parent into Aula with their IdP user id (the token's `sub`):
+{{- end }}
 
   kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "aula-mcp.fullname" . }} -- aula-parent-login <sub>
 {{- else }}

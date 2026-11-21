@@ -1,0 +1,18 @@
+{
+  "clientId": "aula-mcp-setup",
+  "name": "aula-mcp setup",
+  "description": "aula-mcp setup UI: each parent signs in before their Aula login",
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "clientAuthenticatorType": "client-secret",
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "implicitFlowEnabled": false,
+  "serviceAccountsEnabled": false,
+  "redirectUris": ["https://aula-setup.example.com/auth/callback"],
+  "webOrigins": ["https://aula-setup.example.com"],
+  "attributes": {
+    "pkce.code.challenge.method": "S256",
+    "post.logout.redirect.uris": "https://aula-setup.example.com/*"
+  }
+}

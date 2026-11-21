@@ -10,3 +10,7 @@ kagent:
   enabled: true
   agent:
     enabled: true
+setupUi:
+  enabled: true
+  login:
+    url: https://aula-setup.example.com

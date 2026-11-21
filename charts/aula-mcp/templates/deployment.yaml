@@ -65,6 +65,21 @@ spec:
             {{- if .Values.setupUi.enabled }}
             - name: AULA_MCP_INGRESS_PORT
               value: {{ .Values.setupUi.port | quote }}
+            {{- if include "aula-mcp.multiParent" . }}
+            - name: AULA_MCP_SETUP_URL
+              value: {{ .Values.setupUi.login.url | quote }}
+            - name: AULA_MCP_SETUP_CLIENT_ID
+              value: {{ .Values.setupUi.login.clientId | quote }}
+            {{- with .Values.setupUi.login.clientSecret }}
+            {{- if .existingSecret }}
+            - name: AULA_MCP_SETUP_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- end }}
             {{- if .Values.writeTools }}
             - name: AULA_MCP_WRITE
