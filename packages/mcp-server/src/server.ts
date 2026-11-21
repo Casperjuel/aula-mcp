@@ -54,6 +54,8 @@
  *                               none. See storage.ts for the rest.
  *   AULA_MCP_SYNC=0           — no background sync into local storage; see
  *                               sync.ts.
+ *   AULA_MCP_GALLERY_DIR      — gallery downloads (default <AULA_MCP_DIR>/gallery);
+ *                               AULA_MCP_GALLERY=0 lists albums only. See gallery.ts.
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
@@ -61,6 +63,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { AulaContext } from './aula-context.ts';
+import { GalleryFiles, GalleryView, galleryConfig } from './gallery.ts';
 import {
   authenticateRequest,
   type Caller,
@@ -125,6 +128,25 @@ const storage = await (async () => {
   }
 })();
 
+// Gallery downloads, next to local storage. A bad setting stops the server too.
+const galleryFiles = storage
+  ? (() => {
+      try {
+        return new GalleryFiles(galleryConfig(process.env));
+      } catch (err) {
+        process.stderr.write(`${(err as Error).message}\n`);
+        process.exit(2);
+      }
+    })()
+  : null;
+
+/** The caller's own gallery, read through their own rows and folder. */
+function galleryFor(caller: Caller | null): GalleryView | null {
+  if (!storage || !galleryFiles) return null;
+  const parentId = parentIdOf(caller);
+  return new GalleryView(storage.forParent(parentId), galleryFiles.forParent(parentId));
+}
+
 /** Whose rows: the caller in multi-parent mode, the one parent otherwise. */
 function parentIdOf(caller: Caller | null): string {
   if (!multiParent) return SINGLE_PARENT_ID;
@@ -183,6 +205,7 @@ async function syncParents(): Promise<SyncParent[]> {
 const sync = storage
   ? createSyncScheduler({
       storage,
+      ...(galleryFiles ? { gallery: galleryFiles } : {}),
       parents: syncParents,
       logger,
       ...(process.env.AULA_MCP_SYNC === '0' ? {} : { schedule: realSyncSchedule }),
@@ -193,11 +216,13 @@ const sync = storage
 async function sessionAppFor(caller: Caller | null): Promise<McpApp> {
   const loginRequired = await loginRequiredFor(caller);
   const context = contextFor(caller);
+  const gallery = galleryFor(caller);
   return createMcpApp({
     logger,
     context,
     ...(loginRequired ? { loginRequired } : {}),
     ...(sync ? { sync: sync.forParent(parentIdOf(caller), context) } : {}),
+    ...(gallery ? { gallery } : {}),
   });
 }
 
@@ -647,6 +672,9 @@ if (INGRESS_PORT_RAW) {
               sync.forParent(parentIdOf(caller), contextFor(caller)),
           },
         }
+      : {}),
+    ...(galleryFiles
+      ? { gallery: { forParent: (caller: Caller | null) => galleryFor(caller) as GalleryView } }
       : {}),
   };
   const setupApp = createSetupApp(

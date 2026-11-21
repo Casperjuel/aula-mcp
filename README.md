@@ -383,7 +383,10 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_LOG=1` | off | Verbose console-logs fra auth/client-lagene (samme redaktion som wire-transcripts). |
 | `AULA_MCP_ALLOW_REMOTE=1` | off | Tillader at binde til ikke-loopback adresser (fx bag en reverse proxy). |
 | `AULA_MCP_STORAGE` | `sqlite` | Lokal database til Aula-data: `sqlite`, `postgres` eller `none` (slået fra). Indholdet krypteres (AES-256-GCM) med en nøgle pr. forælder, og intet slettes automatisk. |
-| `AULA_MCP_SYNC=0` | on | Slår baggrunds-synkroniseringen til den lokale database fra (`aula.sync.run` virker stadig). Som standard henter serveren hver forælders egne data med deres eget Aula-login: beskeder og notifikationer hvert 15. minut, opslag og fremmøde hvert 30., kalender hver time og grupper/kontakter dagligt. Synkroniseringen læser kun; den markerer aldrig noget som læst. Forældre uden Aula-login springes over. |
+| `AULA_MCP_SYNC=0` | on | Slår baggrunds-synkroniseringen til den lokale database fra (`aula.sync.run` virker stadig). Som standard henter serveren hver forælders egne data med deres eget Aula-login: beskeder og notifikationer hvert 15. minut, opslag og fremmøde hvert 30., kalender hver time, grupper/kontakter dagligt og galleriet hver 6. time. Synkroniseringen læser kun; den markerer aldrig noget som læst. Forældre uden Aula-login springes over. |
+| `AULA_MCP_GALLERY_DIR` | `<AULA_MCP_DIR>/gallery` | Hvor galleri-synkroniseringen gemmer billeder og videoer i original kvalitet med et miniaturebillede, pr. forælder: `<forælder>/<barn>/<år>/<dato albumtitel>/`. Album delt med flere børn ligger under `Fælles`. Samme fil i to album gemmes én gang. Filerne bliver, til forælderen sletter dem; et slettet album hentes ikke igen. |
+| `AULA_MCP_GALLERY=0` | on | Henter ingen filer; albummene listes stadig. |
+| `AULA_MCP_GALLERY_STOP_AT` | `0.9` | Hvor fuld disken må være (0–1), før download holder pause. |
 | `AULA_MCP_SQLITE_PATH` | `<AULA_MCP_DIR>/aula.db` | SQLite-filen. |
 | `AULA_MCP_DATABASE_URL` | – | PostgreSQL-URL (fx fra en CNPG-secret). Kræves med `AULA_MCP_STORAGE=postgres`. |
 | `AULA_MCP_STORAGE_KEY` | `<AULA_MCP_DIR>/storage.key` | Nøglen (base64, 32 bytes) data krypteres med. Uden den genereres en nøglefil. Tag backup af nøglen sammen med databasen; uden den kan data ikke læses. |

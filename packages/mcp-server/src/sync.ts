@@ -24,6 +24,12 @@ import {
 } from '@aula-mcp/aula-client';
 import { addDays, aulaTs, startOfDayCopenhagen } from './calendar-range.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
+import {
+  GALLERY_DOWNLOADS_PER_RUN,
+  type GalleryFiles,
+  type ParentGallery,
+  syncGallery,
+} from './gallery.ts';
 import type { ItemInput, ParentStorage, Storage } from './storage.ts';
 
 const MINUTE = 60 * 1000;
@@ -36,6 +42,7 @@ export const SYNC_JOBS = [
   'presence',
   'calendar',
   'directory',
+  'gallery',
 ] as const;
 export type SyncJobName = (typeof SYNC_JOBS)[number];
 
@@ -46,6 +53,7 @@ export const SYNC_INTERVALS_MS: Record<SyncJobName, number> = {
   presence: 30 * MINUTE,
   calendar: HOUR,
   directory: 24 * HOUR,
+  gallery: 6 * HOUR,
 };
 
 /** What each job fetches, for the status tool and the dashboard. */
@@ -56,6 +64,9 @@ export const SYNC_JOB_DESCRIPTIONS: Record<SyncJobName, string> = {
   presence: "Today's presence (check-in, pick-up) per child.",
   calendar: 'Calendar events from a week back to eight weeks ahead.',
   directory: "The children's groups and their contact lists.",
+  gallery:
+    'Photo albums and their photos and videos, downloaded in original quality with a ' +
+    `thumbnail, up to ${GALLERY_DOWNLOADS_PER_RUN} files per run.`,
 };
 
 /** The Aula calls sync makes. All of them read; none of them write. */
@@ -70,6 +81,8 @@ export type SyncClient = Pick<
   | 'getCalendarEvents'
   | 'getGroups'
   | 'getContactList'
+  | 'getAlbums'
+  | 'getAlbumMedia'
   | 'rawRequest'
 >;
 
@@ -84,6 +97,8 @@ export interface SyncJobResult {
   changed: number;
   /** Items Aula would not give out, e.g. sensitive threads that need MitID step-up. */
   skipped?: number;
+  /** More is waiting: run again soon instead of after the interval. */
+  more?: boolean;
 }
 
 export interface SyncJobInput {
@@ -94,6 +109,8 @@ export interface SyncJobInput {
   /** No earlier successful run: fetch further back. */
   firstRun: boolean;
   now: Date;
+  /** The parent's gallery folder; the gallery job does nothing without it. */
+  gallery?: ParentGallery;
 }
 
 export type SyncJob = (input: SyncJobInput) => Promise<SyncJobResult>;
@@ -292,6 +309,7 @@ export const SYNC_JOB_RUNNERS: Record<SyncJobName, SyncJob> = {
   presence: syncPresence,
   calendar: syncCalendar,
   directory: syncDirectory,
+  gallery: syncGallery,
 };
 
 // --- scheduler --------------------------------------------------------------
@@ -338,6 +356,8 @@ export interface SyncSchedulerOptions {
   storage: Pick<Storage, 'forParent'>;
   /** Every parent to sync, looked up again on each check. */
   parents: () => Promise<SyncParent[]>;
+  /** Where the gallery job saves files. */
+  gallery?: Pick<GalleryFiles, 'forParent'>;
   logger?: Logger;
   intervals?: Partial<Record<SyncJobName, number>>;
   /** Tests replace the Aula jobs. */
@@ -358,6 +378,8 @@ export interface SyncScheduler {
 /** Longest wait after failures, so a broken job still retries a few times a day. */
 const MAX_BACKOFF_MS = 6 * HOUR;
 const FIRST_BACKOFF_MS = 5 * MINUTE;
+/** Next run when a job said more is waiting. */
+const SOON_MS = 5 * MINUTE;
 
 export function createSyncScheduler(options: SyncSchedulerOptions): SyncScheduler {
   const logger = options.logger ?? silentLogger;
@@ -418,12 +440,15 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
           },
           firstRun: !previous?.lastSuccessAt,
           now: new Date(started),
+          ...(options.gallery ? { gallery: options.gallery.forParent(parentId) } : {}),
         });
         await store.saveSyncState({
           job,
           lastRunAt: seconds(started),
           lastSuccessAt: seconds(now()),
-          nextRunAt: seconds(now() + interval(job) * (0.9 + 0.2 * random())),
+          nextRunAt: seconds(
+            now() + (result.more ? SOON_MS : interval(job)) * (0.9 + 0.2 * random()),
+          ),
           failures: 0,
           lastError: null,
           fetched: result.fetched,

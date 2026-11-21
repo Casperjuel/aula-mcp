@@ -10,6 +10,10 @@ Every MCP tool the server offers. Read tools are always on; write tools need
 | --- | --- | --- |
 | [`aula.sync.status`](#aulasyncstatus) | read | Sync status |
 | [`aula.sync.run`](#aulasyncrun) | read | Run sync now |
+| [`aula.gallery.status`](#aulagallerystatus) | read | Gallery download status |
+| [`aula.gallery.albums`](#aulagalleryalbums) | read | Gallery albums |
+| [`aula.gallery.media`](#aulagallerymedia) | read | Media in an album |
+| [`aula.gallery.thumbnail`](#aulagallerythumbnail) | read | Show a thumbnail |
 | [`aula.discover`](#auladiscover) | read | Discover Aula context |
 | [`aula.profiles.list`](#aulaprofileslist) | read | List Aula profiles |
 | [`aula.presence.today`](#aulapresencetoday) | read | Daily presence overview |
@@ -41,7 +45,7 @@ Every MCP tool the server offers. Read tools are always on; write tools need
 
 **Sync status** · read
 
-Where the background sync of the caller's own Aula data into the local database stands, one entry per job: when it last ran and succeeded, when it runs next, whether the last run failed and why, and how many items it fetched and changed. Jobs: `messages` (every 15 min): Message threads and the messages in threads that changed. `notifications` (every 15 min): Notifications. `posts` (every 30 min): Posts from schools and clubs. `presence` (every 30 min): Today's presence (check-in, pick-up) per child. `calendar` (every 1 h): Calendar events from a week back to eight weeks ahead. `directory` (every 24 h): The children's groups and their contact lists. Sync only reads from Aula: it never marks anything read and never writes to Aula. Parents without an Aula login are skipped until they log in.
+Where the background sync of the caller's own Aula data into the local database stands, one entry per job: when it last ran and succeeded, when it runs next, whether the last run failed and why, and how many items it fetched and changed. Jobs: `messages` (every 15 min): Message threads and the messages in threads that changed. `notifications` (every 15 min): Notifications. `posts` (every 30 min): Posts from schools and clubs. `presence` (every 30 min): Today's presence (check-in, pick-up) per child. `calendar` (every 1 h): Calendar events from a week back to eight weeks ahead. `directory` (every 24 h): The children's groups and their contact lists. `gallery` (every 6 h): Photo albums and their photos and videos, downloaded in original quality with a thumbnail, up to 300 files per run. Sync only reads from Aula: it never marks anything read and never writes to Aula. Parents without an Aula login are skipped until they log in.
 
 No parameters.
 
@@ -53,7 +57,51 @@ Fetch the caller's own Aula data into the local database right now instead of wa
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `jobs` | array | no | Which jobs to run: messages, notifications, posts, presence, calendar, directory. Defaults to all. |
+| `jobs` | array | no | Which jobs to run: messages, notifications, posts, presence, calendar, directory, gallery. Defaults to all. |
+
+## `aula.gallery.status`
+
+**Gallery download status** · read
+
+How far the download of the caller's own Aula photo albums has come: albums and media known, how many are downloaded, waiting or failed, bytes stored (each file counted once, the same photo in two albums is stored once), a split per child, the disk use of the gallery volume and the level at which downloads pause, and the last run of the `gallery` sync job. Files are kept in original quality with a thumbnail, under <child>/<year>/<date album title>/. Albums shared with more than one child are filed under "Fælles". To download now, call aula.sync.run with jobs ["gallery"]; it fetches up to a few hundred files per run and runs again soon while more are waiting.
+
+No parameters.
+
+## `aula.gallery.albums`
+
+**Gallery albums** · read
+
+The caller's Aula photo albums from the local copy, newest first: id, title, child folder, year and date, who made it, the groups it is shared with, media count, how many are downloaded and their size. Filter by `child` (the folder name, as aula.gallery.status lists it, or "Fælles") and `year`. Use the id with aula.gallery.media. Reads local storage only, so it shows what the last sync saw.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `child` | string | no | Child folder name, or "Fælles". |
+| `year` | string | no | Year the album was made, e.g. "2026". |
+| `limit` | integer | no | Default 50. |
+| `offset` | integer | no | Default 0. |
+
+## `aula.gallery.media`
+
+**Media in an album** · read
+
+The photos and videos of one album from the local copy, oldest first: id, type (image or video), original file name, title, upload time, size, whether the original and the thumbnail are downloaded, the stored path relative to the parent's gallery folder, the names of people tagged, and the last download error if any. Take `albumId` from aula.gallery.albums. Use aula.gallery.thumbnail to look at one.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `albumId` | integer | yes | Album id from aula.gallery.albums. |
+| `limit` | integer | no | Default 100. |
+| `offset` | integer | no | Default 0. |
+
+## `aula.gallery.thumbnail`
+
+**Show a thumbnail** · read
+
+Returns the stored thumbnail (about 170 KB, JPEG) of one photo or video as an image, so it can be looked at or described. Needs `albumId` and `mediaId` from aula.gallery.media; answers with an error when that thumbnail is not downloaded yet. Never returns the original file.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `albumId` | integer | yes | Album id. |
+| `mediaId` | integer | yes | Media id from aula.gallery.media. |
 
 ## `aula.discover`
 

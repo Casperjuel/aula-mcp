@@ -23,6 +23,8 @@ import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
+import type { GalleryView } from './gallery.ts';
+import { registerGalleryTools } from './gallery-tools.ts';
 import type { ParentSync } from './sync.ts';
 import { registerSyncTools } from './sync-tools.ts';
 
@@ -350,6 +352,8 @@ const WEB_URL_NOTE =
 export interface ToolExtras {
   /** The caller's sync; the aula.sync.* tools are registered when set. */
   sync?: ParentSync;
+  /** The caller's downloaded gallery; the aula.gallery.* tools are registered when set. */
+  gallery?: GalleryView;
 }
 
 /** `env` decides which gated tools are registered (tool-catalog.ts lists
@@ -361,6 +365,7 @@ export function registerTools(
   extras: ToolExtras = {},
 ): void {
   if (extras.sync) registerSyncTools(server, extras.sync);
+  if (extras.gallery) registerGalleryTools(server, extras.gallery);
 
   // --- aula.discover -------------------------------------------------------
 

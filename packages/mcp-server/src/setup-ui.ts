@@ -41,6 +41,7 @@
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import {
   AulaHttpClient,
   AulaLoginClient,
@@ -56,6 +57,7 @@ import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
 import type { AulaContext } from './aula-context.ts';
 import { buildDiscoverManifest } from './discover.ts';
+import type { GalleryView } from './gallery.ts';
 import { detail, searchText, summarize, threadMessage } from './item-view.ts';
 import { type Caller, callerId } from './oidc.ts';
 import { renderDashboard } from './setup-dashboard.ts';
@@ -104,6 +106,11 @@ export interface SetupAppOptions {
     sync?: {
       /** The parent's own jobs (null caller in single-parent mode). */
       forParent(caller: Caller | null): ParentSync;
+    };
+    /** The downloaded gallery, when local storage is on. */
+    gallery?: {
+      /** The parent's own albums and files (null caller in single-parent mode). */
+      forParent(caller: Caller | null): GalleryView;
     };
   };
   /** Multi-parent mode: the sign-in, and each parent's own token store. */
@@ -270,6 +277,8 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     options.myData?.storage?.forParent(parentOf(c)?.caller ?? null) ?? null;
   const syncOf = (c: Context): ParentSync | null =>
     options.myData?.sync?.forParent(parentOf(c)?.caller ?? null) ?? null;
+  const galleryOf = (c: Context): GalleryView | null =>
+    options.myData?.gallery?.forParent(parentOf(c)?.caller ?? null) ?? null;
   /** Jobs asked for from the dashboard that have not finished, per parent. */
   const queuedRuns = new Map<string, Set<SyncJobName>>();
 
@@ -396,11 +405,82 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     const body = await changeBody(c);
     if (!body) return c.json({ error: 'expected a JSON body' }, 415);
     if (body.confirm !== 'SLET') return c.json({ error: 'confirm must be "SLET"' }, 400);
-    if (body.all === true) return c.json({ deleted: await store.delete() });
+    if (body.all === true) {
+      // The files go too, so nothing is left on disk without its row.
+      await galleryOf(c)?.remove({ all: true });
+      return c.json({ deleted: await store.delete() });
+    }
     if (typeof body.kind !== 'string' || !isKind(body.kind)) {
       return c.json({ error: 'give a known kind, or all: true' }, 400);
     }
+    if (body.kind === 'gallery_album' || body.kind === 'gallery_media') {
+      return c.json({ error: 'delete gallery albums with /data/gallery/delete' }, 400);
+    }
     return c.json({ deleted: await store.delete({ kind: body.kind }) });
+  });
+
+  // --- the downloaded gallery, this parent's own folder only ---
+
+  app.get('/data/gallery', async (c) => {
+    const gallery = galleryOf(c);
+    if (!gallery) return c.json({ error: 'local storage is off' }, 404);
+    const child = c.req.query('child') || undefined;
+    const year = c.req.query('year') || undefined;
+    const [status, albums] = await Promise.all([
+      gallery.status(),
+      gallery.albums({ ...(child ? { child } : {}), ...(year ? { year } : {}) }),
+    ]);
+    return c.json({ status, albums });
+  });
+
+  app.get('/data/gallery/albums/:albumId', async (c) => {
+    const gallery = galleryOf(c);
+    if (!gallery) return c.json({ error: 'local storage is off' }, 404);
+    const albumId = Number(c.req.param('albumId'));
+    if (!Number.isSafeInteger(albumId)) return c.json({ error: 'bad album id' }, 400);
+    const album = (await gallery.albums({ includeRemoved: true })).find((a) => a.id === albumId);
+    if (!album) return c.json({ error: 'no such album' }, 404);
+    return c.json({ album, media: await gallery.media(albumId) });
+  });
+
+  // The stored original or thumbnail. Looked up by id in the parent's own
+  // rows, so a path from the request is never used.
+  app.get('/data/gallery/:variant{file|thumb}/:albumId/:mediaId', async (c) => {
+    const gallery = galleryOf(c);
+    if (!gallery) return c.json({ error: 'local storage is off' }, 404);
+    const albumId = Number(c.req.param('albumId'));
+    const mediaId = Number(c.req.param('mediaId'));
+    if (!Number.isSafeInteger(albumId) || !Number.isSafeInteger(mediaId)) {
+      return c.json({ error: 'bad id' }, 400);
+    }
+    const variant = c.req.param('variant') === 'thumb' ? 'thumb' : 'original';
+    const file = await gallery.file(albumId, mediaId, variant);
+    if (!file) return c.json({ error: 'not downloaded' }, 404);
+    const download = c.req.query('download') === '1';
+    return new Response(Readable.toWeb(file.stream) as ReadableStream, {
+      headers: {
+        'content-type': file.contentType,
+        'content-length': String(file.bytes),
+        'cache-control': 'private, max-age=86400',
+        'x-content-type-options': 'nosniff',
+        'content-disposition': `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      },
+    });
+  });
+
+  // Deletes the local copy of one album or of all of them; sync does not
+  // fetch them again. Nothing in Aula.
+  app.post('/data/gallery/delete', async (c) => {
+    const gallery = galleryOf(c);
+    if (!gallery) return c.json({ error: 'local storage is off' }, 404);
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    if (body.confirm !== 'SLET') return c.json({ error: 'confirm must be "SLET"' }, 400);
+    if (body.all === true) return c.json({ deleted: await gallery.remove({ all: true }) });
+    if (typeof body.albumId !== 'number' || !Number.isSafeInteger(body.albumId)) {
+      return c.json({ error: 'give an albumId, or all: true' }, 400);
+    }
+    return c.json({ deleted: await gallery.remove({ albumId: body.albumId }) });
   });
 
   async function loginStatus(store: TokenStore) {

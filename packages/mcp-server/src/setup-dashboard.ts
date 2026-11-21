@@ -534,6 +534,7 @@ const JOBS = {
   presence: 'Fremmøde',
   calendar: 'Kalender',
   directory: 'Kontakter og grupper',
+  gallery: 'Galleri',
 };
 const JOB_TEXT = {
   messages: 'Beskedtråde og beskederne i de tråde, der er ændret.',
@@ -542,6 +543,7 @@ const JOB_TEXT = {
   presence: 'Dagens fremmøde (komme og gå) for hvert barn.',
   calendar: 'Begivenheder fra en uge tilbage til otte uger frem.',
   directory: 'Børnenes grupper og deres kontaktlister.',
+  gallery: 'Fotoalbum med billeder og videoer i original kvalitet og et miniaturebillede, op til 300 filer pr. kørsel.',
 };
 const jobLabel = (j) => JOBS[j] || j;
 const VIEWS = [
