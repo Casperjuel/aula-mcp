@@ -200,6 +200,20 @@ function planArgs(body: Record<string, unknown>): UpdatePresenceTemplateArgs | s
     if (typeof value !== 'string' || value.length > 500) return `${key} must be text`;
     args[key] = value.trim();
   }
+  const repeat = body.repeat ?? 'never';
+  if (repeat !== 'never' && repeat !== 'weekly' && repeat !== 'every_2_weeks') {
+    return 'repeat must be never, weekly or every_2_weeks';
+  }
+  if (repeat !== 'never') {
+    const until = body.repeatUntil;
+    if (typeof until !== 'string' || !ISO_DAY.test(until)) return 'repeatUntil must be YYYY-MM-DD';
+    if (until < date) return 'repeatUntil must not be before date';
+    if (until > `${Number(date.slice(0, 4)) + 1}${date.slice(4)}`) {
+      return 'repeatUntil must be within a year of date';
+    }
+    args.repeatPattern = repeat;
+    args.repeatUntil = until;
+  }
   return args;
 }
 
@@ -456,23 +470,34 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     return c.json({ ok: true });
   });
 
-  // One day of the komme/gå plan; repeating plans stay in Aula or the tool.
+  // The komme/gå plan for one day, or repeating weekly or every other week
+  // on that weekday until repeatUntil.
   app.post('/data/children/plan', async (c) => {
     const body = await changeBody(c);
     if (!body) return c.json({ error: 'expected a JSON body' }, 415);
     const args = planArgs(body);
     if (typeof args === 'string') return c.json({ error: args }, 400);
-    const problems = validateSetTemplateArgs(args);
+    const problems = validateSetTemplateArgs({
+      ...args,
+      repeat: args.repeatPattern,
+      repeatUntil: args.repeatUntil,
+    });
     if (problems.length > 0) return c.json({ error: problems.join(' ') }, 400);
     const client = await clientOf(c);
     if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
     const started = Date.now();
-    const details = { children: 1, date: args.date, activityType: args.activityType };
+    const details = {
+      children: 1,
+      date: args.date,
+      activityType: args.activityType,
+      repeat: args.repeatPattern ?? 'never',
+      ...(args.repeatUntil ? { repeatUntil: args.repeatUntil } : {}),
+    };
     try {
       if (!(await ownChildren(client)).has(args.institutionProfileId)) {
         return c.json({ error: 'not your child' }, 404);
       }
-      await client.updatePresenceTemplate({ ...args, repeatPattern: 'never' });
+      await client.updatePresenceTemplate({ repeatPattern: 'never', ...args });
     } catch (err) {
       await auditOf(c)?.({
         category: 'aula',

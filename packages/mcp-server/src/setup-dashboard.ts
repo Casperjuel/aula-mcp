@@ -978,6 +978,13 @@ function loginPanel() {
     el('div', { class: 'login-actions' }, mitidButton('Log ind igen'), el('button', { class: 'btn', onclick: askLogout }, 'Log ud af Aula')));
 }
 /* ---------- genveje for et barn: syg, komme/gå, plan ---------- */
+const REPEAT = [['never', 'Kun denne dag'], ['weekly', 'Hver uge'], ['every_2_weeks', 'Hver anden uge']];
+/** The last day before the summer holiday (30 June) or Christmas (19 December) after a day. */
+const endOfTerm = (k) => {
+  const y = +k.slice(0, 4);
+  const md = k.slice(5);
+  return md <= '06-30' ? y + '-06-30' : md <= '12-19' ? y + '-12-19' : (y + 1) + '-06-30';
+};
 const HENTEFORM = [['picked_up_by', 'Hentes af'], ['go_home_with', 'Går hjem med'], ['send_home', 'Sendes hjem'], ['self_decider', 'Selvbestemmer']];
 
 const GO_VERB = { picked_up_by: 'Hentes', go_home_with: 'Går hjem', send_home: 'Sendes hjem' };
@@ -1069,7 +1076,7 @@ function openKid(c) {
         k && k.status === 1
           ? item('sun', 'Meld rask igen', 'Tag sygemeldingen tilbage i Aula', () => askSick(false))
           : item('warn', 'Meld syg i dag', 'Institutionen får besked i Aula med det samme', () => askSick(true), true),
-        item('door', 'Ændr komme/gå', 'Afleverings- og hentetid for én dag', () => planForm(todayKey())),
+        item('door', 'Ændr komme/gå', 'For én dag, hver uge eller hver anden uge', () => planForm(todayKey())),
         item('sun', 'Meld ferie/fri', 'Hele dage, en eller flere i træk', () => vacationForm()),
         item('week', 'Se komme/gå-plan', 'De næste 14 dage', () => planList()),
         item('cal', 'Åbn kalender', 'Begivenheder for familien', () => { d.close(); go('kalender'); })));
@@ -1110,6 +1117,15 @@ function openKid(c) {
       field('selfDeciderEndTime', 'Senest', inp('selfDeciderEndTime', 'time')),
       field('pickedUpBy', 'Hvem', inp('pickedUpBy', 'text')));
     const comment = field('comment', 'Besked til personalet', el('input', { class: 'input', id: 'kf-comment', type: 'text', maxlength: '500' }));
+    const repeat = el('select', { class: 'input', id: 'kf-repeat' }, REPEAT.map(([v, l]) => el('option', { value: v }, l)));
+    const untilWrap = field('repeatUntil', 'Til og med', inp('repeatUntil', 'date'));
+    const repeatGrid = el('div', { class: 'form-grid' }, field('repeat', 'Gentag', repeat), untilWrap);
+    const showRepeat = () => {
+      untilWrap.hidden = repeat.value === 'never';
+      f.repeatUntil.min = f.date.value;
+      if (!untilWrap.hidden && !f.repeatUntil.value) f.repeatUntil.value = endOfTerm(f.date.value);
+    };
+    repeat.addEventListener('change', showRepeat);
     const shown = () => {
       const a = sel.value;
       const vis = { exitTime: a !== 'self_decider', selfDeciderStartTime: a === 'self_decider', selfDeciderEndTime: a === 'self_decider', pickedUpBy: a === 'picked_up_by' || a === 'go_home_with' };
@@ -1135,26 +1151,44 @@ function openKid(c) {
       shown();
       save.disabled = false;
     };
-    f.date.addEventListener('change', prefill);
+    f.date.addEventListener('change', () => { showRepeat(); prefill(); });
     save.addEventListener('click', async () => {
       const data = { child: c.id, date: f.date.value, activityType: sel.value };
       for (const k of ['entryTime', 'exitTime', 'selfDeciderStartTime', 'selfDeciderEndTime', 'pickedUpBy', 'comment']) {
         const n = f[k];
         if (n && !n.closest('[data-f]').hidden && n.value.trim()) data[k] = n.value.trim();
       }
-      save.disabled = true;
-      try {
-        await postJson('data/children/plan', data);
-        toast('Komme/gå for ' + first + ' er gemt i Aula');
-        loadKids(true);
-        planList();
-      } catch (err) { status.textContent = 'Kunne ikke gemme: ' + kidErr(err); save.disabled = false; }
+      const send = async () => {
+        save.disabled = true;
+        try {
+          await postJson('data/children/plan', data);
+          toast('Komme/gå for ' + first + ' er gemt i Aula');
+          loadKids(true);
+          planList();
+        } catch (err) { status.textContent = 'Kunne ikke gemme: ' + kidErr(err); save.disabled = false; }
+      };
+      if (repeat.value === 'never') { send(); return; }
+      if (!f.repeatUntil.value || f.repeatUntil.value < data.date) { status.textContent = 'Vælg en slutdato, der ikke ligger før dagen.'; return; }
+      data.repeat = repeat.value;
+      data.repeatUntil = f.repeatUntil.value;
+      const every = repeat.value === 'weekly' ? 'hver ' : 'hver anden ';
+      confirmDialog({
+        icon: 'week',
+        title: 'Gentag komme/gå for ' + first + '?',
+        ok: 'Gem i Aula',
+        body: [
+          el('p', {}, 'Planen gemmes i Aula ' + every + WEEKDAY[dow(data.date)] + ' fra ' + longDay(data.date) + ' til og med ' + longDay(data.repeatUntil) + '. Den erstatter det, der står i Aula de dage.'),
+          el('p', { class: 'muted small' }, 'Det står i din log under Handlinger i Aula.'),
+        ],
+        onok: send,
+      });
     });
     fill(body, head('Ændr komme/gå for ' + first, true),
-      el('p', { class: 'muted small', style: 'margin:0' }, 'Gælder én dag. Det ændres i Aula, og personalet kan se det med det samme.'),
-      grid, comment, status,
+      el('p', { class: 'muted small', style: 'margin:0' }, 'Det ændres i Aula, og personalet kan se det med det samme.'),
+      grid, comment, repeatGrid, status,
       el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => menu() }, 'Annuller'), save));
     shown();
+    showRepeat();
     await prefill();
   };
   const vacationForm = () => {

@@ -306,6 +306,42 @@ describe('dashboard child shortcuts', () => {
     expect(calls).toEqual([]);
   });
 
+  test('POST /data/children/plan repeats weekly until a date', async () => {
+    const { post, audit, calls } = await setup();
+    const res = await post('/data/children/plan', {
+      child: 12,
+      date: '2026-11-24',
+      activityType: 'send_home',
+      exitTime: '15:00',
+      repeat: 'weekly',
+      repeatUntil: '2027-06-30',
+    });
+    expect(res.status).toBe(200);
+    expect(calls[0]?.args).toMatchObject({ repeatPattern: 'weekly', repeatUntil: '2027-06-30' });
+    const [entry] = await audit();
+    expect(entry?.details).toMatchObject({ repeat: 'weekly', repeatUntil: '2027-06-30' });
+  });
+
+  test('POST /data/children/plan refuses a repeat without a sane end', async () => {
+    const { post, calls } = await setup();
+    const base = {
+      child: 12,
+      date: '2026-11-24',
+      activityType: 'send_home',
+      exitTime: '15:00',
+      repeat: 'weekly',
+    };
+    expect((await post('/data/children/plan', base)).status).toBe(400);
+    expect((await post('/data/children/plan', { ...base, repeatUntil: '2026-11-23' })).status).toBe(
+      400,
+    );
+    expect((await post('/data/children/plan', { ...base, repeatUntil: '2027-11-25' })).status).toBe(
+      400,
+    );
+    expect((await post('/data/children/plan', { ...base, repeat: 'daily' })).status).toBe(400);
+    expect(calls).toEqual([]);
+  });
+
   test('POST /data/children/plan validates before it reaches Aula', async () => {
     const { post, calls } = await setup();
     const base = {
