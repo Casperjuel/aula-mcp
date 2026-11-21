@@ -8,6 +8,7 @@
 import type { Logger } from '@aula-mcp/aula-auth';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AulaContext } from './aula-context.ts';
+import { type ToolNameStyle, toolNameStyle, underscoreTools } from './tool-names.ts';
 import { registerTools } from './tools.ts';
 import { VERSION } from './version.ts';
 
@@ -44,6 +45,8 @@ export interface McpAppOptions {
    *  for all its sessions so they share a single token refresh path, client
    *  and set of caches (and one token-file watcher) rather than one each. */
   context?: AulaContext;
+  /** Defaults to AULA_MCP_TOOL_NAMES; see tool-names.ts. */
+  toolNames?: ToolNameStyle;
 }
 
 export interface McpApp {
@@ -54,7 +57,10 @@ export interface McpApp {
 export function createMcpApp({
   logger,
   context = new AulaContext({ logger }),
+  toolNames = toolNameStyle(),
 }: McpAppOptions): McpApp {
+  const tools =
+    toolNames === 'underscore' ? underscoreTools((server) => registerTools(server, context)) : null;
   const mcp = new McpServer(
     {
       name: 'aula-mcp',
@@ -62,9 +68,10 @@ export function createMcpApp({
     },
     {
       capabilities: { tools: {} },
-      instructions: INSTRUCTIONS,
+      instructions: tools ? tools.rewrite(INSTRUCTIONS) : INSTRUCTIONS,
     },
   );
-  registerTools(mcp, context);
+  if (tools) tools.registerOn(mcp);
+  else registerTools(mcp, context);
   return { mcp, context };
 }
