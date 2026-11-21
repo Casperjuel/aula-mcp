@@ -38,13 +38,27 @@
  *   AULA_MCP_INGRESS_PORT     — if set, also boots the in-addon setup/login UI
  *                               on this port (bound to 0.0.0.0 for HA Ingress).
  *                               Default unset; the HA addon sets it to 8099.
+ *   AULA_MCP_MULTI_PARENT=1   — multi-parent mode: every request needs an OIDC
+ *                               access token and each parent gets their own
+ *                               Aula session (see server-mode.ts). Requires:
+ *   AULA_MCP_OIDC_ISSUER      — the IdP issuer URL (the tokens' `iss`)
+ *   AULA_MCP_OIDC_AUDIENCE    — the audience aula-mcp's tokens carry (`aud`)
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { AulaContext } from './aula-context.ts';
+import {
+  authenticateRequest,
+  type Caller,
+  createOidcVerifier,
+  protectedResourceMetadata,
+  sameCaller,
+} from './oidc.ts';
+import { ParentContexts } from './parent-contexts.ts';
+import { resolveServerMode, ServerModeError } from './server-mode.ts';
 import { createMcpApp, type McpApp } from './setup.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
@@ -54,13 +68,63 @@ const HOST = process.env.AULA_MCP_HOST ?? '127.0.0.1';
 
 const logger = process.env.AULA_MCP_LOG === '1' ? consoleLogger('aula-mcp') : silentLogger;
 
-assertSafeBindAddress(HOST);
+const mode = (() => {
+  try {
+    return resolveServerMode(process.env);
+  } catch (err) {
+    if (!(err instanceof ServerModeError)) throw err;
+    process.stderr.write(`${err.message}\n`);
+    process.exit(2);
+  }
+})();
 
-// One AulaContext for every session on both transports. A context owns the
-// token refresh (de-duplicated per context), the AulaClient and its caches;
-// one per session meant each session refreshed and cached on its own and
-// held its own token-file watcher.
-const aulaContext = new AulaContext({ logger });
+// Set only in multi-parent mode. Single-parent mode never touches it.
+const multiParent =
+  mode.kind === 'multi-parent'
+    ? {
+        oidc: mode.oidc,
+        verify: createOidcVerifier(mode.oidc),
+        contexts: new ParentContexts({ logger }),
+      }
+    : null;
+
+// The setup UI logs in to the single-parent token store and has no IdP login
+// yet, so it can't tell which parent it is logging in.
+if (multiParent && process.env.AULA_MCP_INGRESS_PORT) {
+  process.stderr.write('AULA_MCP_INGRESS_PORT (setup UI) is not supported in multi-parent mode.\n');
+  process.exit(2);
+}
+
+// In multi-parent mode every request is authenticated, so the server is no
+// longer "anyone who reaches /mcp is the user" and may bind remotely.
+if (!multiParent) assertSafeBindAddress(HOST);
+
+// Single-parent: one AulaContext for every session on both transports. A
+// context owns the token refresh (de-duplicated per context), the AulaClient
+// and its caches; one per session meant each session refreshed and cached on
+// its own and held its own token-file watcher.
+//
+// Multi-parent: no shared context at all, so no code path can fall back to
+// one login for everyone. Each session gets its caller's own context.
+const sharedContext = multiParent ? null : new AulaContext({ logger });
+
+function contextFor(caller: Caller | null): AulaContext {
+  if (sharedContext) return sharedContext;
+  if (!multiParent || !caller) throw new Error('No caller to pick an Aula session for.');
+  return multiParent.contexts.get(caller);
+}
+
+/** The caller (null in single-parent mode), or the 401/503 to send instead. */
+async function authenticate(request: Request): Promise<Caller | null | Response> {
+  if (!multiParent) return null;
+  return authenticateRequest(multiParent.verify, request, logger);
+}
+
+/** A session may only be used by the caller who opened it. */
+function ownsSession(owner: Caller | null, caller: Caller | null): boolean {
+  if (!owner || !caller) return owner === caller;
+  return sameCaller(owner, caller);
+}
 
 // Streamable HTTP transport.
 //
@@ -88,6 +152,8 @@ const aulaContext = new AulaContext({ logger });
 interface StreamableHttpSession {
   transport: WebStandardStreamableHTTPServerTransport;
   app: McpApp;
+  /** Who opened the session; null in single-parent mode. */
+  caller: Caller | null;
   lastActivityAt: number;
 }
 
@@ -140,14 +206,32 @@ const app = new Hono();
 
 app.get('/healthz', (c) => c.json({ ok: true, name: 'aula-mcp' }));
 
+if (multiParent) {
+  // RFC 9728: tells MCP clients which IdP issues tokens for /mcp. Both the
+  // root form and the path-suffixed form for the /mcp resource.
+  const { oidc } = multiParent;
+  const metadata = (c: Context) =>
+    c.json(protectedResourceMetadata(oidc, new URL('/mcp', c.req.url).href));
+  app.get('/.well-known/oauth-protected-resource', metadata);
+  app.get('/.well-known/oauth-protected-resource/mcp', metadata);
+}
+
 async function handleMcp(request: Request): Promise<Response> {
+  const caller = await authenticate(request);
+  if (caller instanceof Response) return caller;
+
   const sessionId = request.headers.get('mcp-session-id');
 
   // Existing MCP session: route back to the transport that owns it.
   if (sessionId) {
     const session = streamableHttpSessions.get(sessionId);
 
-    if (!session) {
+    // Another parent's session answers exactly like an unknown one, so a
+    // session id can't be probed or taken over.
+    if (session && !ownsSession(session.caller, caller)) {
+      logger.warn('aula-mcp.http.session_caller_mismatch', { sessionId });
+    }
+    if (!session || !ownsSession(session.caller, caller)) {
       return Response.json(
         {
           jsonrpc: '2.0',
@@ -189,7 +273,7 @@ async function handleMcp(request: Request): Promise<Response> {
 
   let createdSessionId: string | undefined;
 
-  const sessionApp = createMcpApp({ logger, context: aulaContext });
+  const sessionApp = createMcpApp({ logger, context: contextFor(caller) });
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
@@ -201,6 +285,7 @@ async function handleMcp(request: Request): Promise<Response> {
       streamableHttpSessions.set(newSessionId, {
         transport,
         app: sessionApp,
+        caller,
         lastActivityAt: Date.now(),
       });
 
@@ -277,6 +362,8 @@ app.delete('/mcp', (c) => handleMcp(c.req.raw));
 interface SseSession {
   transport: HonoSseTransport;
   app: McpApp;
+  /** Who opened the session; null in single-parent mode. */
+  caller: Caller | null;
   lastActivityAt: number;
 }
 const SSE_MAX_SESSIONS = Math.max(1, Number(process.env.AULA_MCP_SSE_MAX_SESSIONS ?? 16));
@@ -325,7 +412,9 @@ const sseSweeper: ReturnType<typeof setInterval> = setInterval(() => {
 }, SSE_SWEEP_INTERVAL_MS);
 sseSweeper.unref?.();
 
-app.get('/sse', (c) => {
+app.get('/sse', async (c) => {
+  const caller = await authenticate(c.req.raw);
+  if (caller instanceof Response) return caller;
   if (sseSessions.size >= SSE_MAX_SESSIONS) {
     logger.error('aula-mcp.sse.session_rejected_cap', {
       active: sseSessions.size,
@@ -353,10 +442,11 @@ app.get('/sse', (c) => {
     });
     // McpServer.connect() binds a single transport, so we instantiate a
     // fresh server per SSE connection; the AulaContext is shared.
-    const sessionApp = createMcpApp({ logger, context: aulaContext });
+    const sessionApp = createMcpApp({ logger, context: contextFor(caller) });
     sseSessions.set(sessionId, {
       transport: sseTransport,
       app: sessionApp,
+      caller,
       lastActivityAt: Date.now(),
     });
 
@@ -388,10 +478,17 @@ app.get('/sse', (c) => {
 });
 
 app.post('/messages', async (c) => {
+  const caller = await authenticate(c.req.raw);
+  if (caller instanceof Response) return caller;
   const sessionId = c.req.query('sessionId');
   if (!sessionId) return c.json({ error: 'missing sessionId query parameter' }, 400);
   const session = sseSessions.get(sessionId);
-  if (!session) return c.json({ error: 'unknown sessionId' }, 404);
+  if (session && !ownsSession(session.caller, caller)) {
+    logger.warn('aula-mcp.sse.session_caller_mismatch', { sessionId });
+  }
+  if (!session || !ownsSession(session.caller, caller)) {
+    return c.json({ error: 'unknown sessionId' }, 404);
+  }
   let body: unknown;
   try {
     body = await c.req.json();
@@ -405,8 +502,11 @@ app.post('/messages', async (c) => {
   return c.body(null, 202);
 });
 
-logger.info('aula-mcp.listening', { host: HOST, port: PORT });
+logger.info('aula-mcp.listening', { host: HOST, port: PORT, mode: mode.kind });
 process.stdout.write(`aula-mcp listening on http://${HOST}:${PORT}/mcp (healthz at /healthz)\n`);
+if (multiParent) {
+  process.stdout.write(`multi-parent mode: OIDC issuer ${multiParent.oidc.issuer}\n`);
+}
 
 const server = Bun.serve({
   port: PORT,
@@ -468,6 +568,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     ]);
     await server.stop();
     if (setupServer) await setupServer.stop();
+    multiParent?.contexts.dispose();
   } catch (err) {
     logger.error('aula-mcp.shutdown_error', { error: (err as Error).message });
   }

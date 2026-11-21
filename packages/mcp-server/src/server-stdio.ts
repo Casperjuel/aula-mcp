@@ -18,9 +18,25 @@
 
 import { silentLogger, stderrLogger } from '@aula-mcp/aula-auth';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { resolveServerMode, ServerModeError } from './server-mode.ts';
 import { createMcpApp } from './setup.ts';
 
 const logger = process.env.AULA_MCP_LOG === '1' ? stderrLogger('aula-mcp') : silentLogger;
+
+// stdio has no request headers, so there is no token to tell parents apart.
+// Multi-parent mode (and a half-configured one) is a startup error here.
+try {
+  if (resolveServerMode(process.env).kind === 'multi-parent') {
+    process.stderr.write(
+      'Multi-parent mode needs the HTTP server; stdio cannot identify parents.\n',
+    );
+    process.exit(2);
+  }
+} catch (err) {
+  if (!(err instanceof ServerModeError)) throw err;
+  process.stderr.write(`${err.message}\n`);
+  process.exit(2);
+}
 
 const { mcp } = createMcpApp({ logger });
 
