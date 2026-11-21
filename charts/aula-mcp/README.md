@@ -50,6 +50,10 @@ kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
 | `encryptionKey.existingSecret` | `""` | Secret with `AULA_MCP_KEY` for the token store. |
 | `persistence.*` | 1Gi PVC | Token store. Kept on uninstall. |
 | `gallery.persistence.*` | 50Gi PVC at `/gallery` | Downloaded Aula photos and videos. Kept on uninstall. Disabled: files go under `/data/gallery`. |
+| `storage.type` | `sqlite` | Local database of Aula data: `sqlite` (on the data volume), `postgres` or `none`. |
+| `storage.postgres.existingSecret` / `urlKey` | – / `uri` | Secret with the PostgreSQL URL, e.g. CloudNativePG's `<cluster>-app`. Required with `postgres`. |
+| `storage.key.existingSecret` / `secretKey` | – / `AULA_MCP_STORAGE_KEY` | Encryption key of the stored data (`openssl rand -base64 32`). Without it a key is generated on the data volume; keep it in a secret with `postgres`. |
+| `sync.enabled` | `true` | Background sync into storage. `false`: only `aula.sync.run`. |
 | `gallery.downloads` | `true` | `false` lists albums without downloading files. |
 | `gallery.stopAt` | `0.9` | Disk use of the gallery volume at which downloads pause. |
 | `gallery.s3.*` | off | Store gallery files in an S3 bucket instead (`bucket`, `endpoint` for MinIO/Ceph RGW/Garage, `region`, `prefix`, keys from `existingSecret`). No gallery volume is made. |

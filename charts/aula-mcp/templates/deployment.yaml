@@ -101,6 +101,28 @@ spec:
                   name: {{ . }}
                   key: {{ $.Values.encryptionKey.secretKey }}
             {{- end }}
+            {{- with .Values.storage }}
+            - name: AULA_MCP_STORAGE
+              value: {{ .type | quote }}
+            {{- if eq .type "postgres" }}
+            - name: AULA_MCP_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .postgres.existingSecret }}
+                  key: {{ .postgres.urlKey }}
+            {{- end }}
+            {{- if .key.existingSecret }}
+            - name: AULA_MCP_STORAGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .key.existingSecret }}
+                  key: {{ .key.secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- if not .Values.sync.enabled }}
+            - name: AULA_MCP_SYNC
+              value: "0"
+            {{- end }}
             {{- with .Values.gallery.s3 }}
             {{- if .enabled }}
             - name: AULA_MCP_GALLERY_STORE

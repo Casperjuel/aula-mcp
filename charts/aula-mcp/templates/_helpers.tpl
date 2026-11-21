@@ -59,6 +59,12 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- fail "setupUi.login needs mode: multi-parent" }}
 {{- end }}
 {{- end }}
+{{- if not (has .Values.storage.type (list "sqlite" "postgres" "none")) }}
+{{- fail "storage.type must be sqlite, postgres or none" }}
+{{- end }}
+{{- if and (eq .Values.storage.type "postgres") (not .Values.storage.postgres.existingSecret) }}
+{{- fail "storage.type postgres needs storage.postgres.existingSecret with the database URL" }}
+{{- end }}
 {{- if and .Values.httpRoute.setupUi.enabled (not .Values.setupUi.enabled) }}
 {{- fail "httpRoute.setupUi needs setupUi.enabled" }}
 {{- end }}

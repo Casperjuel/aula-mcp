@@ -45,6 +45,29 @@ encryptionKey:
   existingSecret: ""
   secretKey: AULA_MCP_KEY
 
+# Local database of each parent's Aula data, filled by the sync jobs and read
+# by the dashboard and the aula.local.* tools (see README, AULA_MCP_STORAGE).
+storage:
+  # sqlite (a file on the data volume), postgres, or none (turned off).
+  type: sqlite
+  postgres:
+    # Secret holding the connection URL. For CloudNativePG this is the
+    # <cluster>-app secret, whose `uri` key has the URL.
+    existingSecret: ""
+    urlKey: uri
+  # Key the stored data is encrypted with (base64, 32 bytes:
+  # `openssl rand -base64 32`). Without it, one is generated on the data
+  # volume; with postgres, keep it in a secret so the database stays readable
+  # if the volume is lost.
+  key:
+    existingSecret: ""
+    secretKey: AULA_MCP_STORAGE_KEY
+
+# Background sync of each parent's own Aula data into storage. false: only
+# aula.sync.run fetches.
+sync:
+  enabled: true
+
 extraEnv: []
 
 persistence:
