@@ -586,8 +586,9 @@ if (INGRESS_PORT_RAW) {
             changed: (caller) => multiParent.contexts.invalidate(caller),
           },
           autoRenew: keepAliveEnabled,
+          myData: { contextFor },
         }
-      : { logger, autoRenew: keepAliveEnabled },
+      : { logger, autoRenew: keepAliveEnabled, myData: { contextFor } },
   );
   setupServer = Bun.serve({
     port: ingressPort,

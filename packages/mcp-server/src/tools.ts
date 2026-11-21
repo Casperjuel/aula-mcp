@@ -229,7 +229,13 @@ export function validateSetTemplateArgs(args: SetTemplateArgs): string[] {
   return problems;
 }
 
-export function registerTools(server: McpServer, context: AulaContext): void {
+/** `env` decides which gated tools are registered (tool-catalog.ts lists
+ *  them all, enabled or not). */
+export function registerTools(
+  server: McpServer,
+  context: AulaContext,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
   // --- aula.discover -------------------------------------------------------
 
   server.registerTool(
@@ -328,7 +334,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
   // AULA_MCP_WRITE=1 so a server stays read-only by default — rescheduling a
   // child's pickup is not something an agent should be able to do unasked.
 
-  if (process.env.AULA_MCP_WRITE === '1') {
+  if (env.AULA_MCP_WRITE === '1') {
     server.registerTool(
       'aula.presence.set_template',
       {
@@ -780,7 +786,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
 
   // --- aula.raw_request (gated) --------------------------------------------
 
-  if (process.env.AULA_MCP_RAW === '1') {
+  if (env.AULA_MCP_RAW === '1') {
     server.registerTool(
       'aula.raw_request',
       {

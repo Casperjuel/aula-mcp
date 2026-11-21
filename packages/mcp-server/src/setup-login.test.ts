@@ -89,11 +89,19 @@ function setup(clientSecret?: string) {
     }
     return store;
   };
+  const liveFor: string[] = [];
   const app = createSetupApp({
     logger: silentLogger,
     parents: { login, storeFor, changed: (caller) => changed.push(caller.sub) },
+    myData: {
+      tools: [],
+      contextFor: (caller) => {
+        liveFor.push(caller?.sub ?? 'none');
+        throw new Error(`no Aula in tests (${caller?.sub})`);
+      },
+    },
   });
-  return { app, storeFor, changed };
+  return { app, storeFor, changed, liveFor };
 }
 
 type App = ReturnType<typeof setup>['app'];
@@ -241,6 +249,52 @@ describe('setup UI sign-in', () => {
     expect((await post()).status).toBe(403);
     expect((await post('https://evil.example.com')).status).toBe(403);
     expect((await post(PUBLIC_URL)).status).toBe(200);
+  });
+
+  test('My data shows each parent only their own data', async () => {
+    const { app, storeFor, liveFor } = setup();
+    expect((await app.request('/data')).status).toBe(302);
+    expect((await app.request('/data/summary')).status).toBe(401);
+    expect((await app.request('/data/live')).status).toBe(401);
+    expect((await app.request('/data/tools')).status).toBe(401);
+
+    const a = await signIn(app, 'parent-a');
+    const b = await signIn(app, 'parent-b');
+    await storeFor({ issuer, sub: 'parent-a' }).save({
+      version: 1,
+      username: 'a',
+      tokens: {
+        access_token: 'AT',
+        refresh_token: 'RT',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        obtained_at: Math.floor(Date.now() / 1000),
+      },
+      saved_at: Math.floor(Date.now() / 1000),
+    });
+
+    const summaryA = (await (
+      await app.request('/data/summary', { headers: { cookie: a } })
+    ).json()) as {
+      parent: { name: string };
+      login: { username?: string };
+    };
+    expect(summaryA.parent.name).toBe('Parent parent-a');
+    expect(summaryA.login.username).toBe('a');
+    const summaryB = (await (
+      await app.request('/data/summary', { headers: { cookie: b } })
+    ).json()) as {
+      parent: { name: string };
+      login: { logged_in: boolean };
+    };
+    expect(summaryB.parent.name).toBe('Parent parent-b');
+    expect(summaryB.login.logged_in).toBe(false);
+
+    // B has no Aula login, so nothing is read for B; A reads through A's context.
+    expect((await app.request('/data/live', { headers: { cookie: b } })).status).toBe(409);
+    expect((await app.request('/data/live', { headers: { cookie: a } })).status).toBe(502);
+    expect(liveFor).toEqual(['parent-a']);
   });
 
   test('a login session belongs to the parent who started it', async () => {

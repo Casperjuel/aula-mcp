@@ -46,9 +46,14 @@ import {
 import { type Context, Hono } from 'hono';
 import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
+import type { AulaContext } from './aula-context.ts';
+import { buildDiscoverManifest } from './discover.ts';
 import { type Caller, callerId } from './oidc.ts';
 import type { SetupLogin } from './setup-login.ts';
+import { renderMyDataPage } from './setup-my-data.ts';
 import { DEFAULT_RENEW_WITHIN_SECONDS } from './token-keepalive.ts';
+import { type ToolInfo, toolCatalog } from './tool-catalog.ts';
+import { toolNameStyle } from './tool-names.ts';
 
 /** Max time we'll hold a login session waiting on the user to pick their
  *  MitID identity after the picker is shown. After this the login rejects
@@ -62,6 +67,14 @@ export interface SetupAppOptions {
   store?: TokenStore;
   /** The background keep-alive renews the tokens (AULA_MCP_KEEPALIVE). */
   autoRenew?: boolean;
+  /** The "Mine data" page. Without it, /data shows what is stored and the
+   *  tool list, but cannot read anything live from Aula. */
+  myData?: {
+    /** Defaults to every tool with the server's own env and name style. */
+    tools?: ToolInfo[];
+    /** The parent's own context (null caller in single-parent mode). */
+    contextFor(caller: Caller | null): AulaContext;
+  };
   /** Multi-parent mode: the sign-in, and each parent's own token store. */
   parents?: {
     login: SetupLogin;
@@ -96,7 +109,10 @@ interface LoginSession {
   signalDone: () => void;
 }
 
-const ICON_SVG = `<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 3 1 9l11 6 9-4.91V17h2V9z"/></svg>`;
+/** HTML pages of the setup UI, as opposed to its JSON endpoints. */
+const PAGES = new Set(['/', '/data']);
+
+export const ICON_SVG = `<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 3 1 9l11 6 9-4.91V17h2V9z"/></svg>`;
 
 export function createSetupApp(options: SetupAppOptions = {}): Hono {
   const logger = options.logger ?? silentLogger;
@@ -128,7 +144,8 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     parents.login.mount(app);
     app.use('*', async (c, next) => {
       if (!parents.login.parent(c)) {
-        if (c.req.method === 'GET' && c.req.path === '/') return c.redirect('/auth/login', 302);
+        // Pages send the browser to sign in; API calls just get a 401.
+        if (c.req.method === 'GET' && PAGES.has(c.req.path)) return c.redirect('/auth/login', 302);
         return c.json({ error: 'not signed in' }, 401);
       }
       if (c.req.method !== 'GET' && !parents.login.sameOrigin(c)) {
@@ -140,16 +157,69 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
 
   app.get('/', (c) => c.html(renderSetupPage(parentOf(c)?.name)));
 
-  app.get('/status', async (c) => {
-    const record = await storeOf(c).load();
-    if (!record) return c.json({ logged_in: false });
+  app.get('/status', async (c) => c.json(await loginStatus(storeOf(c))));
+
+  const tools = options.myData?.tools ?? toolCatalog(process.env, toolNameStyle());
+
+  app.get('/data', (c) => c.html(renderMyDataPage(parentOf(c)?.name)));
+
+  // What aula-mcp keeps about the signed-in parent. Never the tokens.
+  app.get('/data/summary', async (c) => {
+    const store = storeOf(c);
+    const login = await loginStatus(store);
+    const parent = parentOf(c);
+    return c.json({
+      parent: parent ? { name: parent.name, id: callerId(parent.caller) } : null,
+      login,
+      stored: storedItems(store, login.logged_in, parent !== null),
+      not_stored: [
+        'Beskeder, opslag, kalender, ugeplaner, lektier, fravær, kontakter og billeder fra Aula. ' +
+          'De hentes live fra Aula, når du spørger, og gemmes ikke.',
+        'Hvad du skriver til AI-assistenten. aula-mcp ser kun de værktøjskald, assistenten laver.',
+      ],
+    });
+  });
+
+  app.get('/data/tools', (c) => c.json({ tools }));
+
+  // A live read through the parent's own context: who and what Aula shows.
+  app.get('/data/live', async (c) => {
+    if (!options.myData) return c.json({ error: 'live data is not available here' }, 404);
+    if (!(await storeOf(c).load())) return c.json({ error: 'not logged in to Aula' }, 409);
+    const parent = parentOf(c);
+    try {
+      const manifest = await buildDiscoverManifest(
+        options.myData.contextFor(parent?.caller ?? null),
+      );
+      return c.json({
+        user: manifest.user,
+        children: manifest.children.map((child) => ({
+          name: child.name,
+          institution: child.institution?.name ?? null,
+        })),
+        capabilities: Object.entries(manifest.capabilities).map(([area, capability]) => ({
+          area,
+          summary: capability.summary,
+          tools: capability.tools,
+        })),
+        detected_widgets: manifest.detectedWidgets,
+      });
+    } catch (err) {
+      logger.warn('setup.data.live_failed', { error: (err as Error).message });
+      return c.json({ error: (err as Error).message }, 502);
+    }
+  });
+
+  async function loginStatus(store: TokenStore) {
+    const record = await store.load();
+    if (!record) return { logged_in: false as const };
     const now = Math.floor(Date.now() / 1000);
     const { expires_at } = record.tokens;
     // The keep-alive renews once less than DEFAULT_RENEW_WITHIN_SECONDS is
     // left, at its next check (every few minutes).
     const renewsAt = options.autoRenew ? expires_at - DEFAULT_RENEW_WITHIN_SECONDS : null;
-    return c.json({
-      logged_in: true,
+    return {
+      logged_in: true as const,
       username: record.username,
       identity_name: record.identityName ?? null,
       expires_at,
@@ -158,8 +228,8 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       auto_renew: options.autoRenew === true,
       renews_at: renewsAt,
       seconds_until_renew: renewsAt === null ? null : Math.max(0, renewsAt - now),
-    });
-  });
+    };
+  }
 
   app.post('/login/start', async (c) => {
     let body: { username?: string };
@@ -386,6 +456,52 @@ async function runLogin(session: LoginSession, logger: Logger): Promise<void> {
   }
 }
 
+interface StoredItem {
+  what: string;
+  where: string;
+  detail: string;
+}
+
+/** Where the parent's data lives on this server, described for the parent. */
+function storedItems(store: TokenStore, loggedIn: boolean, multiParent: boolean): StoredItem[] {
+  const items: StoredItem[] = [];
+  const filePath = (store as { filePath?: unknown }).filePath;
+  const where =
+    typeof filePath === 'string'
+      ? `Krypteret fil på serveren: ${filePath} (nøglen ligger ved siden af i .key)`
+      : 'macOS-nøgleringen på serveren';
+  if (loggedIn) {
+    items.push({
+      what: 'Dit Aula-login',
+      where,
+      detail:
+        'Adgangsnøgler (OAuth access- og refresh-token) til din Aula-konto, dit MitID-brugernavn ' +
+        'og den valgte identitet. Nøglerne vises aldrig her. "Log ud af Aula" sletter dem.',
+    });
+  }
+  items.push({
+    what: 'Vedhæftninger du har bedt assistenten åbne',
+    where:
+      process.env.AULA_MCP_ATTACHMENTS_DIR ??
+      'Midlertidig mappe på serveren (aula-attachments i systemets temp-mappe)',
+    detail: 'Filer fra beskeder og opslag gemmes her, når assistenten henter dem.',
+  });
+  items.push({
+    what: 'Midlertidig cache',
+    where: 'Serverens hukommelse',
+    detail:
+      'Din profil og dine børns id’er, så de ikke hentes ved hvert kald. Slettes ved genstart.',
+  });
+  if (multiParent) {
+    items.push({
+      what: 'Din identitet hos login-udbyderen',
+      where: 'Serverens hukommelse (login-session, op til 8 timer)',
+      detail: 'Navn og id fra din login-udbyder, så serveren ved, at det er dig.',
+    });
+  }
+  return items;
+}
+
 function defaultAddonStore(): TokenStore {
   // Mirror AulaContext's default store path resolution: honour AULA_MCP_DIR
   // when set (the HA addon's run.sh exports it to /config/aula-mcp), and
@@ -398,7 +514,7 @@ function defaultAddonStore(): TokenStore {
   });
 }
 
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text.replace(
     /[&<>"']/g,
     (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch] as string,
@@ -460,6 +576,7 @@ function renderSetupPage(signedInAs?: string): string {
   <h1>${ICON_SVG} aula-mcp</h1>
   ${account}
   <p>Log ind med MitID, så HA's Assist + Voice kan tale med Aula.</p>
+  <p><a href="data">Mine data og værktøjer →</a></p>
 
   <div class="card" id="status-card">
     <div class="status-line">
