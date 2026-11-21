@@ -263,3 +263,18 @@ describe('GET /data/messages/roles', () => {
     });
   });
 });
+
+describe('gallery summaries', () => {
+  test('albums and media get a readable title, not the kind name', () => {
+    const album = summarize(
+      item('gallery_album', { album: { title: 'Skovtur' }, child: 'Alma', mediaCount: 3 }),
+    );
+    expect(album.title).toBe('Skovtur');
+    expect(album.subtitle).toBe('Alma · 3 medier');
+    const media = summarize(
+      item('gallery_media', { albumId: 1, media: { mediaType: 'video', file: { name: 'a.mp4' } } }),
+    );
+    expect(media.title).toBe('a.mp4');
+    expect(media.subtitle).toBe('Video');
+  });
+});

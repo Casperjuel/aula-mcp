@@ -151,6 +151,20 @@ export function summarize(item: StoredItem): ItemSummary {
         title: firstStr(d, ['name', 'displayName', 'title']) || 'Gruppe',
         subtitle: firstStr(d, ['type', 'groupType', 'institutionName', 'description']),
       };
+    case 'gallery_album':
+      return {
+        ...base,
+        title: str(asData(d.album).title) || 'Album',
+        subtitle: [str(d.child), `${Number(d.mediaCount) || 0} medier`].filter(Boolean).join(' · '),
+      };
+    case 'gallery_media': {
+      const media = asData(d.media);
+      return {
+        ...base,
+        title: str(media.title) || str(asData(media.file).name) || 'Billede',
+        subtitle: str(media.mediaType) === 'video' ? 'Video' : 'Billede',
+      };
+    }
     default:
       return {
         ...base,
