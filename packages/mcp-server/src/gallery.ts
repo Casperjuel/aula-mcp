@@ -31,8 +31,17 @@ import { dirname, join, resolve, sep } from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import type { GalleryAlbum, GalleryMedia } from '@aula-mcp/aula-client';
+import {
+  type AttachmentKind,
+  type AttachmentView,
+  attachmentFiles,
+  attachmentRel,
+  openAttachment,
+  removeAttachments,
+  storedAttachments,
+} from './attachments.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
-import type { ParentStorage, StoredItem, SyncState } from './storage.ts';
+import type { ItemKind, ParentStorage, StoredItem, SyncState } from './storage.ts';
 import type { SyncJob } from './sync.ts';
 
 const MINUTE = 60 * 1000;
@@ -478,7 +487,7 @@ export function albumFolder(album: GalleryAlbum, child: string): string {
 }
 
 /** Every stored row of a kind, page by page. */
-async function listAll(store: ParentStorage, kind: 'gallery_album' | 'gallery_media') {
+async function listAll(store: ParentStorage, kind: ItemKind) {
   const rows: StoredItem[] = [];
   for (let offset = 0; ; offset += 500) {
     const page = await store.list({ kind, limit: 500, offset });
@@ -746,6 +755,16 @@ export interface MediaSummary {
   error: string | null;
 }
 
+/** The photos and videos of one post, shown as an album. */
+export interface PostAlbum {
+  postId: string;
+  title: string;
+  /** YYYY-MM-DD, Danish time. */
+  date: string | null;
+  author: string | null;
+  media: AttachmentView[];
+}
+
 /** One parent's gallery as the tools and the dashboard read it. */
 export class GalleryView {
   constructor(
@@ -874,6 +893,51 @@ export class GalleryView {
   }
 
   /** The stored file (or its thumbnail) of one media item. */
+  /** A post's or message's attachments, each marked saved or not. */
+  attachments(kind: AttachmentKind, id: string): Promise<AttachmentView[]> {
+    return storedAttachments(this.store, this.files, kind, id);
+  }
+
+  /** One saved attachment, or null. */
+  attachment(kind: AttachmentKind, id: string, index: number) {
+    return openAttachment(this.store, this.files, kind, id, index);
+  }
+
+  /** Deletes the saved attachments of posts, of messages, or of both. */
+  removeAttachments(kind?: AttachmentKind): Promise<number> {
+    return removeAttachments(this.store, this.files, kind);
+  }
+
+  /**
+   * Every post with saved photos or videos, newest first: an album each in
+   * the dashboard's gallery, made here and never in Aula.
+   */
+  async postAlbums(): Promise<PostAlbum[]> {
+    const out: PostAlbum[] = [];
+    for (const row of await listAll(this.store, 'post')) {
+      const media: AttachmentView[] = [];
+      for (const file of attachmentFiles(row.data)) {
+        if (!/^(image|video)\//.test(file.mediaType)) continue;
+        if (!(await this.files.exists(attachmentRel('post', row.id, file)))) continue;
+        const { url: _url, ...view } = file;
+        media.push({ ...view, saved: true });
+      }
+      if (!media.length) continue;
+      const post = row.data as { title?: string; ownerProfile?: { fullName?: string } };
+      out.push({
+        postId: row.id,
+        title: post.title?.trim() || `Opslag ${row.id}`,
+        date:
+          row.occurredAt === null
+            ? null
+            : copenhagenDate(new Date(row.occurredAt * 1000).toISOString()),
+        author: post.ownerProfile?.fullName ?? null,
+        media,
+      });
+    }
+    return out;
+  }
+
   async file(albumId: number, mediaId: number, variant: 'original' | 'thumb') {
     const row = await this.store.get('gallery_media', `${albumId}:${mediaId}`);
     const m = row?.data as StoredMedia | undefined;

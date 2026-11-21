@@ -6,6 +6,7 @@
  */
 
 import { PRESENCE_STATUS_CODE } from '@aula-mcp/aula-client';
+import { type AttachmentView, attachmentViews } from './attachments.ts';
 import type { ItemKind, StoredItem } from './storage.ts';
 
 export interface ItemSummary {
@@ -23,6 +24,8 @@ export interface ItemSummary {
   senderRole?: SenderRole;
   /** What the calendar page needs to place and badge an event. */
   event?: EventSummary;
+  /** Where a photo or video sits in the gallery. */
+  media?: { albumId: number; mediaId: number };
 }
 
 /** Aula's portalRole on a message sender; `other` is system and auto messages. */
@@ -50,7 +53,7 @@ export interface EventSummary {
 export interface ItemDetail extends ItemSummary {
   body: string;
   fields: Array<[string, string]>;
-  attachments: string[];
+  attachments: AttachmentView[];
 }
 
 export interface ThreadMessageView {
@@ -59,7 +62,7 @@ export interface ThreadMessageView {
   /** Unix seconds. */
   at: number | null;
   body: string;
-  attachments: string[];
+  attachments: AttachmentView[];
   role: SenderRole;
 }
 
@@ -163,6 +166,9 @@ export function summarize(item: StoredItem): ItemSummary {
         ...base,
         title: str(media.title) || str(asData(media.file).name) || 'Billede',
         subtitle: str(media.mediaType) === 'video' ? 'Video' : 'Billede',
+        ...(Number.isSafeInteger(d.albumId) && Number.isSafeInteger(media.id)
+          ? { media: { albumId: d.albumId as number, mediaId: media.id as number } }
+          : {}),
       };
     }
     default:
@@ -185,15 +191,15 @@ export function detail(item: StoredItem): ItemDetail {
     if (text) fields.push([label, text]);
   };
   let body = '';
-  let attachments: string[] = [];
+  let attachments: AttachmentView[] = [];
   switch (item.kind) {
     case 'message':
       body = messageText(d);
-      attachments = attachmentNames(d.attachments);
+      attachments = attachmentViews(d);
       break;
     case 'post':
       body = htmlToText(str(asData(d.content).html));
-      attachments = attachmentNames(d.attachments);
+      attachments = attachmentViews(d);
       if (d.isImportant === true) field('Vigtigt', 'Ja');
       break;
     case 'calendar_event': {
@@ -246,7 +252,7 @@ export function threadMessage(item: StoredItem): ThreadMessageView {
     from: str(asData(d.sender).fullName),
     at: item.occurredAt,
     body: messageText(d),
-    attachments: attachmentNames(d.attachments),
+    attachments: attachmentViews(d),
     role: personRole(d.sender) ?? 'other',
   };
 }
@@ -376,20 +382,6 @@ function messageText(d: Data): string {
   return (
     str(text.plain) || htmlToText(str(text.html)) || (typeof d.text === 'string' ? d.text : '')
   );
-}
-
-function attachmentNames(value: unknown): string[] {
-  return asArray(value)
-    .map((a) => {
-      const x = asData(a);
-      return (
-        str(x.name) ||
-        str(asData(x.file).name) ||
-        str(asData(asData(x.media).file).name) ||
-        'Vedhæftet fil'
-      );
-    })
-    .slice(0, 20);
 }
 
 function asData(value: unknown): Data {

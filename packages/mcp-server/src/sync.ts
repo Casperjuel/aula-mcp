@@ -22,6 +22,7 @@ import {
   AulaStepUpRequiredError,
   type CalendarEvent,
 } from '@aula-mcp/aula-client';
+import { saveAttachments } from './attachments.ts';
 import { addDays, aulaTs, startOfDayCopenhagen } from './calendar-range.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
 import {
@@ -117,7 +118,7 @@ export type SyncJob = (input: SyncJobInput) => Promise<SyncJobResult>;
 
 // --- jobs -------------------------------------------------------------------
 
-const syncMessages: SyncJob = async ({ client, store, firstRun }) => {
+const syncMessages: SyncJob = async ({ client, store, gallery, firstRun }) => {
   let fetched = 0;
   let changed = 0;
   let skipped = 0;
@@ -166,6 +167,7 @@ const syncMessages: SyncJob = async ({ client, store, firstRun }) => {
       items.push(threadItem);
       fetched += messages.length;
       changed += (await store.put(items)).changed;
+      if (gallery) await saveAttachments(gallery, items);
     }
     // Threads come newest first: a page with nothing new means the rest is
     // already stored.
@@ -187,7 +189,7 @@ const syncNotifications: SyncJob = async ({ client, store }) => {
   return { fetched: notifications.length, changed: result.changed };
 };
 
-const syncPosts: SyncJob = async ({ client, store, firstRun }) => {
+const syncPosts: SyncJob = async ({ client, store, gallery, firstRun }) => {
   const institutionProfileIds = await resolveFamilyProfileIds(client);
   let fetched = 0;
   let changed = 0;
@@ -196,14 +198,15 @@ const syncPosts: SyncJob = async ({ client, store, firstRun }) => {
     const data = await client.getPosts({ index, limit: 20, institutionProfileIds });
     const posts = (data?.posts ?? []).filter((post) => post.id !== undefined);
     fetched += posts.length;
-    const result = await store.put(
-      posts.map((post) => ({
-        kind: 'post',
-        id: String(post.id),
-        occurredAt: post.publishAt ?? post.timestamp ?? null,
-        data: post,
-      })),
-    );
+    const items: ItemInput[] = posts.map((post) => ({
+      kind: 'post',
+      id: String(post.id),
+      occurredAt: post.publishAt ?? post.timestamp ?? null,
+      data: post,
+    }));
+    const result = await store.put(items);
+    // The links in the feed are fresh now and expire within the hour.
+    if (gallery) await saveAttachments(gallery, items);
     changed += result.changed;
     if (!data?.moreMessagesExist || posts.length === 0 || (!firstRun && result.changed === 0))
       break;

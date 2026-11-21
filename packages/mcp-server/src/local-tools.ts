@@ -130,7 +130,8 @@ export function registerLocalTools(server: McpServer, store: ParentStorage): voi
       description:
         'One item from the local database as the parent would read it: Danish title, ' +
         'the text as plain text (HTML removed), labelled fields (for a calendar event: ' +
-        'type, start, end, place, who made it, invited, response) and attachment names. ' +
+        'type, start, end, place, who made it, invited, response) and the attachments ' +
+        '(index, name, type, size; open a saved one with aula.gallery.attachment). ' +
         'A message_thread comes with all its stored messages, oldest first, each with ' +
         "sender, time, text and sender role. Set `raw` for Aula's own JSON as it was " +
         'stored. Take `kind` and `id` from aula.local.search. Never calls Aula and never ' +

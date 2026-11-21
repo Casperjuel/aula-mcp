@@ -1,6 +1,7 @@
 /**
  * MCP tools for the downloaded gallery: what is stored, the albums, the media
- * in an album, and a thumbnail as an image. They read the local copy only;
+ * in an album, a thumbnail as an image, and the photos and files saved from
+ * posts and messages. They read the local copy only;
  * the `gallery` sync job (aula.sync.run) fetches from Aula.
  */
 
@@ -118,6 +119,81 @@ export function registerGalleryTools(server: McpServer, gallery: GalleryView): v
             data: Buffer.concat(chunks).toString('base64'),
             mimeType: file.contentType,
           },
+        ],
+      };
+    },
+  );
+  server.registerTool(
+    'aula.gallery.post_albums',
+    {
+      title: 'Photos from posts',
+      description:
+        'Posts (opslag) with photos or videos attached, newest first, each shown as an ' +
+        "album in the dashboard's gallery: post id, title, Danish date, author and the " +
+        'saved files (index, name, type, size). The albums are made from the local copy ' +
+        'and never in Aula. Filter by `year`. Look at one with aula.gallery.attachment ' +
+        '(kind "post", the post id and the index); read the post itself with ' +
+        'aula.local.get. Only files the posts sync saved while their links were fresh ' +
+        'are listed.',
+      inputSchema: {
+        year: z
+          .string()
+          .regex(/^\d{4}$/)
+          .optional()
+          .describe('Year of the post, e.g. "2026".'),
+      },
+    },
+    async (args) => {
+      const posts = (await gallery.postAlbums()).filter(
+        (p) => !args.year || p.date?.startsWith(args.year),
+      );
+      return jsonContent({ total: posts.length, posts });
+    },
+  );
+
+  server.registerTool(
+    'aula.gallery.attachment',
+    {
+      title: 'Show a saved attachment',
+      description:
+        'One saved attachment of a stored post or message. A photo (JPEG, PNG, GIF, ' +
+        'WebP, up to 5 MB) comes back as an image and a text file as text; anything ' +
+        'else (PDF, Word, video) comes back as its name, type and size only, to open in ' +
+        'the dashboard. Take `kind` and `id` from aula.local.search, and `index` from ' +
+        'the attachments aula.local.get lists (0 is the first). The posts and messages ' +
+        'sync save attachments while their Aula links are fresh; answers with an error ' +
+        'when no copy is saved. For a file that was never saved use ' +
+        'aula.posts.get_attachment or aula.messages.get_attachment, which ask Aula.',
+      inputSchema: {
+        kind: z.enum(['post', 'message']).describe('post or message.'),
+        id: z.string().min(1).describe('Id from aula.local.search.'),
+        index: z.number().int().min(0).max(19).describe('Attachment number, 0 first.'),
+      },
+    },
+    async (args) => {
+      const file = await gallery.attachment(args.kind, args.id, args.index);
+      if (!file) {
+        return {
+          isError: true,
+          content: [{ type: 'text' as const, text: 'No saved copy of that attachment.' }],
+        };
+      }
+      const about = { name: file.name, mediaType: file.mediaType, bytes: file.bytes };
+      const image = /^image\/(jpeg|png|gif|webp)$/.test(file.mediaType);
+      const text = file.mediaType === 'text/plain';
+      if ((!image && !text) || file.bytes > 5 * 1024 * 1024) {
+        file.stream.destroy();
+        return jsonContent({ ...about, shown: false });
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of file.stream) chunks.push(chunk as Buffer);
+      const data = Buffer.concat(chunks);
+      return {
+        content: [
+          { type: 'text' as const, text: JSON.stringify(about) },
+          image
+            ? { type: 'image' as const, data: data.toString('base64'), mimeType: file.mediaType }
+            : { type: 'text' as const, text: data.toString('utf8') },
         ],
       };
     },

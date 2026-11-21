@@ -335,9 +335,21 @@ button.li { width: 100%; background: none; border-left: 0; border-right: 0; bord
 .msg .avatar { background: var(--surface-2); color: var(--muted); }
 .msg-head { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: .86rem; }
 .msg-body { margin-top: 4px; max-width: 65ch; }
-.attachments { display: flex; gap: 6px; flex-wrap: wrap; }
-.attach { display: inline-flex; gap: 6px; align-items: center; margin-top: 8px; padding: 5px 10px; border-radius: 8px; background: var(--surface-2); font-size: .84rem; overflow-wrap: anywhere; }
-.attach svg { width: 14px; height: 14px; flex: none; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.attach-table { margin-top: 12px; }
+.day-group { margin-top: 18px; display: grid; gap: 8px; justify-items: start; }
+.day-group > .list, .day-group > .media-grid { width: 100%; }
+.day-group-head { display: flex; gap: 8px; align-items: center; font-size: .95rem; margin: 0; }
+.day-group-head svg { width: 16px; height: 16px; flex: none; }
+.day-item { width: 100%; }
+.attach-table td { overflow-wrap: anywhere; }
+.attach-table .prev { width: 64px; }
+.attach-prev { width: 56px; height: 56px; border-radius: 8px; overflow: hidden; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
+.attach-prev img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.attach-prev svg, .attach-acts svg { width: 16px; height: 16px; flex: none; }
+.attach-acts { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.attach-table td.acts { text-align: right; white-space: nowrap; }
+@media (max-width: 560px) { .attach-table .col-type { display: none; } .attach-table td.acts { white-space: normal; } }
 .detail-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: .86rem; color: var(--muted); margin: 6px 0 14px; }
 .detail .kv { margin-bottom: 14px; }
 .back-btn { display: none; }
@@ -628,6 +640,7 @@ const I = {
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/>',
   play: '<path d="M8 5.5v13l10.5-6.5z"/>',
   download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
+  external: '<path d="M14 4.5h5.5V10M19.5 4.5 11 13M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/>',
 };
 const icon = (name, cls) => {
   const span = document.createElement('span');
@@ -1097,8 +1110,50 @@ function selectItem(key) {
   loadDetail();
   if (window.innerWidth < 1100) window.scrollTo(0, $('browse').offsetTop - 80);
 }
-function attachList(names) {
-  return names && names.length ? el('div', { class: 'attachments' }, names.map((n) => el('span', { class: 'attach' }, icon('clip'), n))) : null;
+// Matches the types the server shows inline; anything else is a download.
+const INLINE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'application/pdf', 'video/mp4', 'video/webm', 'audio/mpeg', 'audio/mp4', 'text/plain'];
+const attachUrl = (kind, id, index, download) =>
+  'data/attachments/' + kind + '/' + encodeURIComponent(String(id)) + '/' + index + (download ? '?download=1' : '');
+const isPicture = (t) => /^image\\/(jpeg|png|gif|webp)$/.test(t);
+function typeLabel(t) {
+  if (t.startsWith('image/')) return 'Billede';
+  if (t.startsWith('video/')) return 'Video';
+  if (t.startsWith('audio/')) return 'Lyd';
+  if (t === 'application/pdf') return 'PDF';
+  if (t === 'text/plain') return 'Tekst';
+  if (/word/.test(t)) return 'Word';
+  if (/excel|spreadsheet/.test(t)) return 'Excel';
+  if (/powerpoint|presentation/.test(t)) return 'PowerPoint';
+  return 'Fil';
+}
+function attachTable(kind, id, files) {
+  if (!files || !files.length) return null;
+  const rows = files.map((f) => {
+    const open = attachUrl(kind, id, f.index);
+    const preview = f.saved && isPicture(f.mediaType)
+      ? el('a', { class: 'attach-prev', href: open, target: '_blank', rel: 'noopener', 'aria-label': 'Vis ' + f.name }, lazyImg(open, 'image'))
+      : el('span', { class: 'attach-prev', 'aria-hidden': 'true' }, icon(f.mediaType.startsWith('video/') ? 'play' : f.mediaType.startsWith('image/') ? 'image' : 'clip'));
+    const acts = f.saved
+      ? el('span', { class: 'attach-acts' },
+        INLINE_TYPES.includes(f.mediaType) ? el('a', { class: 'btn btn-sm', href: open, target: '_blank', rel: 'noopener' }, icon('external'), 'Åbn') : null,
+        el('a', { class: 'btn btn-sm', href: attachUrl(kind, id, f.index, true), download: f.name }, icon('download'), 'Hent'))
+      : el('span', { class: 'muted small', title: 'Filen gemmes ved næste synkronisering, så længe Aula stadig har den.' }, 'Ikke gemt endnu');
+    return el('tr', {},
+      el('td', { class: 'prev' }, preview),
+      el('td', {}, f.name),
+      el('td', { class: 'col-type' }, typeLabel(f.mediaType)),
+      el('td', { class: 'n' }, f.size ? size(f.size) : '–'),
+      el('td', { class: 'acts' }, acts));
+  });
+  return el('div', { class: 'table-wrap attach-table' }, el('table', { class: 'count-table' },
+    el('caption', { class: 'sr-only' }, 'Vedhæftede filer'),
+    el('thead', {}, el('tr', {},
+      el('th', { class: 'prev' }, el('span', { class: 'sr-only' }, 'Vist')),
+      el('th', {}, plural(files.length, 'Vedhæftet fil', 'Vedhæftede filer')),
+      el('th', { class: 'col-type' }, 'Type'),
+      el('th', { class: 'n' }, 'Størrelse'),
+      el('th', {}, el('span', { class: 'sr-only' }, 'Handling')))),
+    el('tbody', {}, rows)));
 }
 function renderDetail() {
   const box = $('detail'); const wrap = $('browse'); if (!box) return;
@@ -1121,14 +1176,14 @@ function renderDetail() {
     el('div', { class: 'detail-meta' }, it.subtitle ? el('span', {}, it.subtitle) : null, roleBadge(it.senderRole), el('span', {}, longDate(it.occurredAt || it.updatedAt))),
     it.fields.length ? el('dl', { class: 'kv' }, it.fields.map(([key, value]) => [el('dt', {}, key), el('dd', {}, value)])) : null,
     it.body ? el('p', { class: 'pre', style: 'max-width:65ch' }, it.body) : null,
-    attachList(it.attachments),
+    attachTable(it.kind, it.id, it.attachments),
     msgs ? (msgs.length
       ? el('div', {}, msgs.map((m) => el('div', { class: 'msg' },
           el('div', { class: 'avatar', 'aria-hidden': 'true' }, (m.from || '?').split(' ').map((w) => w.slice(0, 1)).join('').slice(0, 2)),
           el('div', { style: 'min-width:0' },
             el('div', { class: 'msg-head' }, el('span', { style: 'display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('strong', {}, m.from || 'Ukendt afsender'), roleBadge(m.role)), el('span', { class: 'muted num' }, rel(m.at))),
             el('p', { class: 'msg-body pre' }, m.body),
-            attachList(m.attachments)))))
+            attachTable('message', m.id, m.attachments)))))
       : el('p', { class: 'muted small' }, 'Beskederne i tråden er ikke hentet endnu. De kommer med næste synkronisering.')) : null,
     it.unread ? el('p', { class: 'muted small', style: 'margin-top:6px' }, 'Tråden står stadig som ulæst i Aula. aula-mcp ændrer det ikke.') : null,
     el('p', { class: 'muted small mono', style: 'margin-top:16px;overflow-wrap:anywhere' }, 'Opdateret ' + rel(it.updatedAt) + ' · id ' + it.kind + ':' + it.id));
@@ -1151,6 +1206,7 @@ function cphWall(y, m, d, h, min) {
   for (let i = 0; i < 2; i++) { const p = cphParts(t); t = want - (Date.UTC(p.y, p.m - 1, p.d, p.h, p.min) - t); }
   return t;
 }
+const clock = (sec) => { if (!sec) return ''; const p = cphParts(sec * 1000); return pad(p.h) + ':' + pad(p.min); };
 const midnight = (k) => cphWall(+k.slice(0, 4), +k.slice(5, 7), +k.slice(8, 10), 0, 0);
 function evMs(s) {
   if (typeof s !== 'string' || s.length < 10) return null;
@@ -1384,6 +1440,59 @@ function actRow(list) {
   if (!list.length) return null;
   return el('span', { class: 'act', title: actText(list) }, list.map(([kind, n]) => el('span', {}, icon(kindOf(kind).icon), fmt(n))));
 }
+/** Opens one stored item in Gennemse, with the day's list of its kind beside it. */
+function openStored(kind, id, k) {
+  const thread = kind === 'message' && id.includes(':');
+  const key = thread ? 'message_thread/' + id.split(':')[0] : kind + '/' + id;
+  state.browse = Object.assign(state.browse, { q: '', kind: thread ? 'message' : kind, range: 'dag:' + k, role: '', items: [], offset: 0, more: false, sel: key, detail: null });
+  go('gennemse');
+}
+function openMedia(media) {
+  state.gallery.focus = media.mediaId;
+  location.hash = 'galleri/' + media.albumId;
+}
+/** The day's messages, photos, posts and notifications, for the list under the month. */
+async function loadDayItems(c, k, kinds) {
+  const key = k + '|' + kinds.join(',');
+  if (c.dayItems && c.dayItems.key === key) return;
+  c.dayItems = { key, items: null, error: null };
+  const since = String(Math.floor(midnight(k) / 1000));
+  const until = String(Math.floor(midnight(addDays(k, 1)) / 1000) - 1);
+  try {
+    const pages = await Promise.all(kinds.map((kind) => getJson('data/items?' + new URLSearchParams({ kind, since, until, limit: '100' }))));
+    if (c.dayItems.key === key) c.dayItems.items = pages.flatMap((p) => p.items);
+  } catch (err) {
+    if (c.dayItems.key === key) c.dayItems.error = err.message;
+  }
+  if (c.dayItems.key === key) renderCal();
+}
+function dayItemList(c, k, act) {
+  if (!act.length) return null;
+  const kinds = act.map(([kind]) => kind);
+  const d = c.dayItems && c.dayItems.key === k + '|' + kinds.join(',') ? c.dayItems : null;
+  if (!d) queueMicrotask(() => loadDayItems(c, k, kinds));
+  if (!d || (!d.items && !d.error)) return el('p', { class: 'muted small' }, 'Henter dagens ting…');
+  if (d.error) return el('p', { class: 'error-text small' }, 'Kunne ikke hente dagens ting: ' + d.error);
+  return act.map(([kind, n, many, , label]) => {
+    const list = d.items.filter((it) => it.kind === kind);
+    if (!list.length) return null;
+    const more = n > list.length ? el('button', { class: 'btn btn-sm', onclick: () => browseDay(kind, k) }, 'Vis alle ' + fmt(n) + ' ' + many) : null;
+    const body = kind === 'gallery_media'
+      ? el('div', { class: 'media-grid day-media' }, list.map((it) => it.media
+        ? el('button', { class: 'thumb', title: it.title, 'aria-label': it.subtitle + ': ' + it.title, onclick: () => openMedia(it.media) },
+          lazyImg(mediaUrl('thumb', it.media.albumId, it.media.mediaId), it.subtitle === 'Video' ? 'play' : 'image'),
+          it.subtitle === 'Video' ? el('span', { class: 'vid' }, icon('play'), 'Video') : null)
+        : el('span', { class: 'thumb', title: it.title }, coverEmpty('image'))))
+      : el('div', { class: 'list' }, list.map((it) => el('button', { class: 'result day-item', onclick: () => openStored(it.kind, it.id, k) },
+        typeDot(it.kind),
+        el('span', { style: 'min-width:0;display:block' },
+          el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, it.title), el('span', { class: 'result-date' }, clock(it.occurredAt))),
+          it.subtitle ? el('span', { class: 'li-sub', style: 'display:block' }, it.subtitle) : null))));
+    return el('div', { class: 'day-group' },
+      el('h3', { class: 'day-group-head' }, icon(kindOf(kind).icon), label, el('span', { class: 'muted small num' }, fmt(n))),
+      body, more);
+  });
+}
 function browseDay(kind, k) {
   state.browse = Object.assign(state.browse, { q: '', kind, range: 'dag:' + k, role: '', items: [], offset: 0, more: false, sel: null, detail: null });
   go('gennemse');
@@ -1485,7 +1594,8 @@ function calMonth(c, evs) {
       el('div', { class: 'panel-head' }, el('h2', {}, longDay(c.day).replace(/^./, (ch) => ch.toUpperCase())), el('span', { class: 'muted small' }, plural(sel.length, 'begivenhed', 'begivenheder'))),
       selAct.length ? el('div', { class: 'act-links', role: 'group', 'aria-label': 'Aktivitet denne dag' },
         selAct.map(([kind, n, many, one]) => el('button', { class: 'chip', onclick: () => browseDay(kind, c.day), title: 'Vis dagens ' + many }, icon(kindOf(kind).icon), ' ' + plural(n, one, many)))) : null,
-      sel.length ? el('div', { class: 'list' }, sel.map((e) => evRow(e, false))) : el('p', { class: 'muted small' }, 'Ingen begivenheder denne dag.'))
+      sel.length ? el('div', { class: 'list' }, sel.map((e) => evRow(e, false))) : el('p', { class: 'muted small' }, 'Ingen begivenheder denne dag.'),
+      dayItemList(c, c.day, selAct))
       : el('p', { class: 'muted small' }, 'Vælg en dag for at se dens begivenheder.'),
   ];
 }
@@ -1680,6 +1790,41 @@ function dayText(ymd) {
   const [y, m, d] = String(ymd || '').split('-').map(Number);
   return y && m && d ? d + '. ' + MON[m - 1] + ' ' + y : 'Uden dato';
 }
+function postInHash() {
+  const parts = location.hash.slice(1).split('/');
+  return parts[1] === 'opslag' && parts[2] ? decodeURIComponent(parts[2]) : null;
+}
+function postAlbumCard(p) {
+  const cover = p.media.find((m) => isPicture(m.mediaType));
+  return el('button', { class: 'album', onclick: () => { location.hash = 'galleri/opslag/' + encodeURIComponent(p.postId); } },
+    el('span', { class: 'album-cover' }, cover ? lazyImg(attachUrl('post', p.postId, cover.index), 'image') : coverEmpty('image')),
+    el('span', { class: 'album-title' }, p.title),
+    el('span', { class: 'album-sub' }, (p.date ? dayText(p.date) : 'Uden dato') + (p.author ? ' · ' + p.author : '')),
+    el('span', { class: 'album-sub num' }, plural(p.media.length, 'fil', 'filer') + ' · fra opslag'));
+}
+function postAlbumView(id) {
+  const g = state.gallery;
+  const back = el('div', {}, el('button', { class: 'btn btn-sm', onclick: () => { location.hash = 'galleri'; } }, icon('left'), 'Alle album'));
+  if ((g.stale || (!g.data && !g.error)) && !g.loading) loadGallery();
+  if (!g.data) return [back, skeleton()];
+  const p = (g.data.posts || []).find((x) => x.postId === id);
+  if (!p) return [back, head('Album'), el('section', { class: 'panel empty' }, el('p', {}, el('strong', {}, 'Opslaget har ingen gemte billeder.')))];
+  return [
+    back,
+    el('div', { class: 'view-head' },
+      el('div', { style: 'min-width:0' },
+        el('p', { class: 'eyebrow' }, 'Fra opslag'),
+        el('h1', { style: 'overflow-wrap:anywhere' }, p.title),
+        el('p', { class: 'lede' }, [p.date ? dayText(p.date) : 'Uden dato', p.author, plural(p.media.length, 'fil', 'filer')].filter(Boolean).join(' · ')))),
+    banner('info', 'info', el('p', {}, 'Albummet er lavet her ud fra billederne i opslaget. Det findes ikke i Aulas galleri.')),
+    el('div', { class: 'media-grid' }, p.media.map((m, i) => {
+      const video = m.mediaType.startsWith('video/');
+      return el('a', { class: 'thumb', href: attachUrl('post', p.postId, m.index), target: '_blank', rel: 'noopener', 'aria-label': (video ? 'Video ' : 'Billede ') + (i + 1), title: m.name },
+        isPicture(m.mediaType) ? lazyImg(attachUrl('post', p.postId, m.index), 'image') : coverEmpty(video ? 'play' : 'image'),
+        video ? el('span', { class: 'vid' }, icon('play'), 'Video') : null);
+    })),
+  ];
+}
 function albumInHash() {
   const part = location.hash.slice(1).split('/')[1];
   const id = Number(part);
@@ -1707,6 +1852,11 @@ async function loadAlbum(id) {
   try {
     const d = await getJson('data/gallery/albums/' + encodeURIComponent(String(id)));
     if (g.albumFor === id) { g.album = d; g.albumError = null; }
+    // Came from a day in the calendar: show that photo straight away.
+    const focus = g.focus;
+    g.focus = null;
+    const at = focus != null && g.albumFor === id ? d.media.findIndex((m) => m.id === focus) : -1;
+    if (at >= 0) queueMicrotask(() => openLightbox(at));
   } catch (err) {
     if (g.albumFor === id) g.albumError = { status: err.status, message: err.message };
   }
@@ -1795,6 +1945,8 @@ function albumCard(a) {
 R.galleri = () => {
   const g = state.gallery;
   if (state.summary && !database()) return [head('Galleri', GALLERY_LEDE), galleryOff()];
+  const postId = postInHash();
+  if (postId !== null) return postAlbumView(postId);
   const albumId = albumInHash();
   if (albumId !== null) return albumView(albumId);
   if ((g.stale || (!g.data && !g.error)) && !g.loading) loadGallery();
@@ -1803,8 +1955,10 @@ R.galleri = () => {
   if (!g.data) return [top, el('div', { class: 'grid-2' }, skeleton(), skeleton())];
   const st = g.data.status;
   const paused = st.disk && st.disk.used >= st.stopAt;
-  const years = [...new Set(g.data.albums.map((a) => a.year).concat(g.year ? [g.year] : []))].sort().reverse();
+  const years = [...new Set(g.data.albums.map((a) => a.year)
+    .concat((g.data.posts || []).map((p) => (p.date || '').slice(0, 4)).filter(Boolean), g.year ? [g.year] : []))].sort().reverse();
   const list = g.data.albums.filter((a) => !g.year || a.year === g.year);
+  const posts = (g.data.posts || []).filter((p) => !g.year || (p.date || '').startsWith(g.year));
   const kids = st.children.filter((c) => c.albums > 0);
   const chip = (value, label, n) => el('button', { class: 'chip', 'aria-pressed': String(g.child === value),
     onclick: () => { if (g.child === value) return; g.child = value; g.stale = true; rerender('galleri'); } }, label, el('span', { class: 'c' }, fmt(n)));
@@ -1829,6 +1983,9 @@ R.galleri = () => {
           el('div', { class: 'albums' }, list.map(albumCard)))
         : el('section', { class: 'panel empty' }, el('p', {}, el('strong', {}, 'Ingen album for det valg.')),
           el('button', { class: 'btn btn-sm', onclick: () => { g.child = ''; g.year = ''; g.stale = true; rerender('galleri'); } }, 'Nulstil filtre')),
+    posts.length ? el('section', { 'aria-label': 'Album fra opslag' },
+      el('div', { class: 'panel-head' }, el('h2', {}, 'Fra opslag'), el('span', { class: 'muted small' }, plural(posts.length, 'opslag', 'opslag') + ' med billeder')),
+      el('div', { class: 'albums' }, posts.map(postAlbumCard))) : null,
     st.albums || st.downloaded ? el('section', { class: 'danger-zone' },
       el('h2', {}, 'Slet hele galleriet'),
       el('p', {}, 'Sletter den lokale kopi af alle ' + plural(st.albums, 'album', 'album') + ' (' + size(st.bytes) + ') på serveren. Intet slettes i Aula, og de slettede album hentes ikke igen.'),

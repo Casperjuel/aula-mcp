@@ -55,6 +55,7 @@ import {
 import { type Context, Hono } from 'hono';
 import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
+import { isInline } from './attachments.ts';
 import type { AulaContext } from './aula-context.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
@@ -372,8 +373,19 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (!isKind(kind)) return c.json({ error: 'unknown kind' }, 400);
     const item = await store.get(kind, c.req.param('id'));
     if (!item) return c.json({ error: 'not found' }, 404);
+    const gallery = galleryOf(c);
+    const view = detail(item);
+    // Marks which attachments have a saved copy the page can open.
+    if (gallery && (kind === 'post' || kind === 'message')) {
+      view.attachments = await gallery.attachments(kind, item.id);
+    }
     const messages = kind === 'message_thread' ? await threadMessages(store, item.id) : undefined;
-    return c.json({ item: detail(item), ...(messages ? { messages } : {}) });
+    if (gallery && messages) {
+      for (const m of messages) {
+        if (m.attachments.length) m.attachments = await gallery.attachments('message', m.id);
+      }
+    }
+    return c.json({ item: view, ...(messages ? { messages } : {}) });
   });
 
   app.get('/data/sync', async (c) => {
@@ -432,6 +444,10 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (body.kind === 'gallery_album' || body.kind === 'gallery_media') {
       return c.json({ error: 'delete gallery albums with /data/gallery/delete' }, 400);
     }
+    // Saved attachments go with their posts or messages.
+    if (body.kind === 'post' || body.kind === 'message') {
+      await galleryOf(c)?.removeAttachments(body.kind);
+    }
     return c.json({ deleted: await store.delete({ kind: body.kind }) });
   });
 
@@ -446,7 +462,13 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       gallery.status(),
       gallery.albums({ ...(child ? { child } : {}), ...(year ? { year } : {}) }),
     ]);
-    return c.json({ status, albums });
+    // Posts with photos are albums too, made here and not in Aula.
+    const posts = child ? [] : await gallery.postAlbums();
+    return c.json({
+      status,
+      albums,
+      posts: year ? posts.filter((p) => p.date?.startsWith(year)) : posts,
+    });
   });
 
   app.get('/data/gallery/albums/:albumId', async (c) => {
@@ -480,6 +502,31 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
         'cache-control': 'private, max-age=86400',
         'x-content-type-options': 'nosniff',
         'content-disposition': `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
+      },
+    });
+  });
+
+  // A saved attachment of a post or message, looked up by its index in the
+  // parent's own row. Only types a browser shows safely are served inline;
+  // everything else is a download, and the sandbox keeps a file from
+  // running script on this origin.
+  app.get('/data/attachments/:kind{post|message}/:id/:index', async (c) => {
+    const gallery = galleryOf(c);
+    if (!gallery) return c.json({ error: 'local storage is off' }, 404);
+    const kind = c.req.param('kind') === 'post' ? 'post' : 'message';
+    const index = Number(c.req.param('index'));
+    if (!Number.isSafeInteger(index) || index < 0) return c.json({ error: 'bad index' }, 400);
+    const file = await gallery.attachment(kind, c.req.param('id'), index);
+    if (!file) return c.json({ error: 'not saved' }, 404);
+    const inline = c.req.query('download') !== '1' && isInline(file.mediaType);
+    return new Response(Readable.toWeb(file.stream) as ReadableStream, {
+      headers: {
+        'content-type': inline ? file.mediaType : 'application/octet-stream',
+        'content-length': String(file.bytes),
+        'cache-control': 'private, max-age=86400',
+        'x-content-type-options': 'nosniff',
+        'content-security-policy': 'sandbox',
+        'content-disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.name)}`,
       },
     });
   });

@@ -14,6 +14,8 @@ Every MCP tool the server offers. Read tools are always on; write tools need
 | [`aula.gallery.albums`](#aulagalleryalbums) | read | Gallery albums |
 | [`aula.gallery.media`](#aulagallerymedia) | read | Media in an album |
 | [`aula.gallery.thumbnail`](#aulagallerythumbnail) | read | Show a thumbnail |
+| [`aula.gallery.post_albums`](#aulagallerypost_albums) | read | Photos from posts |
+| [`aula.gallery.attachment`](#aulagalleryattachment) | read | Show a saved attachment |
 | [`aula.local.overview`](#aulalocaloverview) | read | What is stored locally |
 | [`aula.local.search`](#aulalocalsearch) | read | Search stored Aula data |
 | [`aula.local.get`](#aulalocalget) | read | One stored item in full |
@@ -109,6 +111,28 @@ Returns the stored thumbnail (about 170 KB, JPEG) of one photo or video as an im
 | `albumId` | integer | yes | Album id. |
 | `mediaId` | integer | yes | Media id from aula.gallery.media. |
 
+## `aula.gallery.post_albums`
+
+**Photos from posts** · read
+
+Posts (opslag) with photos or videos attached, newest first, each shown as an album in the dashboard's gallery: post id, title, Danish date, author and the saved files (index, name, type, size). The albums are made from the local copy and never in Aula. Filter by `year`. Look at one with aula.gallery.attachment (kind "post", the post id and the index); read the post itself with aula.local.get. Only files the posts sync saved while their links were fresh are listed.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `year` | string | no | Year of the post, e.g. "2026". |
+
+## `aula.gallery.attachment`
+
+**Show a saved attachment** · read
+
+One saved attachment of a stored post or message. A photo (JPEG, PNG, GIF, WebP, up to 5 MB) comes back as an image and a text file as text; anything else (PDF, Word, video) comes back as its name, type and size only, to open in the dashboard. Take `kind` and `id` from aula.local.search, and `index` from the attachments aula.local.get lists (0 is the first). The posts and messages sync save attachments while their Aula links are fresh; answers with an error when no copy is saved. For a file that was never saved use aula.posts.get_attachment or aula.messages.get_attachment, which ask Aula.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `kind` | string | yes | post or message. |
+| `id` | string | yes | Id from aula.local.search. |
+| `index` | integer | yes | Attachment number, 0 first. |
+
 ## `aula.local.overview`
 
 **What is stored locally** · read
@@ -137,7 +161,7 @@ Search the caller's own Aula data in the local database, newest first. Every fil
 
 **One stored item in full** · read
 
-One item from the local database as the parent would read it: Danish title, the text as plain text (HTML removed), labelled fields (for a calendar event: type, start, end, place, who made it, invited, response) and attachment names. A message_thread comes with all its stored messages, oldest first, each with sender, time, text and sender role. Set `raw` for Aula's own JSON as it was stored. Take `kind` and `id` from aula.local.search. Never calls Aula and never marks anything read.
+One item from the local database as the parent would read it: Danish title, the text as plain text (HTML removed), labelled fields (for a calendar event: type, start, end, place, who made it, invited, response) and the attachments (index, name, type, size; open a saved one with aula.gallery.attachment). A message_thread comes with all its stored messages, oldest first, each with sender, time, text and sender role. Set `raw` for Aula's own JSON as it was stored. Take `kind` and `id` from aula.local.search. Never calls Aula and never marks anything read.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
