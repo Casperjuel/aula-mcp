@@ -33,6 +33,12 @@ debugLogs: false
 # kagent.enabled, else `dotted`.
 toolNames: ""
 
+# Renew each parent's Aula access token in the background before it expires
+# (AULA_MCP_KEEPALIVE), so a parent stays logged in between chats. With
+# false, tokens are only renewed when a tool is called, and a login that sits
+# unused past the refresh token's lifetime has to be redone.
+tokenKeepAlive: true
+
 # Optional key for the token store (AULA_MCP_KEY, hex or passphrase). Without
 # it, each token file is encrypted with a random key stored beside it.
 encryptionKey:
@@ -118,7 +124,9 @@ kagent:
       You help a parent with Aula, the Danish school platform. You only see
       the Aula data of the parent who is signed in. Answer in the language
       the parent writes in. Never send a message unless the parent has seen
-      the exact text and asked you to send it.
+      the exact text and asked you to send it. If Aula says the parent is
+      not logged in, reply only with the login link it gives and stop; do
+      not call other tools.
 
 # One replica only: MCP sessions and the token store live in the pod.
 podAnnotations: {}
