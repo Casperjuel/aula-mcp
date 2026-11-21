@@ -156,6 +156,11 @@ export class AulaContext {
    * never spend the same refresh token. Resolves to true when it renewed.
    * No stored login is not an error here; it resolves to false.
    */
+  /** Whether there are Aula tokens to use (they may still turn out expired). */
+  async hasLogin(): Promise<boolean> {
+    return (await this.store.load().catch(() => null)) !== null;
+  }
+
   async refreshIfExpiringWithin(seconds: number): Promise<boolean> {
     if (!this.clientPromise && !this.cachedRecord && !(await this.store.load())) return false;
     // Wait for (or start) the shared build so a refresh already in flight is

@@ -19,7 +19,8 @@ for (const [name, driver] of backends) {
     let storage: Storage;
     const open = async () => {
       const db = driver();
-      if (name === 'postgres') await db.run('DROP TABLE IF EXISTS items, schema_migrations');
+      if (name === 'postgres')
+        await db.run('DROP TABLE IF EXISTS items, sync_state, schema_migrations');
       storage = await createStorage(db, KEY, { type: name as 'sqlite', location: 'test' });
       return storage;
     };
@@ -109,7 +110,8 @@ for (const [name, driver] of backends) {
 
     test('payloads are encrypted at rest and bound to their parent and id', async () => {
       const db = driver();
-      if (name === 'postgres') await db.run('DROP TABLE IF EXISTS items, schema_migrations');
+      if (name === 'postgres')
+        await db.run('DROP TABLE IF EXISTS items, sync_state, schema_migrations');
       storage = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await storage
         .forParent('parent-a')
@@ -127,10 +129,31 @@ for (const [name, driver] of backends) {
 
     test('migrations run once', async () => {
       const db = driver();
-      if (name === 'postgres') await db.run('DROP TABLE IF EXISTS items, schema_migrations');
+      if (name === 'postgres')
+        await db.run('DROP TABLE IF EXISTS items, sync_state, schema_migrations');
       storage = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
-      expect(await db.all('SELECT version FROM schema_migrations')).toHaveLength(1);
+      expect(await db.all('SELECT version FROM schema_migrations')).toHaveLength(2);
+    });
+
+    test('keeps sync state per parent', async () => {
+      storage = await open();
+      const state = {
+        job: 'messages',
+        lastRunAt: 100,
+        lastSuccessAt: 100,
+        nextRunAt: 1000,
+        failures: 0,
+        lastError: null,
+        fetched: 3,
+        changed: 2,
+      };
+      await storage.forParent('a').saveSyncState(state);
+      await storage.forParent('a').saveSyncState({ ...state, failures: 1, lastError: 'boom' });
+      expect(await storage.forParent('a').syncStates()).toEqual([
+        { ...state, failures: 1, lastError: 'boom' },
+      ]);
+      expect(await storage.forParent('b').syncStates()).toEqual([]);
     });
   });
 }

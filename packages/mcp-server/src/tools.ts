@@ -20,6 +20,9 @@ import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
 import { buildDiscoverManifest } from './discover.ts';
+import { resolveFamilyProfileIds } from './family-profiles.ts';
+import type { ParentSync } from './sync.ts';
+import { registerSyncTools } from './sync-tools.ts';
 
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -96,49 +99,6 @@ function currentWeekRange(): { from: string; to: string } {
   const sunday = new Date(monday);
   sunday.setUTCDate(monday.getUTCDate() + 6);
   return { from: isoDate(monday), to: isoDate(sunday) };
-}
-
-type ConsentEntry = {
-  institutionProfile?: {
-    id?: number;
-    role?: string; // "guardian" | "child"
-  };
-};
-
-/**
- * Every institution profile (guardian + child, across all institutions) for
- * the authenticated guardian, read from consents.getConsentResponses — the
- * only endpoint that surfaces the club child identity that profiles.list and
- * discover both omit. Returns a guardian id first so the posts call is
- * authorized. Only the logged-in user's own profiles appear here, so the
- * other parent can never leak in.
- */
-async function resolveFamilyProfileIds(
-  client: Awaited<ReturnType<AulaContext['getClient']>>,
-): Promise<number[]> {
-  // rawRequest unwraps the Aula envelope to `.data`, so this is the
-  // consent-entry array directly. Guard against either shape regardless.
-  const raw = (await client.rawRequest('consents.getConsentResponses', {
-    returnOnlyPendingConsentResponses: 'false',
-  })) as { data?: ConsentEntry[] } | ConsentEntry[] | null;
-
-  const entries: ConsentEntry[] = Array.isArray(raw) ? raw : (raw?.data ?? []);
-
-  const guardianIds: number[] = [];
-  const childIds: number[] = [];
-  for (const { institutionProfile: ip } of entries) {
-    if (!ip?.id) continue;
-    (ip.role === 'guardian' ? guardianIds : childIds).push(ip.id);
-  }
-
-  if (guardianIds.length === 0) {
-    throw new Error(
-      'resolveFamilyProfileIds: consents.getConsentResponses returned no guardian ' +
-        'profile to authorize the request.',
-    );
-  }
-  // Guardian(s) first, then children; dedupe.
-  return [...new Set([...guardianIds, ...childIds])];
 }
 
 interface PdfTextResult {
@@ -229,13 +189,21 @@ export function validateSetTemplateArgs(args: SetTemplateArgs): string[] {
   return problems;
 }
 
+export interface ToolExtras {
+  /** The caller's sync; the aula.sync.* tools are registered when set. */
+  sync?: ParentSync;
+}
+
 /** `env` decides which gated tools are registered (tool-catalog.ts lists
  *  them all, enabled or not). */
 export function registerTools(
   server: McpServer,
   context: AulaContext,
   env: NodeJS.ProcessEnv = process.env,
+  extras: ToolExtras = {},
 ): void {
+  if (extras.sync) registerSyncTools(server, extras.sync);
+
   // --- aula.discover -------------------------------------------------------
 
   server.registerTool(

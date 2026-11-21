@@ -8,6 +8,7 @@
 import type { Logger } from '@aula-mcp/aula-auth';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { AulaContext } from './aula-context.ts';
+import type { ParentSync } from './sync.ts';
 import { type ToolNameStyle, toolName, toolNameStyle, underscoreTools } from './tool-names.ts';
 import { registerTools } from './tools.ts';
 import { VERSION } from './version.ts';
@@ -64,6 +65,8 @@ export interface McpAppOptions {
   toolNames?: ToolNameStyle;
   /** Start the session with only the login tool. */
   loginRequired?: LoginRequired;
+  /** The caller's background sync, when local storage is on. */
+  sync?: ParentSync;
 }
 
 export interface McpApp {
@@ -76,12 +79,16 @@ export function createMcpApp({
   context = new AulaContext({ logger }),
   toolNames = toolNameStyle(),
   loginRequired,
+  sync,
 }: McpAppOptions): McpApp {
+  const extras = sync ? { sync } : {};
   const tools =
-    toolNames === 'underscore' ? underscoreTools((server) => registerTools(server, context)) : null;
+    toolNames === 'underscore'
+      ? underscoreTools((server) => registerTools(server, context, process.env, extras))
+      : null;
   const registerAulaTools = (server: McpServer) => {
     if (tools) tools.registerOn(server);
-    else registerTools(server, context);
+    else registerTools(server, context, process.env, extras);
   };
   const instructions = loginRequired
     ? loginMessage(loginRequired.setupUrl)

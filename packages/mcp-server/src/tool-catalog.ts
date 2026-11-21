@@ -80,12 +80,17 @@ function collect(env: NodeJS.ProcessEnv): Collected[] {
   // Registration never touches the context; only the handlers do.
   const context = new AulaContext({ logger: silentLogger, store: NO_STORE });
   try {
-    registerTools(collector, context, env);
+    registerTools(collector, context, env, { sync: NO_SYNC });
   } finally {
     context.dispose();
   }
   return tools;
 }
+
+const NO_SYNC = {
+  status: async () => [],
+  run: async () => [],
+};
 
 const NO_STORE = {
   load: async () => null,
