@@ -52,11 +52,19 @@ import {
   silentLogger,
   type TokenStore,
 } from '@aula-mcp/aula-auth';
+import type { AulaClient, UpdatePresenceTemplateArgs } from '@aula-mcp/aula-client';
 import { type Context, Hono } from 'hono';
 import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
 import { isInline } from './attachments.ts';
 import type { AulaContext } from './aula-context.ts';
+import {
+  childPlan,
+  childrenToday,
+  ownChildren,
+  sendSickReport,
+  sickReportRefusal,
+} from './child-actions.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
 import { detail, SENDER_ROLES, type SenderRole, summarize } from './item-view.ts';
@@ -87,6 +95,7 @@ import { type ParentSync, SYNC_JOBS, type SyncJobName } from './sync.ts';
 import { DEFAULT_RENEW_WITHIN_SECONDS } from './token-keepalive.ts';
 import { type ToolInfo, toolCatalog } from './tool-catalog.ts';
 import { toolNameStyle } from './tool-names.ts';
+import { validateSetTemplateArgs } from './tools.ts';
 
 /** Max time we'll hold a login session waiting on the user to pick their
  *  MitID identity after the picker is shown. After this the login rejects
@@ -143,6 +152,55 @@ export interface SetupAppOptions {
 const SHARED_READS =
   /^\/data\/(stats|items(\/[^/]+\/[^/]+)?|activity|messages\/roles|gallery(\/albums\/[^/]+|\/(file|thumb)\/[^/]+\/[^/]+)?|attachments\/(post|message)\/[^/]+\/[^/]+)$/;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
+const HENTEFORM = ['picked_up_by', 'self_decider', 'send_home', 'go_home_with'] as const;
+
+/** This Monday to Sunday next week, in local time. */
+function twoWeeks(now = new Date()): { from: string; to: string } {
+  const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 13);
+  const day = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return { from: day(monday), to: day(sunday) };
+}
+
+/** A one-day komme/gå change from the dashboard, or what is wrong with it. */
+function planArgs(body: Record<string, unknown>): UpdatePresenceTemplateArgs | string {
+  const { child, date, activityType } = body;
+  if (typeof child !== 'number' || !Number.isInteger(child) || child <= 0) {
+    return 'child must be an id';
+  }
+  if (typeof date !== 'string' || !ISO_DAY.test(date)) return 'date must be YYYY-MM-DD';
+  if (!HENTEFORM.includes(activityType as (typeof HENTEFORM)[number])) {
+    return `activityType must be one of ${HENTEFORM.join(', ')}`;
+  }
+  const args: UpdatePresenceTemplateArgs = {
+    institutionProfileId: child,
+    date,
+    activityType: activityType as (typeof HENTEFORM)[number],
+  };
+  for (const key of [
+    'entryTime',
+    'exitTime',
+    'selfDeciderStartTime',
+    'selfDeciderEndTime',
+  ] as const) {
+    const value = body[key];
+    if (value === undefined || value === null || value === '') continue;
+    if (typeof value !== 'string' || !HH_MM.test(value)) return `${key} must be HH:mm`;
+    args[key] = value;
+  }
+  for (const key of ['pickedUpBy', 'comment'] as const) {
+    const value = body[key];
+    if (value === undefined || value === null || value === '') continue;
+    if (typeof value !== 'string' || value.length > 500) return `${key} must be text`;
+    args[key] = value.trim();
+  }
+  return args;
+}
 
 interface LoginSession {
   sessionId: string;
@@ -316,6 +374,122 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       logger.warn('setup.data.live_failed', { error: (err as Error).message });
       return c.json({ error: (err as Error).message }, 502);
     }
+  });
+
+  // --- shortcuts for one child, live in Aula through this parent's login ---
+  //
+  // The parent clicks these themselves and confirms each write in the page,
+  // so they do not wait for AULA_MCP_WRITE, which keeps an agent from writing
+  // unasked. Only the parent's own children, and every write is audited.
+
+  const clientOf = async (c: Context): Promise<AulaClient | null> => {
+    if (!options.myData || !(await storeOf(c).load())) return null;
+    return options.myData.contextFor(parentOf(c)?.caller ?? null).getClient();
+  };
+  const aulaFailed = (c: Context, what: string, err: unknown) => {
+    logger.warn(`setup.children.${what}_failed`, { error: (err as Error).message });
+    return c.json({ error: (err as Error).message }, 502);
+  };
+
+  app.get('/data/children', async (c) => {
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    try {
+      return c.json({ children: await childrenToday(client) });
+    } catch (err) {
+      return aulaFailed(c, 'today', err);
+    }
+  });
+
+  // The komme/gå plan, this week and next unless `from` and `to` say otherwise.
+  app.get('/data/children/plan', async (c) => {
+    const child = Number(c.req.query('child'));
+    const from = c.req.query('from');
+    const to = c.req.query('to');
+    if (!Number.isInteger(child) || child <= 0)
+      return c.json({ error: 'child must be an id' }, 400);
+    const window = from && to && ISO_DAY.test(from) && ISO_DAY.test(to) ? { from, to } : twoWeeks();
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    try {
+      if (!(await ownChildren(client)).has(child)) return c.json({ error: 'not your child' }, 404);
+      return c.json({ ...window, days: await childPlan(client, child, window.from, window.to) });
+    } catch (err) {
+      return aulaFailed(c, 'plan', err);
+    }
+  });
+
+  app.post('/data/children/sick', async (c) => {
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const child = body.child;
+    if (typeof child !== 'number' || !Number.isInteger(child) || typeof body.sick !== 'boolean') {
+      return c.json({ error: 'give child (an id) and sick (true or false)' }, 400);
+    }
+    const sick = body.sick;
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const started = Date.now();
+    const action = sick ? 'presence_report_sick' : 'presence_undo_sick';
+    try {
+      const refusal = await sickReportRefusal(client, [child], sick);
+      if (refusal) return c.json(refusal, 409);
+      await sendSickReport(client, [child], sick);
+    } catch (err) {
+      await auditOf(c)?.({
+        category: 'aula',
+        action,
+        ok: false,
+        durationMs: Date.now() - started,
+        details: { children: 1, error: (err as Error).message.slice(0, 300) },
+      });
+      return aulaFailed(c, 'sick', err);
+    }
+    await auditOf(c)?.({
+      category: 'aula',
+      action,
+      ok: true,
+      durationMs: Date.now() - started,
+      details: { children: 1 },
+    });
+    return c.json({ ok: true });
+  });
+
+  // One day of the komme/gå plan; repeating plans stay in Aula or the tool.
+  app.post('/data/children/plan', async (c) => {
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const args = planArgs(body);
+    if (typeof args === 'string') return c.json({ error: args }, 400);
+    const problems = validateSetTemplateArgs(args);
+    if (problems.length > 0) return c.json({ error: problems.join(' ') }, 400);
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const started = Date.now();
+    const details = { children: 1, date: args.date, activityType: args.activityType };
+    try {
+      if (!(await ownChildren(client)).has(args.institutionProfileId)) {
+        return c.json({ error: 'not your child' }, 404);
+      }
+      await client.updatePresenceTemplate({ ...args, repeatPattern: 'never' });
+    } catch (err) {
+      await auditOf(c)?.({
+        category: 'aula',
+        action: 'presence_set_template',
+        ok: false,
+        durationMs: Date.now() - started,
+        details: { ...details, error: (err as Error).message.slice(0, 300) },
+      });
+      return aulaFailed(c, 'plan', err);
+    }
+    await auditOf(c)?.({
+      category: 'aula',
+      action: 'presence_set_template',
+      ok: true,
+      durationMs: Date.now() - started,
+      details,
+    });
+    return c.json({ ok: true });
   });
 
   // --- the dashboard's stored data and sync jobs, all for this parent only ---

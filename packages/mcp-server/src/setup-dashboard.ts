@@ -267,9 +267,17 @@ main {
 .time-track { height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; margin-top: 10px; }
 .time-track span { display: block; height: 100%; background: var(--ok); border-radius: 99px; }
 
-.kid { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; }
+.kid { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; }
 .kid-face { width: 46px; height: 46px; border-radius: 14px; display: grid; place-items: center; font-family: var(--font-display); font-weight: 650; font-size: 1.15rem; background: var(--accent-soft); color: var(--accent); }
 .kid-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); font-size: .86rem; }
+.kid-meta .pill { font-size: .74rem; }
+.kid-today { margin: 10px 0 0; color: var(--muted); font-size: .86rem; }
+.menu-li { align-items: center; }
+.menu-li .type-dot { background: var(--accent-soft); color: var(--accent); }
+.menu-li.danger .type-dot { background: var(--err-soft); color: var(--err); }
+.menu-li > svg { width: 16px; height: 16px; color: var(--muted); }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 520px) { .form-grid { grid-template-columns: 1fr; } }
 
 .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
 @media (min-width: 700px) { .stats { grid-template-columns: repeat(4, 1fr); } }
@@ -969,14 +977,185 @@ function loginPanel() {
         ' Senest gemt ' + rel(login.saved_at) + '.')),
     el('div', { class: 'login-actions' }, mitidButton('Log ind igen'), el('button', { class: 'btn', onclick: askLogout }, 'Log ud af Aula')));
 }
+/* ---------- genveje for et barn: syg, komme/gå, plan ---------- */
+const HENTEFORM = [['picked_up_by', 'Hentes af'], ['go_home_with', 'Går hjem med'], ['send_home', 'Sendes hjem'], ['self_decider', 'Selvbestemmer']];
+const henteLabel = (a) => (HENTEFORM.find((h) => h[0] === a) || [])[1] || '';
+const tm = (s) => { const m = s ? String(s).match(/([0-9]{2}):([0-9]{2})/) : null; return m ? m[1] + ':' + m[2] : ''; };
+const todayKey = () => { const t = new Date(); return keyOf(t.getFullYear(), t.getMonth() + 1, t.getDate()); };
+const KID_ERR = { unknown_child: 'Barnet hører ikke til din login i Aula.', not_reported_sick: 'Aula melder ikke barnet sygt lige nu.', 'not your child': 'Barnet hører ikke til din login i Aula.' };
+const kidErr = (err) => KID_ERR[err.message] || err.message;
+state.kids = null;
+let kidsAt = 0;
+async function loadKids(force) {
+  if (state.owner || (!force && Date.now() - kidsAt < 60000)) return;
+  kidsAt = Date.now();
+  try { state.kids = { list: (await getJson('data/children')).children }; }
+  catch (err) { state.kids = { error: err.message }; }
+  rerender('oversigt');
+}
+const kidToday = (id) => (state.kids && state.kids.list ? state.kids.list.find((k) => k.id === id) : null);
+function kidPill(k) {
+  const cls = k.status === 1 ? 'err' : k.status === 3 || k.status === 5 ? 'ok' : k.status === 2 ? 'warn' : k.status === 4 || k.status === 6 ? 'run' : 'neutral';
+  return el('span', { class: 'pill ' + cls }, k.label);
+}
+function kidTodayLine(k) {
+  const come = k.checkInTime ? 'Kom ' + tm(k.checkInTime) : k.entryTime ? 'Kommer ' + tm(k.entryTime) : '';
+  const leave = k.checkOutTime ? 'Gik ' + tm(k.checkOutTime)
+    : k.exitTime ? (henteLabel(k.activityType) || 'Går') + ' ' + tm(k.exitTime) + (k.exitWith ? ' · ' + k.exitWith : '') : '';
+  const line = [come, leave].filter(Boolean).join(' · ');
+  return line ? el('p', { class: 'kid-today' }, 'I dag: ' + line) : null;
+}
 function kidsPanel() {
   if (!loggedIn()) return null;
   if (state.liveError) return el('p', { class: 'muted small' }, 'Kunne ikke hente dine børn fra Aula: ' + state.liveError);
   if (!state.live) return el('div', { class: 'grid-2' }, skeleton(), skeleton());
   if (!state.live.children.length) return null;
-  return el('div', { class: 'grid-2' }, state.live.children.map((c) => el('section', { class: 'panel' },
-    el('div', { class: 'kid' }, el('div', { class: 'kid-face', 'aria-hidden': 'true' }, (c.name || '?').slice(0, 1)),
-      el('div', { style: 'min-width:0' }, el('h2', {}, c.name), el('div', { class: 'kid-meta' }, c.institution ? el('span', {}, c.institution) : null))))));
+  loadKids();
+  return el('div', { class: 'grid-2' }, state.live.children.map((c) => {
+    const k = kidToday(c.id);
+    return el('section', { class: 'panel' },
+      el('div', { class: 'kid' }, el('div', { class: 'kid-face', 'aria-hidden': 'true' }, (c.name || '?').slice(0, 1)),
+        el('div', { style: 'min-width:0' }, el('h2', {}, c.name), el('div', { class: 'kid-meta' }, c.institution ? el('span', {}, c.institution) : null, k ? kidPill(k) : null)),
+        state.owner ? null : el('button', { class: 'btn', 'aria-haspopup': 'dialog', onclick: () => openKid(c) }, icon('more'), 'Genveje')),
+      k ? kidTodayLine(k) : null);
+  }));
+}
+function kidDialog() {
+  let d = $('kidDlg');
+  if (!d) {
+    d = el('dialog', { id: 'kidDlg', 'aria-labelledby': 'kidDlgTitle' }, el('div', { class: 'dlg', id: 'kidDlgBody' }));
+    document.body.append(d);
+    d.addEventListener('click', (ev) => { if (ev.target === d) d.close(); });
+  }
+  return d;
+}
+function openKid(c) {
+  const d = kidDialog();
+  const body = $('kidDlgBody');
+  const first = (c.name || '').split(' ')[0] || c.name;
+  const head = (title, back) => el('div', { class: 'panel-head', style: 'margin:0;gap:8px' },
+    back ? el('button', { class: 'icon-btn', 'aria-label': 'Tilbage', onclick: () => menu() }, icon('left')) : null,
+    el('h2', { id: 'kidDlgTitle', style: 'font-size:1.2rem;margin-right:auto' }, title),
+    el('button', { class: 'icon-btn', 'aria-label': 'Luk', onclick: () => d.close() }, icon('x')));
+  const item = (ic, title, sub, onclick, danger) => el('button', { class: 'li menu-li' + (danger ? ' danger' : ''), onclick },
+    el('span', { class: 'type-dot' }, icon(ic)),
+    el('span', { style: 'min-width:0;display:block' }, el('span', { class: 'li-title', style: 'display:block' }, title), el('span', { class: 'li-sub', style: 'display:block' }, sub)),
+    icon('chev'));
+  const askSick = (sick) => {
+    d.close();
+    confirmDialog({
+      danger: sick, icon: sick ? 'warn' : 'sun',
+      title: sick ? 'Meld ' + first + ' syg i dag?' : 'Meld ' + first + ' rask igen?',
+      ok: sick ? 'Meld syg' : 'Meld rask',
+      body: [
+        el('p', {}, sick ? c.name + ' meldes syg i Aula for i dag. Institutionen får besked med det samme.'
+          : 'Sygemeldingen tages tilbage i Aula, og ' + first + ' står som ikke kommet.'),
+        el('p', { class: 'muted small' }, 'Det står i din log under Handlinger i Aula.'),
+      ],
+      onok: async () => {
+        try { await postJson('data/children/sick', { child: c.id, sick }); toast(sick ? first + ' er meldt syg i Aula' : first + ' er meldt rask i Aula'); }
+        catch (err) { toast('Kunne ikke: ' + kidErr(err)); }
+        loadKids(true);
+      },
+    });
+  };
+  const menu = () => {
+    const k = kidToday(c.id);
+    fill(body, head(c.name),
+      k ? el('p', { class: 'muted small', style: 'margin:0' }, 'I dag i Aula: ', kidPill(k)) : null,
+      el('div', { class: 'list' },
+        k && k.status === 1
+          ? item('sun', 'Meld rask igen', 'Tag sygemeldingen tilbage i Aula', () => askSick(false))
+          : item('warn', 'Meld syg i dag', 'Institutionen får besked i Aula med det samme', () => askSick(true), true),
+        item('door', 'Ændr komme/gå', 'Afleverings- og hentetid for én dag', () => planForm(todayKey())),
+        item('week', 'Se komme/gå-plan', 'Denne og næste uge', () => planList()),
+        item('cal', 'Åbn kalender', 'Begivenheder for familien', () => { d.close(); go('kalender'); })));
+  };
+  const planRow = (p) => el('button', { class: 'li menu-li', onclick: () => planForm(p.date) },
+    el('span', { class: 'type-dot' }, icon(p.onVacation ? 'sun' : 'door')),
+    el('span', { style: 'min-width:0;display:block' },
+      el('span', { class: 'li-title', style: 'display:block' }, longDay(p.date)),
+      el('span', { class: 'li-sub', style: 'display:block' }, p.onVacation ? 'Ferie/fri'
+        : [p.entryTime ? 'Kommer ' + tm(p.entryTime) : '',
+          p.activityType === 'self_decider' ? 'Selvbestemmer ' + tm(p.selfDeciderStartTime) + '–' + tm(p.selfDeciderEndTime)
+            : p.exitTime ? (henteLabel(p.activityType) || 'Går') + ' ' + tm(p.exitTime) + (p.exitWith ? ' · ' + p.exitWith : '') : '',
+          p.comment || ''].filter(Boolean).join(' · ') || 'Intet registreret')),
+    icon('chev'));
+  const planList = async () => {
+    fill(body, head('Komme/gå for ' + first, true), skeleton());
+    try {
+      const plan = await getJson('data/children/plan?child=' + c.id);
+      fill(body, head('Komme/gå for ' + first, true),
+        plan.days.length ? el('div', { class: 'list', style: 'max-height:55vh;overflow:auto' }, plan.days.map(planRow))
+          : el('p', { class: 'muted' }, 'Intet registreret i Aula de næste to uger.'),
+        el('div', { class: 'dlg-actions' }, el('button', { class: 'btn btn-primary', onclick: () => planForm(todayKey()) }, 'Ændr en dag')));
+    } catch (err) { fill(body, head('Komme/gå for ' + first, true), el('p', { class: 'error-text' }, 'Kunne ikke hente: ' + kidErr(err))); }
+  };
+  const planForm = async (date) => {
+    const f = {};
+    const field = (id, label, input) => { f[id] = input; return el('div', { class: 'field', 'data-f': id }, el('label', { for: 'kf-' + id }, label), input); };
+    const inp = (id, type, value) => el('input', { class: 'input', id: 'kf-' + id, type, value: value || '' });
+    const status = el('p', { class: 'muted small', style: 'margin:0' }, 'Henter det, der står i Aula …');
+    const save = el('button', { class: 'btn btn-primary', disabled: true }, 'Gem i Aula');
+    const sel = el('select', { class: 'input', id: 'kf-activityType' }, HENTEFORM.map(([v, l]) => el('option', { value: v }, l)));
+    const grid = el('div', { class: 'form-grid' },
+      field('date', 'Dag', inp('date', 'date', date)),
+      field('activityType', 'Henteform', sel),
+      field('entryTime', 'Afleveres', inp('entryTime', 'time')),
+      field('exitTime', 'Hentes / går', inp('exitTime', 'time')),
+      field('selfDeciderStartTime', 'Må gå fra', inp('selfDeciderStartTime', 'time')),
+      field('selfDeciderEndTime', 'Senest', inp('selfDeciderEndTime', 'time')),
+      field('pickedUpBy', 'Hvem', inp('pickedUpBy', 'text')));
+    const comment = field('comment', 'Besked til personalet', el('input', { class: 'input', id: 'kf-comment', type: 'text', maxlength: '500' }));
+    const shown = () => {
+      const a = sel.value;
+      const vis = { exitTime: a !== 'self_decider', selfDeciderStartTime: a === 'self_decider', selfDeciderEndTime: a === 'self_decider', pickedUpBy: a === 'picked_up_by' || a === 'go_home_with' };
+      grid.querySelectorAll('[data-f]').forEach((n) => { const k = n.getAttribute('data-f'); n.hidden = k in vis ? !vis[k] : false; });
+    };
+    sel.addEventListener('change', shown);
+    const prefill = async () => {
+      save.disabled = true;
+      status.textContent = 'Henter det, der står i Aula …';
+      try {
+        const day = f.date.value;
+        const plan = await getJson('data/children/plan?child=' + c.id + '&from=' + day + '&to=' + day);
+        const p = plan.days.find((x) => x.date === day);
+        sel.value = (p && p.activityType) || 'picked_up_by';
+        f.entryTime.value = p ? tm(p.entryTime) : '';
+        f.exitTime.value = p ? tm(p.exitTime) : '';
+        f.selfDeciderStartTime.value = p ? tm(p.selfDeciderStartTime) : '';
+        f.selfDeciderEndTime.value = p ? tm(p.selfDeciderEndTime) : '';
+        f.pickedUpBy.value = (p && p.exitWith) || '';
+        f.comment.value = (p && p.comment) || '';
+        status.textContent = p ? (p.onVacation ? 'Står som ferie/fri i Aula.' : 'Udfyldt med det, der står i Aula nu.') : 'Intet registreret for dagen endnu.';
+      } catch (err) { status.textContent = 'Kunne ikke hente: ' + kidErr(err); }
+      shown();
+      save.disabled = false;
+    };
+    f.date.addEventListener('change', prefill);
+    save.addEventListener('click', async () => {
+      const data = { child: c.id, date: f.date.value, activityType: sel.value };
+      for (const k of ['entryTime', 'exitTime', 'selfDeciderStartTime', 'selfDeciderEndTime', 'pickedUpBy', 'comment']) {
+        const n = f[k];
+        if (n && !n.closest('[data-f]').hidden && n.value.trim()) data[k] = n.value.trim();
+      }
+      save.disabled = true;
+      try {
+        await postJson('data/children/plan', data);
+        toast('Komme/gå for ' + first + ' er gemt i Aula');
+        loadKids(true);
+        planList();
+      } catch (err) { status.textContent = 'Kunne ikke gemme: ' + kidErr(err); save.disabled = false; }
+    });
+    fill(body, head('Ændr komme/gå for ' + first, true),
+      el('p', { class: 'muted small', style: 'margin:0' }, 'Gælder én dag. Det ændres i Aula, og personalet kan se det med det samme.'),
+      grid, comment, status,
+      el('div', { class: 'dlg-actions' }, el('button', { class: 'btn', onclick: () => menu() }, 'Annuller'), save));
+    shown();
+    await prefill();
+  };
+  menu();
+  if (!d.open) d.showModal();
 }
 function syncPill() {
   const s = state.sync;

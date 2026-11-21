@@ -15,12 +15,12 @@ import {
   isoDate,
   isoWeekString,
   isoWeekToMonday,
-  PRESENCE_STATUS_CODE,
 } from '@aula-mcp/aula-client';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
+import { sendSickReport, sickReportRefusal } from './child-actions.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
 import type { GalleryView } from './gallery.ts';
@@ -792,75 +792,15 @@ export function registerTools(
       },
       async (args) => {
         const client = await context.getClient();
-
-        // Scope the write to this login's own children.
-        //
-        // Aula happily accepts any institution-profile id the caller has rights
-        // to, and the schema takes an array, so a single hallucinated number is
-        // enough to tell the wrong institution that someone else's child is
-        // ill. Resolve the guardian's actual children first and refuse anything
-        // that isn't one of them — a local error beats a phone call from a
-        // daycare.
-        const profilesData = await client.getProfilesByLogin();
-        const ownChildren = new Map<number, string>();
-        for (const profile of profilesData.profiles ?? []) {
-          for (const child of profile.children ?? []) {
-            ownChildren.set(child.id, child.name);
-          }
-        }
-        const unknownIds = args.institutionProfileIds.filter((id) => !ownChildren.has(id));
-        if (unknownIds.length > 0) {
-          return jsonContent({
-            error: 'unknown_child',
-            message:
-              'Refusing to write: these institution-profile ids are not children of the ' +
-              'logged-in guardian. Call aula.discover and use children[].id.',
-            unknownIds,
-            knownChildren: [...ownChildren].map(([id, name]) => ({ id, name })),
-          });
-        }
-
-        // Un-reporting is not a free action.
-        //
-        // Aula's own UI only offers "take the sick report back" from a sick
-        // state, so status 0 is safe there. Here nothing constrains it: calling
-        // sick:false on a child who is currently checked in would silently flip
-        // them to "ikke kommet" and still report ok. Only allow it for a child
-        // Aula currently reports as sick.
-        if (!args.sick) {
-          const overview = await client.getDailyOverview(args.institutionProfileIds);
-          const statusById = new Map<number, number>();
-          for (const entry of overview) {
-            const id = entry.institutionProfile?.id;
-            if (id !== undefined) statusById.set(id, entry.status);
-          }
-          const notSick = args.institutionProfileIds.filter(
-            (id) => statusById.get(id) !== PRESENCE_STATUS_CODE.SICK,
-          );
-          if (notSick.length > 0) {
-            return jsonContent({
-              error: 'not_reported_sick',
-              message:
-                'Refusing to write: taking a sick report back sets the child to ' +
-                '"ikke kommet" (0), so it is only safe for a child Aula currently reports ' +
-                'as sick. These are not. Use aula.presence.today to see the current status.',
-              children: notSick.map((id) => ({
-                id,
-                name: ownChildren.get(id),
-                currentStatus: statusById.get(id) ?? null,
-              })),
-            });
-          }
-        }
+        // Only the guardian's own children, and no undo for a child that is
+        // not reported sick. See sickReportRefusal.
+        const refusal = await sickReportRefusal(client, args.institutionProfileIds, args.sick);
+        if (refusal) return jsonContent(refusal);
 
         const result = await audited(
           args.sick ? 'presence_report_sick' : 'presence_undo_sick',
           { children: args.institutionProfileIds.length },
-          () =>
-            client.updatePresenceStatus({
-              institutionProfileIds: args.institutionProfileIds,
-              status: args.sick ? PRESENCE_STATUS_CODE.SICK : PRESENCE_STATUS_CODE.NOT_PRESENT,
-            }),
+          () => sendSickReport(client, args.institutionProfileIds, args.sick),
         );
         return jsonContent({ ok: true, result });
       },
