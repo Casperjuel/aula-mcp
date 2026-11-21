@@ -52,6 +52,8 @@
  *   AULA_MCP_SETUP_CLIENT_SECRET — for a confidential client. Optional.
  *   AULA_MCP_STORAGE          — local storage: sqlite (default), postgres or
  *                               none. See storage.ts for the rest.
+ *   AULA_MCP_SYNC=0           — no background sync into local storage; see
+ *                               sync.ts.
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
@@ -75,6 +77,7 @@ import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
 import { openStorage, SINGLE_PARENT_ID, StorageConfigError } from './storage.ts';
 import { StorageKeyError } from './storage-crypto.ts';
+import { createSyncScheduler, realSyncSchedule, type SyncParent } from './sync.ts';
 import { startTokenKeepAlive } from './token-keepalive.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
@@ -161,13 +164,40 @@ async function loginRequiredFor(caller: Caller | null): Promise<LoginRequired | 
   return { setupUrl: multiParent.setupLogin?.publicUrl ?? null, loggedIn: hasTokens };
 }
 
+/** Every parent to sync, each with their own Aula session only. */
+async function syncParents(): Promise<SyncParent[]> {
+  const contexts = multiParent
+    ? await multiParent.contexts.entries()
+    : sharedContext
+      ? [{ id: SINGLE_PARENT_ID, context: sharedContext }]
+      : [];
+  return contexts.map(({ id, context }) => ({
+    parentId: id,
+    session: context,
+    loggedIn: () => context.hasLogin(),
+  }));
+}
+
+// Background sync into local storage. Off without storage; AULA_MCP_SYNC=0
+// stops the schedule but keeps aula.sync.run.
+const sync = storage
+  ? createSyncScheduler({
+      storage,
+      parents: syncParents,
+      logger,
+      ...(process.env.AULA_MCP_SYNC === '0' ? {} : { schedule: realSyncSchedule }),
+    })
+  : null;
+
 /** A new session's McpApp: the caller's own context, or just the login tool. */
 async function sessionAppFor(caller: Caller | null): Promise<McpApp> {
   const loginRequired = await loginRequiredFor(caller);
+  const context = contextFor(caller);
   return createMcpApp({
     logger,
-    context: contextFor(caller),
+    context,
     ...(loginRequired ? { loginRequired } : {}),
+    ...(sync ? { sync: sync.forParent(parentIdOf(caller), context) } : {}),
   });
 }
 
@@ -661,6 +691,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     ]);
     await server.stop();
     if (setupServer) await setupServer.stop();
+    sync?.stop();
     multiParent?.contexts.dispose();
     await storage?.close();
   } catch (err) {

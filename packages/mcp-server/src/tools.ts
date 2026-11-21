@@ -22,6 +22,9 @@ import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
 import { buildDiscoverManifest } from './discover.ts';
+import { resolveFamilyProfileIds } from './family-profiles.ts';
+import type { ParentSync } from './sync.ts';
+import { registerSyncTools } from './sync-tools.ts';
 
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -344,13 +347,21 @@ const WEB_URL_NOTE =
   ' Each item has a `webUrl`: an in-app route (`#/...` on www.aula.dk) that opens in a ' +
   'browser with a logged-in Aula session, not in the Aula app.';
 
+export interface ToolExtras {
+  /** The caller's sync; the aula.sync.* tools are registered when set. */
+  sync?: ParentSync;
+}
+
 /** `env` decides which gated tools are registered (tool-catalog.ts lists
  *  them all, enabled or not). */
 export function registerTools(
   server: McpServer,
   context: AulaContext,
   env: NodeJS.ProcessEnv = process.env,
+  extras: ToolExtras = {},
 ): void {
+  if (extras.sync) registerSyncTools(server, extras.sync);
+
   // --- aula.discover -------------------------------------------------------
 
   server.registerTool(

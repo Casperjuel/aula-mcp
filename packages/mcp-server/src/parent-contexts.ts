@@ -67,6 +67,11 @@ export class ParentContexts {
 
   /** The context of every parent who has a directory, for the keep-alive. */
   async all(): Promise<AulaContext[]> {
+    return (await this.entries()).map((entry) => entry.context);
+  }
+
+  /** Every parent who has a directory, with their callerId, for sync. */
+  async entries(): Promise<Array<{ id: string; context: AulaContext }>> {
     let entries: Dirent[];
     try {
       entries = await readdir(join(this.baseDir, 'parents'), { withFileTypes: true });
@@ -76,7 +81,7 @@ export class ParentContexts {
     }
     return entries
       .filter((entry) => entry.isDirectory())
-      .map((entry) => this.forDirectory(entry.name));
+      .map((entry) => ({ id: entry.name, context: this.forDirectory(entry.name) }));
   }
 
   /** `id` is a callerId, which is also the parent's directory name. */

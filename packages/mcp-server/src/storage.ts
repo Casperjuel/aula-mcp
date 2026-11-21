@@ -79,6 +79,19 @@ export interface ListQuery {
   offset?: number;
 }
 
+/** Where a sync job for one parent stands. Times are unix seconds. */
+export interface SyncState {
+  job: string;
+  lastRunAt: number | null;
+  lastSuccessAt: number | null;
+  nextRunAt: number | null;
+  /** Failures in a row; 0 after a success. */
+  failures: number;
+  lastError: string | null;
+  fetched: number;
+  changed: number;
+}
+
 export interface StorageInfo {
   type: 'sqlite' | 'postgres';
   /** Where it is, without credentials. */
@@ -240,6 +253,50 @@ export class ParentStorage {
       : this.db.run('DELETE FROM items WHERE parent_id = $1', [this.parentId]);
   }
 
+  async syncStates(): Promise<SyncState[]> {
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT job, last_run_at, last_success_at, next_run_at, failures, last_error, fetched, changed
+       FROM sync_state WHERE parent_id = $1 ORDER BY job`,
+      [this.parentId],
+    );
+    return rows.map((row) => ({
+      job: String(row.job),
+      lastRunAt: numberOrNull(row.last_run_at),
+      lastSuccessAt: numberOrNull(row.last_success_at),
+      nextRunAt: numberOrNull(row.next_run_at),
+      failures: Number(row.failures),
+      lastError: (row.last_error as string | null) ?? null,
+      fetched: Number(row.fetched),
+      changed: Number(row.changed),
+    }));
+  }
+
+  async saveSyncState(state: SyncState): Promise<void> {
+    await this.db.run(
+      `INSERT INTO sync_state (parent_id, job, last_run_at, last_success_at, next_run_at, failures, last_error, fetched, changed)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       ON CONFLICT (parent_id, job) DO UPDATE SET
+         last_run_at = excluded.last_run_at,
+         last_success_at = excluded.last_success_at,
+         next_run_at = excluded.next_run_at,
+         failures = excluded.failures,
+         last_error = excluded.last_error,
+         fetched = excluded.fetched,
+         changed = excluded.changed`,
+      [
+        this.parentId,
+        state.job,
+        state.lastRunAt,
+        state.lastSuccessAt,
+        state.nextRunAt,
+        state.failures,
+        state.lastError,
+        state.fetched,
+        state.changed,
+      ],
+    );
+  }
+
   private aad(kind: string, id: string): string {
     return `${this.parentId}\n${kind}\n${id}`;
   }
@@ -286,6 +343,21 @@ const MIGRATIONS: string[][] = [
        PRIMARY KEY (parent_id, kind, id)
      )`,
     'CREATE INDEX items_by_time ON items (parent_id, kind, occurred_at)',
+  ],
+  [
+    // Error messages only, never Aula content, so it is not encrypted.
+    `CREATE TABLE sync_state (
+       parent_id TEXT NOT NULL,
+       job TEXT NOT NULL,
+       last_run_at BIGINT,
+       last_success_at BIGINT,
+       next_run_at BIGINT,
+       failures INTEGER NOT NULL,
+       last_error TEXT,
+       fetched INTEGER NOT NULL,
+       changed INTEGER NOT NULL,
+       PRIMARY KEY (parent_id, job)
+     )`,
   ],
 ];
 

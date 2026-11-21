@@ -8,6 +8,8 @@ Every MCP tool the server offers. Read tools are always on; write tools need
 
 | Tool | Access | What it does |
 | --- | --- | --- |
+| [`aula.sync.status`](#aulasyncstatus) | read | Sync status |
+| [`aula.sync.run`](#aulasyncrun) | read | Run sync now |
 | [`aula.discover`](#auladiscover) | read | Discover Aula context |
 | [`aula.profiles.list`](#aulaprofileslist) | read | List Aula profiles |
 | [`aula.presence.today`](#aulapresencetoday) | read | Daily presence overview |
@@ -34,6 +36,24 @@ Every MCP tool the server offers. Read tools are always on; write tools need
 | [`aula.messages.mark_read`](#aulamessagesmark_read) | write (`AULA_MCP_WRITE=1`) | Mark a message thread as read |
 | [`aula.messages.reply`](#aulamessagesreply) | write (`AULA_MCP_WRITE=1`) | Reply in a message thread |
 | [`aula.raw_request`](#aularaw_request) | raw (`AULA_MCP_RAW=1`) | Raw Aula API call (escape hatch) |
+
+## `aula.sync.status`
+
+**Sync status** · read
+
+Where the background sync of the caller's own Aula data into the local database stands, one entry per job: when it last ran and succeeded, when it runs next, whether the last run failed and why, and how many items it fetched and changed. Jobs: `messages` (every 15 min): Message threads and the messages in threads that changed. `notifications` (every 15 min): Notifications. `posts` (every 30 min): Posts from schools and clubs. `presence` (every 30 min): Today's presence (check-in, pick-up) per child. `calendar` (every 1 h): Calendar events from a week back to eight weeks ahead. `directory` (every 24 h): The children's groups and their contact lists. Sync only reads from Aula: it never marks anything read and never writes to Aula. Parents without an Aula login are skipped until they log in.
+
+No parameters.
+
+## `aula.sync.run`
+
+**Run sync now** · read
+
+Fetch the caller's own Aula data into the local database right now instead of waiting for the schedule, and return what each job fetched and changed. Waits for a sync that is already running. Takes from seconds to a minute or two (messages and the contact directory are the slow ones). Read-only towards Aula: nothing is marked read. Omit `jobs` to run all of them.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `jobs` | array | no | Which jobs to run: messages, notifications, posts, presence, calendar, directory. Defaults to all. |
 
 ## `aula.discover`
 
