@@ -53,7 +53,7 @@ export const SYNC_INTERVALS_MS: Record<SyncJobName, number> = {
   posts: 30 * MINUTE,
   presence: 30 * MINUTE,
   calendar: HOUR,
-  directory: 24 * HOUR,
+  directory: 7 * 24 * HOUR,
   gallery: 6 * HOUR,
 };
 
@@ -67,7 +67,8 @@ export const SYNC_JOB_DESCRIPTIONS: Record<SyncJobName, string> = {
   directory: "The children's groups and their contact lists.",
   gallery:
     'Photo albums and their photos and videos, downloaded in original quality with a ' +
-    `thumbnail, up to ${GALLERY_DOWNLOADS_PER_RUN} files per run.`,
+    `thumbnail, up to ${GALLERY_DOWNLOADS_PER_RUN} files per run. An album that looks ` +
+    'unchanged, with every photo downloaded, is listed again once a day.',
 };
 
 /** The Aula calls sync makes. All of them read; none of them write. */

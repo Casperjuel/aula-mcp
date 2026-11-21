@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { GalleryAlbum, GalleryMedia } from '@aula-mcp/aula-client';
 import {
+  ALBUM_RELIST_MS,
   childOf,
   GalleryFiles,
   GalleryView,
@@ -130,6 +131,71 @@ describe('gallery job', () => {
     const again = await run(client([{ album: ALBUM, media: [media(1), media(2)] }]));
     expect(fetched).toEqual([]);
     expect(again.changed).toBe(0);
+  });
+
+  test('lists an unchanged, fully downloaded album again only once a day', async () => {
+    const at = (ms: number, c: SyncClient) =>
+      syncGallery({
+        client: c,
+        store: storage.forParent('p'),
+        childIds: async () => [11, 12],
+        firstRun: false,
+        now: new Date(Date.parse('2026-11-20T10:00:00Z') + ms),
+        gallery: files.forParent('p'),
+      });
+    const counted = (albums: Array<{ album: GalleryAlbum; media: GalleryMedia[] }>) => {
+      const c = client(albums);
+      const calls = { media: 0 };
+      const listMedia = c.getAlbumMedia.bind(c);
+      c.getAlbumMedia = (args) => {
+        calls.media++;
+        return listMedia(args);
+      };
+      return { c, calls };
+    };
+    const stored = async () =>
+      (await storage.forParent('p').list({ kind: 'gallery_media' })).length;
+
+    await at(0, client([{ album: ALBUM, media: [media(1)] }]));
+    expect(await stored()).toBe(1);
+
+    // A photo added to the album is not seen while the album looks the same.
+    const same = counted([{ album: ALBUM, media: [media(1), media(2)] }]);
+    expect(await at(60_000, same.c)).toMatchObject({ fetched: 0, changed: 0 });
+    expect(same.calls.media).toBe(0);
+
+    // The album itself changed: listed right away.
+    const renamed = counted([
+      { album: { ...ALBUM, title: 'Skovtur' }, media: [media(1), media(2)] },
+    ]);
+    await at(120_000, renamed.c);
+    expect(renamed.calls.media).toBe(1);
+    expect(await stored()).toBe(2);
+
+    // A day later every album is listed again.
+    const later = counted([
+      { album: { ...ALBUM, title: 'Skovtur' }, media: [media(1), media(2), media(3)] },
+    ]);
+    await at(ALBUM_RELIST_MS, later.c);
+    expect(later.calls.media).toBe(1);
+    expect(await stored()).toBe(3);
+  });
+
+  test('lists an album again while a photo in it is not downloaded', async () => {
+    const run2 = (c: SyncClient) =>
+      syncGallery({
+        client: c,
+        store: storage.forParent('p'),
+        childIds: async () => [11, 12],
+        firstRun: false,
+        now: new Date('2026-11-20T10:00:00Z'),
+        gallery: files.forParent('p'),
+      });
+    const broken = media(1, { file: { id: 1, name: 'x.jpg', url: `${URL_BASE}/missing1?S=s` } });
+    await run2(client([{ album: ALBUM, media: [broken] }]));
+    fetched = [];
+    await run2(client([{ album: ALBUM, media: [media(1)] }]));
+    expect(fetched.some((u) => u.includes('/m1?'))).toBe(true);
   });
 
   test('never stores a signed URL', async () => {

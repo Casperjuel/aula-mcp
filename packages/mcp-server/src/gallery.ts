@@ -50,6 +50,12 @@ const MINUTE = 60 * 1000;
 export const GALLERY_DOWNLOADS_PER_RUN = 300;
 /** Signed URLs last about 30 minutes: list again before they run out. */
 const LISTING_FRESH_MS = 20 * MINUTE;
+/**
+ * How long an album that looks unchanged goes without its media being listed
+ * again. Aula has no "changed since" call, so this daily pass is what notices
+ * photos added to an existing album or removed from it.
+ */
+export const ALBUM_RELIST_MS = 24 * 60 * MINUTE;
 const PAGE_SIZE = 50;
 /** Folder for albums that are not one child's alone. */
 export const SHARED_FOLDER = 'Fælles';
@@ -422,6 +428,8 @@ export interface StoredAlbum {
   /** Folder relative to the parent's gallery root. */
   folder: string;
   mediaCount: number;
+  /** When its media was last listed in full, in ms. */
+  listedAt?: number;
   /** Set when the parent deleted the album here; sync leaves it alone after that. */
   removedAt?: number;
 }
@@ -506,8 +514,11 @@ interface Child {
 /**
  * Lists every album and its media, stores them without URLs, and downloads
  * what is not on disk yet, up to GALLERY_DOWNLOADS_PER_RUN files.
+ *
+ * An album that looks the same as last time, with every photo already on
+ * disk, is not listed again until ALBUM_RELIST_MS has passed.
  */
-export const syncGallery: SyncJob = async ({ client, store, gallery, childIds }) => {
+export const syncGallery: SyncJob = async ({ client, store, gallery, childIds, now }) => {
   if (!gallery) return { fetched: 0, changed: 0 };
   const institutionProfileIds = await resolveFamilyProfileIds(client);
   const ids = new Set(await childIds());
@@ -528,6 +539,13 @@ export const syncGallery: SyncJob = async ({ client, store, gallery, childIds })
   );
   const bySha = new Map<string, string>();
   for (const m of storedMedia.values()) if (m.sha256 && m.path) bySha.set(m.sha256, m.path);
+  // Albums with media still to download (or that failed), so they are listed again.
+  const unfinished = new Set<number>();
+  if (gallery.config.downloads) {
+    for (const m of storedMedia.values()) {
+      if (!m.path && !m.removedAt && !m.media.isDeleted) unfinished.add(m.albumId);
+    }
+  }
 
   let fetched = 0;
   let changed = 0;
@@ -547,6 +565,14 @@ export const syncGallery: SyncJob = async ({ client, store, gallery, childIds })
     const key = String(album.id);
     const before = storedAlbums.get(key);
     if (before?.removedAt) continue;
+    const relistDue = !before?.listedAt || now.getTime() - before.listedAt >= ALBUM_RELIST_MS;
+    if (
+      !relistDue &&
+      !unfinished.has(album.id) &&
+      JSON.stringify(withoutUrls(album)) === JSON.stringify(before?.album)
+    ) {
+      continue;
+    }
 
     let listedAt = Date.now();
     const listMedia = async () => {
@@ -578,6 +604,9 @@ export const syncGallery: SyncJob = async ({ client, store, gallery, childIds })
       folder,
       mediaCount: media.length,
     };
+    // Kept when listed early for a change, so an unchanged row stays unchanged.
+    const listedOn = relistDue ? now.getTime() : before?.listedAt;
+    if (listedOn !== undefined) albumRow.listedAt = listedOn;
     changed += (
       await store.put([
         { kind: 'gallery_album', id: key, occurredAt: album.creationDate ?? null, data: albumRow },
