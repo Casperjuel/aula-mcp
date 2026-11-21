@@ -86,6 +86,10 @@ spec:
             - name: AULA_MCP_WRITE
               value: "1"
             {{- end }}
+            {{- if not .Values.markReadTools }}
+            - name: AULA_MCP_MARK_READ
+              value: "0"
+            {{- end }}
             {{- if .Values.debugLogs }}
             - name: AULA_MCP_LOG
               value: "1"

@@ -25,6 +25,9 @@ oidc:
 
 # AULA_MCP_WRITE=1: enable write tools. The server is read-only without it.
 writeTools: false
+# aula.messages.mark_read/mark_unread: on unless false (AULA_MCP_MARK_READ=0).
+# They only change the parent's own read state in Aula, and undo each other.
+markReadTools: true
 # AULA_MCP_LOG=1: verbose logs.
 debugLogs: false
 # AULA_MCP_TOOL_NAMES: `dotted` (aula.discover) or `underscore`

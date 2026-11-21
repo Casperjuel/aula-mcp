@@ -534,6 +534,20 @@ export class AulaClient {
   }
 
   /**
+   * `messaging.updateSubscriptionStatus` — set threads read or unread, the
+   * same as "Markér som ulæst" in Aula. Takes the guardian's subscription ids
+   * (`thread.subscriptionId` on getThreads), not thread ids. Unlike
+   * setLastReadMessage it can go both ways. Request shape from the
+   * reverse-engineered app (eisbaw/aulalibre).
+   */
+  async setThreadsRead(subscriptionIds: number[], isRead: boolean): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.updateSubscriptionStatus',
+      JSON.stringify({ subscriptionIds, isRead }),
+    );
+  }
+
+  /**
    * `messaging.reply` — post a reply into an existing thread of the guardian's
    * personal inbox. `html` is the message body as Aula stores it (HTML).
    * Request shape from the reverse-engineered app (eisbaw/aulalibre); it has not

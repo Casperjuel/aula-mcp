@@ -177,23 +177,30 @@ describe('buildDiscoverManifest', () => {
     }
   });
 
-  test('messages capability surfaces mark_read only when writes are enabled', async () => {
-    const original = process.env.AULA_MCP_WRITE;
+  test('messages capability: mark_read/unread on by default, reply only with writes', async () => {
+    const write = process.env.AULA_MCP_WRITE;
+    const mark = process.env.AULA_MCP_MARK_READ;
     try {
       delete process.env.AULA_MCP_WRITE;
-      const off = await buildDiscoverManifest(fakeContext());
-      expect(off.capabilities.messages?.tools).not.toContain('aula.messages.mark_read');
-      expect(off.capabilities.messages?.notes).toContain('AULA_MCP_WRITE=1');
+      delete process.env.AULA_MCP_MARK_READ;
+      const plain = await buildDiscoverManifest(fakeContext());
+      expect(plain.capabilities.messages?.tools).toContain('aula.messages.mark_read');
+      expect(plain.capabilities.messages?.tools).toContain('aula.messages.mark_unread');
+      expect(plain.capabilities.messages?.tools).not.toContain('aula.messages.reply');
+      expect(plain.capabilities.messages?.notes).toContain('AULA_MCP_WRITE=1');
+      expect(plain.capabilities.messages?.notes).toContain('undoes the other');
 
+      process.env.AULA_MCP_MARK_READ = '0';
       process.env.AULA_MCP_WRITE = '1';
       const on = await buildDiscoverManifest(fakeContext());
-      expect(on.capabilities.messages?.tools).toContain('aula.messages.mark_read');
-      // With writes on the note stops explaining the gate and starts warning
-      // about the one thing that cannot be undone.
-      expect(on.capabilities.messages?.notes).toContain('irreversible');
+      expect(on.capabilities.messages?.tools).not.toContain('aula.messages.mark_read');
+      expect(on.capabilities.messages?.tools).toContain('aula.messages.reply');
+      expect(on.capabilities.messages?.notes).toContain('AULA_MCP_MARK_READ=0');
     } finally {
-      if (original === undefined) delete process.env.AULA_MCP_WRITE;
-      else process.env.AULA_MCP_WRITE = original;
+      if (write === undefined) delete process.env.AULA_MCP_WRITE;
+      else process.env.AULA_MCP_WRITE = write;
+      if (mark === undefined) delete process.env.AULA_MCP_MARK_READ;
+      else process.env.AULA_MCP_MARK_READ = mark;
     }
   });
 

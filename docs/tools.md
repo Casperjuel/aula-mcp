@@ -3,7 +3,8 @@
 <!-- Generated from tool-catalog.ts by `bun run docs:tools`. Do not edit by hand. -->
 
 Every MCP tool the server offers. Read tools are always on; write tools need
-`AULA_MCP_WRITE=1` and the raw escape hatch needs `AULA_MCP_RAW=1`. With
+`AULA_MCP_WRITE=1` and the raw escape hatch needs `AULA_MCP_RAW=1`. Marking
+threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With
 `AULA_MCP_TOOL_NAMES=underscore` the dots become underscores (`aula_discover`).
 
 | Tool | Access | What it does |
@@ -43,9 +44,10 @@ Every MCP tool the server offers. Read tools are always on; write tools need
 | [`aula.messages.get_attachment`](#aulamessagesget_attachment) | read | Download a thread attachment to local disk |
 | [`aula.posts.get_attachment`](#aulapostsget_attachment) | read | Download a post attachment to local disk |
 | [`aula.utils.extract_pdf_text`](#aulautilsextract_pdf_text) | read | Extract text from a local PDF file |
+| [`aula.messages.mark_read`](#aulamessagesmark_read) | write (`on unless AULA_MCP_MARK_READ=0`) | Mark a message thread as read |
+| [`aula.messages.mark_unread`](#aulamessagesmark_unread) | write (`on unless AULA_MCP_MARK_READ=0`) | Mark a message thread as unread |
 | [`aula.presence.set_template`](#aulapresenceset_template) | write (`AULA_MCP_WRITE=1`) | Set a komme/gå template (drop-off & pickup time) |
 | [`aula.presence.report_sick`](#aulapresencereport_sick) | write (`AULA_MCP_WRITE=1`) | Report a child sick (or well again) |
-| [`aula.messages.mark_read`](#aulamessagesmark_read) | write (`AULA_MCP_WRITE=1`) | Mark a message thread as read |
 | [`aula.messages.reply`](#aulamessagesreply) | write (`AULA_MCP_WRITE=1`) | Reply in a message thread |
 | [`aula.raw_request`](#aularaw_request) | raw (`AULA_MCP_RAW=1`) | Raw Aula API call (escape hatch) |
 
@@ -438,6 +440,28 @@ Read a PDF from a local absolute path — typically one returned by aula.posts.g
 | --- | --- | --- | --- |
 | `path` | string | yes | Absolute local path to the PDF. |
 
+## `aula.messages.mark_read`
+
+**Mark a message thread as read** · write (`on unless AULA_MCP_MARK_READ=0`)
+
+Move the read marker in a thread to its newest message, clearing the unread badge in Aula. WRITES to Aula (only your own read state) — on by default, off when AULA_MCP_MARK_READ=0. Pass `messageId` from `aula.messages.list_threads` (thread.latestMessage.id); omit it to mark the thread read up to whatever its newest message is right now. Undo with `aula.messages.mark_unread`. Only call this for threads the user has actually seen.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `threadId` | integer | yes | Thread id from aula.messages.list_threads. |
+| `messageId` | string | no | Aula's opaque message id (e.g. "6a3d2467304484.24549709"), NOT a number. Defaults to the thread's newest message. |
+
+## `aula.messages.mark_unread`
+
+**Mark a message thread as unread** · write (`on unless AULA_MCP_MARK_READ=0`)
+
+Set a thread back to unread in Aula, the same as "Markér som ulæst" there, so its unread badge returns. WRITES to Aula (only your own read state) — on by default, off when AULA_MCP_MARK_READ=0. Undo with `aula.messages.mark_read`. Pass `subscriptionId` from `aula.messages.list_threads` (thread.subscriptionId — not the thread id); omit it to look it up from the newest threads.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `threadId` | integer | yes | Thread id from aula.messages.list_threads. |
+| `subscriptionId` | integer | no | The thread's subscriptionId from aula.messages.list_threads. Looked up when left out. |
+
 ## `aula.presence.set_template`
 
 **Set a komme/gå template (drop-off & pickup time)** · write (`AULA_MCP_WRITE=1`)
@@ -468,17 +492,6 @@ Mark a child as sick for today, or take the report back. WRITES to Aula — enab
 | --- | --- | --- | --- |
 | `institutionProfileIds` | array | yes | Child institution-profile ids — the same ids passed to aula.presence.today as childIds, i.e. aula.discover children[].id. Must belong to the logged-in guardian; anything else is rejected. Confirm the child with the user before calling. |
 | `sick` | boolean | yes | true reports the child sick. false takes the report back, which sets the child to "ikke kommet" (not arrived) — so it is rejected unless Aula currently reports that child as sick. |
-
-## `aula.messages.mark_read`
-
-**Mark a message thread as read** · write (`AULA_MCP_WRITE=1`)
-
-Move the read marker in a thread to its newest message, clearing the unread badge. WRITES to Aula — enabled when AULA_MCP_WRITE=1. Pass `messageId` from `aula.messages.list_threads` (thread.latestMessage.id); omit it to mark the thread read up to whatever its newest message is right now. Marking read is not reversible through this API — Aula offers no way to set a thread back to unread, so only call this for threads the user has actually seen.
-
-| Parameter | Type | Required | Description |
-| --- | --- | --- | --- |
-| `threadId` | integer | yes | Thread id from aula.messages.list_threads. |
-| `messageId` | string | no | Aula's opaque message id (e.g. "6a3d2467304484.24549709"), NOT a number. Defaults to the thread's newest message. |
 
 ## `aula.messages.reply`
 

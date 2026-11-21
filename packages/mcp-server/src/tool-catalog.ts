@@ -32,6 +32,8 @@ export interface ToolInfo {
   enabled: boolean;
   /** Set when the tool is off: what turns it on. */
   enableWith?: string;
+  /** For gated tools: the flag that decides it, e.g. `AULA_MCP_WRITE=1`. */
+  gate?: string;
 }
 
 interface Collected {
@@ -44,32 +46,55 @@ const GATES: Record<Exclude<ToolAccess, 'read'>, string> = {
   raw: 'AULA_MCP_RAW',
 };
 
+/** Write tools that are on unless their flag is `0`. */
+const DEFAULT_ON = 'AULA_MCP_MARK_READ';
+
+const ALL_OFF = { AULA_MCP_WRITE: '0', AULA_MCP_RAW: '0', [DEFAULT_ON]: '0' };
+
 export function toolCatalog(
   env: NodeJS.ProcessEnv = process.env,
   style: ToolNameStyle = 'dotted',
 ): ToolInfo[] {
-  const read = collect({ ...env, AULA_MCP_WRITE: '0', AULA_MCP_RAW: '0' });
-  const gated = (access: keyof typeof GATES) =>
-    collect({ ...env, AULA_MCP_WRITE: '0', AULA_MCP_RAW: '0', [GATES[access]]: '1' }).filter(
+  const read = collect({ ...env, ...ALL_OFF });
+  const only = (flag: string, on: string) =>
+    collect({ ...env, ...ALL_OFF, [flag]: on }).filter(
       (tool) => !read.some((r) => r.name === tool.name),
     );
-  const all: Array<[Collected, ToolAccess]> = [
-    ...read.map((tool) => [tool, 'read'] as [Collected, ToolAccess]),
-    ...gated('write').map((tool) => [tool, 'write'] as [Collected, ToolAccess]),
-    ...gated('raw').map((tool) => [tool, 'raw'] as [Collected, ToolAccess]),
+  const defaultOn = env[DEFAULT_ON] !== '0';
+  type Row = { tool: Collected; access: ToolAccess; enabled: boolean; on?: string; gate?: string };
+  const rows: Row[] = [
+    ...read.map((tool): Row => ({ tool, access: 'read', enabled: true })),
+    ...only(DEFAULT_ON, '1').map(
+      (tool): Row => ({
+        tool,
+        access: 'write',
+        enabled: defaultOn,
+        on: `${DEFAULT_ON} unset`,
+        gate: `on unless ${DEFAULT_ON}=0`,
+      }),
+    ),
+    ...(['write', 'raw'] as const).flatMap((access) =>
+      only(GATES[access], '1').map(
+        (tool): Row => ({
+          tool,
+          access,
+          enabled: env[GATES[access]] === '1',
+          on: `${GATES[access]}=1`,
+          gate: `${GATES[access]}=1`,
+        }),
+      ),
+    ),
   ];
-  return all.map(([tool, access]) => {
-    const enabled = access === 'read' || env[GATES[access]] === '1';
-    return {
-      name: toolName(tool.name, style),
-      ...(tool.config.title ? { title: tool.config.title } : {}),
-      description: tool.config.description ?? '',
-      access,
-      parameters: parametersOf(tool.config.inputSchema ?? {}),
-      enabled,
-      ...(enabled ? {} : { enableWith: `${GATES[access as keyof typeof GATES]}=1` }),
-    };
-  });
+  return rows.map(({ tool, access, enabled, on, gate }) => ({
+    name: toolName(tool.name, style),
+    ...(tool.config.title ? { title: tool.config.title } : {}),
+    description: tool.config.description ?? '',
+    access,
+    parameters: parametersOf(tool.config.inputSchema ?? {}),
+    enabled,
+    ...(enabled || !on ? {} : { enableWith: on }),
+    ...(gate ? { gate } : {}),
+  }));
 }
 
 function collect(env: NodeJS.ProcessEnv): Collected[] {
@@ -129,7 +154,8 @@ export function renderToolsMarkdown(tools: ToolInfo[]): string {
     '<!-- Generated from tool-catalog.ts by `bun run docs:tools`. Do not edit by hand. -->',
     '',
     'Every MCP tool the server offers. Read tools are always on; write tools need',
-    '`AULA_MCP_WRITE=1` and the raw escape hatch needs `AULA_MCP_RAW=1`. With',
+    '`AULA_MCP_WRITE=1` and the raw escape hatch needs `AULA_MCP_RAW=1`. Marking',
+    'threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With',
     '`AULA_MCP_TOOL_NAMES=underscore` the dots become underscores (`aula_discover`).',
     '',
     '| Tool | Access | What it does |',
@@ -160,8 +186,8 @@ export function renderToolsMarkdown(tools: ToolInfo[]): string {
 }
 
 function accessLabel(tool: ToolInfo): string {
-  if (tool.access === 'read') return 'read';
-  return `${tool.access} (\`${GATES[tool.access]}=1\`)`;
+  if (!tool.gate) return 'read';
+  return `${tool.access} (\`${tool.gate}\`)`;
 }
 
 function anchor(name: string): string {

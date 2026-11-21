@@ -378,6 +378,7 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_DIR` | `~/.config/aula-mcp` | Konfig-mappe (fil-backend + transcripts + login-log). |
 | `AULA_MCP_RAW=1` | off | Aktiverer `aula.raw_request` escape-hatch-toolet. |
 | `AULA_MCP_WRITE=1` | off | Aktiverer skrive-tools (`aula.presence.set_template` — sæt komme/gå-tider; `aula.messages.reply` — svar i en tråd, altid først som forhåndsvisning). Serveren er read-only uden den. |
+| `AULA_MCP_MARK_READ=0` | on | Slår `aula.messages.mark_read` og `aula.messages.mark_unread` fra. De er slået til som standard: de ændrer kun din egen læst/ulæst-status i Aula, og de kan fortryde hinanden. |
 | `AULA_MCP_KEEPALIVE=0` | on | Slår baggrunds-fornyelsen af access token fra. Som standard tjekker serveren hvert 5. minut og fornyer tokenet når der er under 15 minutter tilbage, så refresh-kæden holdes varm selv uden tool-kald. Forlænger et MitID-login, men kan ikke gøre det permanent. |
 | `AULA_MCP_TOOL_NAMES` | `dotted` | `underscore` navngiver tools `aula_discover` osv. i stedet for `aula.discover`, også i instruktioner, beskrivelser og svar. Til klienter der sender MCP-toolnavne direkte videre til Anthropic API'et (fx kagent), som kun tager `^[a-zA-Z0-9_-]{1,128}$`. |
 | `AULA_MCP_LOG=1` | off | Verbose console-logs fra auth/client-lagene (samme redaktion som wire-transcripts). |

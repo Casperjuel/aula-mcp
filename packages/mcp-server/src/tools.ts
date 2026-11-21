@@ -7,7 +7,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { TokenStoreError } from '@aula-mcp/aula-auth';
-import type { AulaPost, ThreadMessage } from '@aula-mcp/aula-client';
+import type { AulaClient, AulaPost, ThreadMessage } from '@aula-mcp/aula-client';
 import {
   AulaApiError,
   AulaStepUpRequiredError,
@@ -466,6 +466,153 @@ export function registerTools(
     },
   );
 
+  // --- aula.messages.mark_read / mark_unread (write, on by default) -------
+  //
+  // Writes to Aula, but only the guardian's own read state, and each can undo
+  // the other, so they are on unless AULA_MCP_MARK_READ=0. The stored copy of
+  // the thread follows, so aula.local.* agrees with Aula without a sync.
+
+  if (env.AULA_MCP_MARK_READ !== '0') {
+    // Aula pages threads 20 at a time and ignores pageSize, so a single
+    // getThreads call only ever sees the newest 20 — walk pages until the
+    // thread turns up. Bounded: a caller that already has the thread in hand
+    // should pass its ids rather than make us search for it.
+    const MAX_PAGES = 10;
+    const findThread = async (client: AulaClient, threadId: number) => {
+      let pagesRead = 0;
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const { threads, hasMorePages } = await client.getThreadsPage({ page });
+        pagesRead = page + 1;
+        const found = threads.find((t) => t.id === threadId);
+        if (found) return { thread: found, pagesRead };
+        if (!hasMorePages) break;
+      }
+      return { thread: undefined, pagesRead };
+    };
+    const notFound = (threadId: number, pagesRead: number, what: string, error: string) =>
+      jsonContent({
+        error,
+        message:
+          `Thread ${threadId} was not found in the first ${pagesRead} pages ` +
+          `(~${pagesRead * 20} threads), or carries no ${what}. Pass ${what} explicitly ` +
+          '— aula.messages.list_threads returns it on the thread.',
+      });
+    const storeRead = async (threadId: number, read: boolean) => {
+      const local = extras.local;
+      if (!local) return;
+      const stored = await local.get('message_thread', String(threadId));
+      if (!stored || typeof stored.data !== 'object' || stored.data === null) return;
+      await local.put([{ ...stored, data: { ...(stored.data as object), read } }]);
+    };
+
+    server.registerTool(
+      'aula.messages.mark_read',
+      {
+        title: 'Mark a message thread as read',
+        description:
+          'Move the read marker in a thread to its newest message, clearing the unread ' +
+          'badge in Aula. WRITES to Aula (only your own read state) — on by default, off ' +
+          'when AULA_MCP_MARK_READ=0. Pass `messageId` from `aula.messages.list_threads` ' +
+          '(thread.latestMessage.id); omit it to mark the thread read up to whatever its ' +
+          'newest message is right now. Undo with `aula.messages.mark_unread`. Only call ' +
+          'this for threads the user has actually seen.',
+        inputSchema: {
+          threadId: z
+            .number()
+            .int()
+            .positive()
+            .describe('Thread id from aula.messages.list_threads.'),
+          messageId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe(
+              'Aula\'s opaque message id (e.g. "6a3d2467304484.24549709"), NOT a number. ' +
+                "Defaults to the thread's newest message.",
+            ),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        // Messaging endpoints 403 until the guardian profile is activated
+        // server-side — same priming as aula.messages.get_thread.
+        await context.getGuardianUserId();
+
+        let messageId = args.messageId;
+        if (!messageId) {
+          const { thread, pagesRead } = await findThread(client, args.threadId);
+          if (thread?.latestMessage?.id == null) {
+            return notFound(args.threadId, pagesRead, 'messageId', 'message_id_unresolved');
+          }
+          messageId = String(thread.latestMessage.id);
+        }
+
+        // Aula has no "mark as read" verb; see AulaClient.setLastReadMessage.
+        const result = await client.setLastReadMessage(args.threadId, messageId);
+        await storeRead(args.threadId, true);
+        return jsonContent({ ok: true, threadId: args.threadId, messageId, read: true, result });
+      },
+    );
+
+    server.registerTool(
+      'aula.messages.mark_unread',
+      {
+        title: 'Mark a message thread as unread',
+        description:
+          'Set a thread back to unread in Aula, the same as "Markér som ulæst" there, so ' +
+          'its unread badge returns. WRITES to Aula (only your own read state) — on by ' +
+          'default, off when AULA_MCP_MARK_READ=0. Undo with `aula.messages.mark_read`. ' +
+          'Pass `subscriptionId` from `aula.messages.list_threads` ' +
+          '(thread.subscriptionId — not the thread id); omit it to look it up from the ' +
+          'newest threads.',
+        inputSchema: {
+          threadId: z
+            .number()
+            .int()
+            .positive()
+            .describe('Thread id from aula.messages.list_threads.'),
+          subscriptionId: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              "The thread's subscriptionId from aula.messages.list_threads. Looked up " +
+                'when left out.',
+            ),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        await context.getGuardianUserId();
+
+        let subscriptionId = args.subscriptionId;
+        if (subscriptionId === undefined) {
+          const { thread, pagesRead } = await findThread(client, args.threadId);
+          if (thread?.subscriptionId == null) {
+            return notFound(
+              args.threadId,
+              pagesRead,
+              'subscriptionId',
+              'subscription_id_unresolved',
+            );
+          }
+          subscriptionId = thread.subscriptionId;
+        }
+
+        const result = await client.setThreadsRead([subscriptionId], false);
+        await storeRead(args.threadId, false);
+        return jsonContent({
+          ok: true,
+          threadId: args.threadId,
+          subscriptionId,
+          read: false,
+          result,
+        });
+      },
+    );
+  }
+
   // --- aula.presence.set_template (gated, write) ---------------------------
   //
   // The first and only tool that *writes* to Aula. Gated behind
@@ -666,82 +813,6 @@ export function registerTools(
           status: args.sick ? PRESENCE_STATUS_CODE.SICK : PRESENCE_STATUS_CODE.NOT_PRESENT,
         });
         return jsonContent({ ok: true, result });
-      },
-    );
-
-    // --- aula.messages.mark_read (gated, write) ----------------------------
-    //
-    // Lives here rather than next to the other aula.messages.* tools so every
-    // write stays behind the one AULA_MCP_WRITE gate. Aula has no "mark as
-    // read" verb; see AulaClient.setLastReadMessage for what actually happens.
-
-    server.registerTool(
-      'aula.messages.mark_read',
-      {
-        title: 'Mark a message thread as read',
-        description:
-          'Move the read marker in a thread to its newest message, clearing the unread ' +
-          'badge. WRITES to Aula — enabled when AULA_MCP_WRITE=1. Pass `messageId` from ' +
-          '`aula.messages.list_threads` (thread.latestMessage.id); omit it to mark the ' +
-          'thread read up to whatever its newest message is right now. Marking read is ' +
-          'not reversible through this API — Aula offers no way to set a thread back to ' +
-          'unread, so only call this for threads the user has actually seen.',
-        inputSchema: {
-          threadId: z
-            .number()
-            .int()
-            .positive()
-            .describe('Thread id from aula.messages.list_threads.'),
-          messageId: z
-            .string()
-            .min(1)
-            .optional()
-            .describe(
-              'Aula\'s opaque message id (e.g. "6a3d2467304484.24549709"), NOT a number. ' +
-                "Defaults to the thread's newest message.",
-            ),
-        },
-      },
-      async (args) => {
-        const client = await context.getClient();
-        // Messaging endpoints 403 until the guardian profile is activated
-        // server-side — same priming as aula.messages.get_thread.
-        await context.getGuardianUserId();
-
-        let messageId = args.messageId;
-        if (!messageId) {
-          // Aula pages threads 20 at a time and ignores pageSize, so a single
-          // getThreads call only ever sees the newest 20 — walk pages until the
-          // thread turns up. Bounded: a caller that already has the thread in
-          // hand should pass messageId rather than make us search for it.
-          const MAX_PAGES = 10;
-          let latest: string | undefined;
-          let pagesRead = 0;
-          for (let page = 0; page < MAX_PAGES; page++) {
-            const { threads, hasMorePages } = await client.getThreadsPage({ page });
-            pagesRead = page + 1;
-            const found = threads.find((t) => t.id === args.threadId);
-            if (found?.latestMessage?.id != null) {
-              latest = String(found.latestMessage.id);
-              break;
-            }
-            if (!hasMorePages) break;
-          }
-          if (latest === undefined) {
-            return jsonContent({
-              error: 'message_id_unresolved',
-              message:
-                `Thread ${args.threadId} was not found in the first ${pagesRead} pages ` +
-                `(~${pagesRead * 20} threads), or carries no latestMessage.id. Pass ` +
-                'messageId explicitly — aula.messages.list_threads returns it as ' +
-                'thread.latestMessage.id.',
-            });
-          }
-          messageId = latest;
-        }
-
-        const result = await client.setLastReadMessage(args.threadId, messageId);
-        return jsonContent({ ok: true, threadId: args.threadId, messageId, result });
       },
     );
 

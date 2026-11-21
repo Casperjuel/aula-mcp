@@ -186,6 +186,7 @@ function buildCapabilities(
   detectedWidgets: string[],
   writeEnabled: boolean,
 ): Record<string, DiscoveredCapability> {
+  const markRead = process.env.AULA_MCP_MARK_READ !== '0';
   const detectedByCapability = new Map<string, { provider: string; tool: string }[]>();
   for (const id of detectedWidgets) {
     const entry = WIDGET_PROVIDER_MAP[id];
@@ -253,33 +254,28 @@ function buildCapabilities(
       tools: ['aula.calendar.events'],
     },
     messages: {
-      summary: writeEnabled
-        ? 'Aula messaging threads, marking a thread read, and replying. Sensitive ' +
-          'threads require MitID step-up.'
-        : 'Aula messaging threads. Sensitive threads require MitID step-up.',
-      tools: writeEnabled
-        ? [
-            'aula.messages.list_threads',
-            'aula.messages.get_thread',
-            'aula.messages.mark_read',
-            'aula.messages.reply',
-          ]
-        : ['aula.messages.list_threads', 'aula.messages.get_thread'],
-      ...(writeEnabled
-        ? {
-            notes:
-              'aula.messages.mark_read is irreversible — Aula offers no way to set a ' +
-              'thread back to unread. Only call it for threads the user has actually seen. ' +
-              'aula.messages.reply sends a real message that cannot be recalled: call it ' +
-              'without `send` to get a preview, show the user the exact text, and only ' +
-              'send with `send: true` after they approve.',
-          }
-        : {
-            notes:
-              'aula.messages.mark_read (marking a thread read) and aula.messages.reply ' +
-              '(replying in a thread) are available only when the server runs with ' +
-              'AULA_MCP_WRITE=1.',
-          }),
+      summary:
+        `Aula messaging threads${markRead ? ', marking a thread read or unread' : ''}` +
+        `${writeEnabled ? ', and replying' : ''}. Sensitive threads require MitID step-up.`,
+      tools: [
+        'aula.messages.list_threads',
+        'aula.messages.get_thread',
+        ...(markRead ? ['aula.messages.mark_read', 'aula.messages.mark_unread'] : []),
+        ...(writeEnabled ? ['aula.messages.reply'] : []),
+      ],
+      notes: [
+        markRead
+          ? 'aula.messages.mark_read and aula.messages.mark_unread change the read state ' +
+            'in Aula itself, and each undoes the other. Only mark a thread read when the ' +
+            'user has actually seen it.'
+          : 'Marking threads read or unread is off (AULA_MCP_MARK_READ=0).',
+        writeEnabled
+          ? 'aula.messages.reply sends a real message that cannot be recalled: call it ' +
+            'without `send` to get a preview, show the user the exact text, and only ' +
+            'send with `send: true` after they approve.'
+          : 'aula.messages.reply (replying in a thread) is available only when the server ' +
+            'runs with AULA_MCP_WRITE=1.',
+      ].join(' '),
     },
     notifications: {
       summary: 'Unread items + activity badge counts for the active guardian.',

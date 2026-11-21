@@ -13,6 +13,7 @@
  *   AULA_MCP_KEY     — encryption key for the token store
  *   AULA_MCP_RAW=1   — enable the aula.raw_request escape hatch
  *   AULA_MCP_WRITE=1 — enable write tools (aula.presence.set_template)
+ *   AULA_MCP_MARK_READ=0 — turn off aula.messages.mark_read/mark_unread (on by default)
  *   AULA_MCP_LOG=1   — verbose logs to stderr
  */
 

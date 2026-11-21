@@ -59,23 +59,21 @@ describe('validateSetTemplateArgs', () => {
 });
 
 /**
- * aula.messages.mark_read is registered only when AULA_MCP_WRITE=1, and its
- * interesting behaviour is resolving `messageId` when the caller omits it.
- * Capture the handler off a stub McpServer rather than driving the whole
- * transport — the registration shape is all we need.
+ * aula.messages.mark_read / mark_unread are on unless AULA_MCP_MARK_READ=0,
+ * and their interesting behaviour is resolving ids the caller omits. Capture
+ * the handlers off a stub McpServer rather than driving the whole transport —
+ * the registration shape is all we need.
  */
 describe('aula.messages.mark_read', () => {
-  type ToolHandler = (args: { threadId: number; messageId?: string }) => Promise<{
+  type ToolHandler = (args: Record<string, unknown>) => Promise<{
     content: Array<{ type: 'text'; text: string }>;
   }>;
+  type Stored = { kind: string; id: string; occurredAt: number | null; data: unknown };
 
   /** `pages` models Aula's 20-per-page paging: one array per page. */
-  function register(pages: unknown[][]): {
-    markRead: (args: { threadId: number; messageId?: string }) => Promise<Record<string, unknown>>;
-    calls: Array<[number, string]>;
-    pagesRequested: number[];
-  } {
+  function register(pages: unknown[][], stored: Stored[] = []) {
     const calls: Array<[number, string]> = [];
+    const unread: Array<[number[], boolean]> = [];
     const pagesRequested: number[] = [];
     const fakeClient = {
       async getThreadsPage({ page = 0 }: { page?: number } = {}) {
@@ -90,6 +88,10 @@ describe('aula.messages.mark_read', () => {
         calls.push([threadId, messageId]);
         return { ok: true };
       },
+      async setThreadsRead(subscriptionIds: number[], isRead: boolean) {
+        unread.push([subscriptionIds, isRead]);
+        return true;
+      },
     };
     const context = {
       async getClient() {
@@ -99,32 +101,40 @@ describe('aula.messages.mark_read', () => {
         return '5000';
       },
     };
-    let handler: ToolHandler | undefined;
-    const server = {
-      registerTool(name: string, _config: unknown, fn: ToolHandler) {
-        if (name === 'aula.messages.mark_read') handler = fn;
+    const local = {
+      async get(kind: string, id: string) {
+        return stored.find((item) => item.kind === kind && item.id === id) ?? null;
+      },
+      async put(items: Stored[]) {
+        for (const item of items) {
+          const at = stored.findIndex((s) => s.kind === item.kind && s.id === item.id);
+          if (at >= 0) stored[at] = item;
+        }
+        return { changed: items.length };
       },
     };
-    const previous = process.env.AULA_MCP_WRITE;
-    process.env.AULA_MCP_WRITE = '1';
-    try {
-      // biome-ignore lint/suspicious/noExplicitAny: structural stubs for McpServer/AulaContext
-      registerTools(server as any, context as any);
-    } finally {
-      if (previous === undefined) delete process.env.AULA_MCP_WRITE;
-      else process.env.AULA_MCP_WRITE = previous;
-    }
-    if (!handler) throw new Error('aula.messages.mark_read was not registered');
-    const registered = handler;
-    return {
-      async markRead(args) {
-        const res = await registered(args);
-        const [first] = res.content;
-        if (!first) throw new Error('tool returned no content');
-        return JSON.parse(first.text) as Record<string, unknown>;
+    const handlers = new Map<string, ToolHandler>();
+    const server = {
+      registerTool(name: string, _config: unknown, fn: ToolHandler) {
+        handlers.set(name, fn);
       },
+    };
+    // biome-ignore lint/suspicious/noExplicitAny: structural stubs for McpServer/AulaContext/ParentStorage
+    registerTools(server as any, context as any, {}, { local: local as any });
+    const call = (name: string) => async (args: Record<string, unknown>) => {
+      const handler = handlers.get(name);
+      if (!handler) throw new Error(`${name} was not registered`);
+      const [first] = (await handler(args)).content;
+      if (!first) throw new Error('tool returned no content');
+      return JSON.parse(first.text) as Record<string, unknown>;
+    };
+    return {
+      markRead: call('aula.messages.mark_read'),
+      markUnread: call('aula.messages.mark_unread'),
       calls,
+      unread,
       pagesRequested,
+      stored,
     };
   }
 
@@ -179,22 +189,41 @@ describe('aula.messages.mark_read', () => {
     expect(out.error).toBe('message_id_unresolved');
   });
 
-  test('is not registered without AULA_MCP_WRITE=1', () => {
-    let seen = false;
-    const server = {
-      registerTool(name: string) {
-        if (name === 'aula.messages.mark_read') seen = true;
-      },
-    };
-    const previous = process.env.AULA_MCP_WRITE;
-    delete process.env.AULA_MCP_WRITE;
-    try {
+  test('marks unread by subscription id, looked up when left out', async () => {
+    const { markUnread, unread } = register([[{ id: 42, subscriptionId: 9001 }]]);
+    const out = await markUnread({ threadId: 42 });
+    expect(unread).toEqual([[[9001], false]]);
+    expect(out).toMatchObject({ ok: true, subscriptionId: 9001, read: false });
+    expect(await markUnread({ threadId: 42, subscriptionId: 77 })).toMatchObject({ ok: true });
+    expect(unread[1]).toEqual([[77], false]);
+    const missing = await markUnread({ threadId: 5 });
+    expect(missing.error).toBe('subscription_id_unresolved');
+    expect(unread).toHaveLength(2);
+  });
+
+  test('the stored thread follows, so the local copy agrees with Aula', async () => {
+    const { markRead, markUnread, stored } = register(
+      [[{ id: 42, subscriptionId: 9001, latestMessage: { id: 'bbb.2' } }]],
+      [{ kind: 'message_thread', id: '42', occurredAt: 1, data: { id: 42, read: true } }],
+    );
+    await markUnread({ threadId: 42 });
+    expect(stored[0]?.data).toEqual({ id: 42, read: false });
+    await markRead({ threadId: 42 });
+    expect(stored[0]?.data).toEqual({ id: 42, read: true });
+    // A thread that was never stored is left alone.
+    expect((await markRead({ threadId: 43, messageId: 'x.1' })).ok).toBe(true);
+    expect(stored).toHaveLength(1);
+  });
+
+  test('are on by default, and off with AULA_MCP_MARK_READ=0', () => {
+    const seen = (env: NodeJS.ProcessEnv) => {
+      const names: string[] = [];
       // biome-ignore lint/suspicious/noExplicitAny: structural stub for McpServer
-      registerTools(server as any, {} as any);
-    } finally {
-      if (previous !== undefined) process.env.AULA_MCP_WRITE = previous;
-    }
-    expect(seen).toBe(false);
+      registerTools({ registerTool: (name: string) => names.push(name) } as any, {} as any, env);
+      return names.filter((n) => n.startsWith('aula.messages.mark_'));
+    };
+    expect(seen({})).toEqual(['aula.messages.mark_read', 'aula.messages.mark_unread']);
+    expect(seen({ AULA_MCP_WRITE: '1', AULA_MCP_MARK_READ: '0' })).toEqual([]);
   });
 });
 
