@@ -458,7 +458,7 @@ button.li { width: 100%; background: none; border-left: 0; border-right: 0; bord
 .mo-total { display: none; font-size: .64rem; font-weight: 700; color: var(--muted); font-variant-numeric: tabular-nums; }
 .wk-head .act { justify-content: center; text-transform: none; letter-spacing: 0; }
 .act-links { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
-.act-links .chip svg { width: 14px; height: 14px; }
+.act-links .chip svg, .cal-filters .chip svg { width: 14px; height: 14px; flex: none; }
 @media (max-width: 699px) {
   .mo-day { min-height: 52px; padding: 4px 2px; justify-items: center; }
   .mo-chip, .mo-more, .mo-day .act { display: none; }
