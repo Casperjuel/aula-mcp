@@ -82,6 +82,7 @@ import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
 import { openStorage, SINGLE_PARENT_ID, StorageConfigError } from './storage.ts';
+import { StorageKeyMismatchError } from './storage-copy.ts';
 import { StorageKeyError } from './storage-crypto.ts';
 import { createSyncScheduler, realSyncSchedule, type SyncParent } from './sync.ts';
 import { startTokenKeepAlive } from './token-keepalive.ts';
@@ -125,11 +126,32 @@ const storage = await (async () => {
   try {
     return await openStorage(process.env);
   } catch (err) {
-    if (!(err instanceof StorageConfigError || err instanceof StorageKeyError)) throw err;
+    if (
+      !(
+        err instanceof StorageConfigError ||
+        err instanceof StorageKeyError ||
+        err instanceof StorageKeyMismatchError
+      )
+    )
+      throw err;
     process.stderr.write(`${err.message}\n`);
     process.exit(2);
   }
 })();
+
+// After a key change (or the sqlite import), rows still sealed with an
+// earlier key are sealed with the current one in the background. Counts only.
+if (storage) {
+  void storage
+    .reencrypt()
+    .then((done) => {
+      if (done.reencrypted > 0 || done.unreadable > 0)
+        process.stderr.write(`aula-mcp: storage reencrypt ${JSON.stringify(done)}\n`);
+    })
+    .catch((err) => {
+      process.stderr.write(`aula-mcp: storage reencrypt failed: ${(err as Error).message}\n`);
+    });
+}
 
 // Gallery downloads, next to local storage. A bad setting stops the server too.
 const galleryFiles = storage

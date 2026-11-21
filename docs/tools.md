@@ -22,6 +22,7 @@ threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With
 | [`aula.local.get`](#aulalocalget) | read | One stored item in full |
 | [`aula.local.calendar`](#aulalocalcalendar) | read | Stored calendar |
 | [`aula.local.activity`](#aulalocalactivity) | read | What arrived each day |
+| [`aula.local.audit_log`](#aulalocalaudit_log) | read | Audit log of syncs and actions |
 | [`aula.local.message_roles`](#aulalocalmessage_roles) | read | Who writes the messages |
 | [`aula.discover`](#auladiscover) | read | Discover Aula context |
 | [`aula.profiles.list`](#aulaprofileslist) | read | List Aula profiles |
@@ -194,6 +195,19 @@ How much arrived in the caller's Aula each day, from the local database: per Dan
 | `since` | string | no | From, default the first of this month: an ISO date (Copenhagen midnight) or date-time. |
 | `until` | string | no | Until, default the end of the month of since: an ISO date (Copenhagen midnight) or date-time. |
 | `kinds` | array | no | Only these: message, gallery_media, post, notification. Default all. |
+
+## `aula.local.audit_log`
+
+**Audit log of syncs and actions** · read
+
+The caller's own audit log, newest first: every sync job run (scheduled or started by hand) with how long it took, what it fetched and changed or why it failed; writes to Aula made through these tools (mark_read, mark_unread, reply, presence); Aula login and logout, sharing and deleted data from the dashboard; and storage events (sqlite import, re-encryption after a key change). Entries hold counts, ids and error messages, never message text. Kept 30 days by default. Use it to see why a sync failed or when something was done. Also returns which storage key seals the caller's rows and how many still wait for it after a key change. Only your own log; it is never shared. Never calls Aula. Categories: sync, aula, account, sharing, data, storage.
+
+| Parameter | Type | Required | Description |
+| --- | --- | --- | --- |
+| `category` | string | no | Only this kind of event. |
+| `failedOnly` | boolean | no | true: only what failed. |
+| `before` | string | no | Only events before this ISO date-time, for the next page. |
+| `limit` | integer | no | Default 50. |
 
 ## `aula.local.message_roles`
 

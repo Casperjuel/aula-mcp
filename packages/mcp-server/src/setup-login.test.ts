@@ -544,12 +544,24 @@ describe('setup UI sign-in', () => {
       403,
     );
     expect((await get(`/data/sync?${owner}`, b)).status).toBe(403);
+    expect((await get(`/data/audit?${owner}`, b)).status).toBe(403);
     expect((await get(`/data/items?owner=${viewerId}`, a)).status).toBe(404);
 
     // Taking it back ends it at once.
     expect((await post('/data/shares/remove', a, { email: 'b@example.dk' })).status).toBe(200);
     expect((await post('/data/shares/remove', a, { email: 'b@example.dk' })).status).toBe(404);
     expect((await get(`/data/items?${owner}`, b)).status).toBe(404);
+
+    // Each parent's log has their own sharing actions, and only those.
+    const log = (await get('/data/audit?category=sharing', a)).body.events as Array<{
+      action: string;
+      details: Record<string, unknown>;
+    }>;
+    expect(log.map((e) => e.action)).toEqual(['revoke', 'grant']);
+    expect(log[1]?.details).toEqual({ trigger: 'dashboard', email: 'b@example.dk' });
+    const bLog = (await get('/data/audit', b)).body.events as Array<{ action: string }>;
+    expect(bLog.map((e) => e.action)).toEqual(['claim']);
+    expect((await get('/data/audit?ok=false', a)).body.events).toEqual([]);
   });
 
   test('a login session belongs to the parent who started it', async () => {

@@ -6,18 +6,23 @@
  *   AULA_MCP_STORAGE=postgres AULA_MCP_DATABASE_URL=... \
  *     bun src/storage-copy.ts /data/aula.db
  *
- * Rows are copied as they are, still encrypted, so the target must use the
- * same storage key (AULA_MCP_STORAGE_KEY, or <AULA_MCP_DIR>/storage.key). The
- * key is checked against the source before anything is written. Rows the
+ * The server does this by itself when it starts on postgres and finds the
+ * SQLite file (importSqlite, called from openStorage).
+ *
+ * Rows are copied as they are, still encrypted. One of the storage keys
+ * (AULA_MCP_STORAGE_KEY, AULA_MCP_STORAGE_PREVIOUS_KEYS, or the key file)
+ * must open the source; that is checked before anything is written, and
+ * Storage.reencrypt seals the rows with the current key afterwards. Rows the
  * target already has are kept: a sync that ran there first has the newer
  * copy. Running it twice copies nothing the second time. Prints counts only.
  */
 
 import { existsSync } from 'node:fs';
+import { rename } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createStorage } from './storage.ts';
-import { loadStorageKey } from './storage-crypto.ts';
+import { loadStorageKeys, type StorageKeys } from './storage-crypto.ts';
 import { postgresDriver, type SqlDriver, sqliteDriver } from './storage-sql.ts';
 
 const PAGE = 500;
@@ -46,12 +51,23 @@ const SYNC_COLUMNS = [
   'changed',
 ];
 const SHARE_COLUMNS = ['owner_id', 'email', 'owner_name', 'viewer_id', 'created_at'];
+const AUDIT_COLUMNS = [
+  'parent_id',
+  'id',
+  'at',
+  'category',
+  'action',
+  'ok',
+  'duration_ms',
+  'details',
+];
 
 export interface CopyResult {
   parents: number;
   items: { read: number; copied: number };
   syncStates: { read: number; copied: number };
   shares: { read: number; copied: number };
+  auditLog: { read: number; copied: number };
 }
 
 export class StorageKeyMismatchError extends Error {
@@ -62,18 +78,18 @@ export class StorageKeyMismatchError extends Error {
 export async function copyStorage(
   from: SqlDriver,
   to: SqlDriver,
-  storageKey: Buffer,
+  storageKeys: Buffer | StorageKeys,
 ): Promise<CopyResult> {
-  // Both get the current schema; the source decodes with the key, or stops here.
-  const source = await createStorage(from, storageKey, { type: from.dialect, location: '' });
-  await createStorage(to, storageKey, { type: to.dialect, location: '' });
+  // Both get the current schema; the source decodes with a key, or stops here.
+  const source = await createStorage(from, storageKeys, { type: from.dialect, location: '' });
+  await createStorage(to, storageKeys, { type: to.dialect, location: '' });
   const parents = await source.parents();
   for (const parent of parents) {
     try {
       await source.forParent(parent).list({ limit: 1 });
     } catch {
       throw new StorageKeyMismatchError(
-        'The storage key does not decrypt the source data; copy the source storage.key first.',
+        'No storage key decrypts the source data; give the key it was written with as AULA_MCP_STORAGE_PREVIOUS_KEYS.',
       );
     }
   }
@@ -82,7 +98,57 @@ export async function copyStorage(
     items: await copyTable(from, to, 'items', ITEM_COLUMNS, 'parent_id, kind, id'),
     syncStates: await copyTable(from, to, 'sync_state', SYNC_COLUMNS, 'parent_id, job'),
     shares: await copyTable(from, to, 'shares', SHARE_COLUMNS, 'owner_id, email'),
+    auditLog: await copyTable(from, to, 'audit_log', AUDIT_COLUMNS, 'parent_id, id'),
   };
+}
+
+/**
+ * Copies the SQLite file at `path` into `to`, then renames it to
+ * <path>.imported (its -wal and -shm files go with it), so the next start
+ * does not copy what a parent has deleted since. Each parent's audit log
+ * gets an entry. Throws, and renames nothing, when no key opens the file.
+ */
+export async function importSqlite(
+  path: string,
+  to: SqlDriver,
+  storageKeys: StorageKeys,
+): Promise<CopyResult> {
+  const started = Date.now();
+  const from = sqliteDriver(path);
+  let result: CopyResult;
+  let parents: string[];
+  try {
+    result = await copyStorage(from, to, storageKeys);
+    const source = await createStorage(from, storageKeys, { type: 'sqlite', location: '' });
+    parents = await source.parents();
+  } finally {
+    await from.close();
+  }
+  let target = `${path}.imported`;
+  if (existsSync(target)) target = `${path}.imported-${Math.floor(started / 1000)}`;
+  await rename(path, target);
+  for (const suffix of ['-wal', '-shm']) {
+    if (existsSync(path + suffix)) await rename(path + suffix, target + suffix);
+  }
+  const storage = await createStorage(to, storageKeys, { type: to.dialect, location: '' });
+  for (const parent of parents) {
+    await storage
+      .forParent(parent)
+      .audit({
+        category: 'storage',
+        action: 'import_sqlite',
+        ok: true,
+        durationMs: Date.now() - started,
+        details: {
+          parents: result.parents,
+          itemsRead: result.items.read,
+          itemsCopied: result.items.copied,
+          renamedTo: target.split('/').at(-1) ?? null,
+        },
+      })
+      .catch(() => {});
+  }
+  return result;
 }
 
 async function copyTable(
@@ -128,11 +194,11 @@ if (import.meta.main) {
     process.exit(2);
   }
   const dir = env.AULA_MCP_DIR ?? join(homedir(), '.config', 'aula-mcp');
-  const key = await loadStorageKey(env.AULA_MCP_STORAGE_KEY, join(dir, 'storage.key'));
+  const keys = await loadStorageKeys(env, join(dir, 'storage.key'));
   const from = sqliteDriver(path);
   const to = postgresDriver(env.AULA_MCP_DATABASE_URL);
   try {
-    console.log(JSON.stringify(await copyStorage(from, to, key)));
+    console.log(JSON.stringify(await copyStorage(from, to, keys)));
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;

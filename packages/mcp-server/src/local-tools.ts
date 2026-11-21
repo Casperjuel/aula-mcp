@@ -22,7 +22,7 @@ import {
   searchItems,
   threadMessages,
 } from './local-data.ts';
-import { ITEM_KINDS, type ParentStorage, type SharedFrom } from './storage.ts';
+import { AUDIT_CATEGORIES, ITEM_KINDS, type ParentStorage, type SharedFrom } from './storage.ts';
 
 /** Another parent's data as the caller may read it. */
 export interface SharedView {
@@ -332,6 +332,49 @@ export function registerLocalTools(
       for (const d of days)
         for (const [k, n] of Object.entries(d.counts)) totals[k] = (totals[k] ?? 0) + n;
       return jsonContent({ since: iso(since), until: iso(until), totals, days });
+    },
+  );
+
+  server.registerTool(
+    'aula.local.audit_log',
+    {
+      title: 'Audit log of syncs and actions',
+      description:
+        "The caller's own audit log, newest first: every sync job run (scheduled or " +
+        'started by hand) with how long it took, what it fetched and changed or why it ' +
+        'failed; writes to Aula made through these tools (mark_read, mark_unread, reply, ' +
+        'presence); Aula login and logout, sharing and deleted data from the dashboard; ' +
+        'and storage events (sqlite import, re-encryption after a key change). Entries ' +
+        'hold counts, ids and error messages, never message text. Kept 30 days by ' +
+        'default. Use it to see why a sync failed or when something was done. Also ' +
+        "returns which storage key seals the caller's rows and how many still wait for " +
+        'it after a key change. Only your own log; it is never shared. Never calls Aula. ' +
+        `Categories: ${AUDIT_CATEGORIES.join(', ')}.`,
+      inputSchema: {
+        category: z.enum(AUDIT_CATEGORIES).optional().describe('Only this kind of event.'),
+        failedOnly: z.boolean().optional().describe('true: only what failed.'),
+        before: z
+          .string()
+          .refine((s) => !Number.isNaN(Date.parse(s)), 'an ISO date-time')
+          .optional()
+          .describe('Only events before this ISO date-time, for the next page.'),
+        limit: z.number().int().min(1).max(500).optional().describe('Default 50.'),
+      },
+    },
+    async (args) => {
+      const [events, key] = await Promise.all([
+        own.auditLog({
+          ...(args.category ? { category: args.category } : {}),
+          ...(args.failedOnly ? { ok: false } : {}),
+          ...(args.before ? { before: Date.parse(args.before) } : {}),
+          limit: args.limit ?? 50,
+        }),
+        own.keyStatus(),
+      ]);
+      return jsonContent({
+        events: events.map(({ at, ...rest }) => ({ at: new Date(at).toISOString(), ...rest })),
+        storageKey: key,
+      });
     },
   );
 

@@ -101,7 +101,11 @@ describe('aula.messages.mark_read', () => {
         return '5000';
       },
     };
+    const audit: Array<Record<string, unknown>> = [];
     const local = {
+      async audit(entry: Record<string, unknown>) {
+        audit.push(entry);
+      },
       async get(kind: string, id: string) {
         return stored.find((item) => item.kind === kind && item.id === id) ?? null;
       },
@@ -135,8 +139,25 @@ describe('aula.messages.mark_read', () => {
       unread,
       pagesRequested,
       stored,
+      audit,
     };
   }
+
+  test('each write is in the audit log with its ids, failures with the error', async () => {
+    const t = register([]);
+    await t.markRead({ threadId: 7, messageId: 'm.1' });
+    expect(t.audit).toEqual([
+      {
+        category: 'aula',
+        action: 'mark_read',
+        ok: true,
+        durationMs: expect.any(Number),
+        details: { trigger: 'tool', threadId: 7, messageId: 'm.1' },
+      },
+    ]);
+    await t.markUnread({ threadId: 7, subscriptionId: 3 });
+    expect(t.audit[1]).toMatchObject({ action: 'mark_unread', ok: true });
+  });
 
   test('passes an explicit messageId straight through', async () => {
     const { markRead, calls, pagesRequested } = register([]);

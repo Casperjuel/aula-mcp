@@ -54,6 +54,7 @@ kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
 | `storage.type` | `sqlite` | Local database of Aula data: `sqlite` (on the data volume), `postgres` or `none`. |
 | `storage.postgres.existingSecret` / `urlKey` | – / `uri` | Secret with the PostgreSQL URL, e.g. CloudNativePG's `<cluster>-app`. Required with `postgres`. |
 | `storage.key.existingSecret` / `secretKey` | – / `AULA_MCP_STORAGE_KEY` | Encryption key of the stored data (`openssl rand -base64 32`). Without it a key is generated on the data volume; keep it in a secret with `postgres`. |
+| `storage.key.previousKeysKey` | – | Key in the same secret with earlier storage keys (comma separated), read after a rotation; rows are re-encrypted with the current key at start-up. Optional in the secret. |
 | `sync.enabled` | `true` | Background sync into storage. `false`: only `aula.sync.run`. |
 | `gallery.downloads` | `true` | `false` lists albums without downloading files. |
 | `gallery.stopAt` | `0.9` | Disk use of the gallery volume at which downloads pause. |

@@ -65,6 +65,11 @@ storage:
   key:
     existingSecret: ""
     secretKey: AULA_MCP_STORAGE_KEY
+    # Earlier keys, still read after a rotation (AULA_MCP_STORAGE_PREVIOUS_KEYS,
+    # comma separated). Rows sealed with them are re-encrypted with the current
+    # key at start-up; drop them once the log shows nothing left. The key in the
+    # same secret is optional, so the secret works before the first rotation.
+    previousKeysKey: ""
 
 # Background sync of each parent's own Aula data into storage. false: only
 # aula.sync.run fetches.

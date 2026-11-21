@@ -72,6 +72,9 @@ import { type Caller, callerId } from './oidc.ts';
 import { renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
 import {
+  AUDIT_CATEGORIES,
+  type AuditCategory,
+  type AuditEntry,
   ITEM_KINDS,
   type ItemKind,
   type KindStats,
@@ -149,6 +152,8 @@ interface LoginSession {
   store: TokenStore;
   /** Called after the tokens were saved. */
   onSaved?: () => void;
+  /** Records how the login went in the parent's audit log. */
+  audit?: (entry: AuditEntry) => Promise<void>;
   stream?: SSEStreamingApi;
   /** Resolver waiting on user identity choice; null when no pending pick. */
   pendingIdentity: ((index: number) => void) | null;
@@ -327,6 +332,16 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (shared) return shared.gallery;
     return options.myData?.gallery?.forParent(parentOf(c)?.caller ?? null) ?? null;
   };
+  /** Records an action in the signed-in parent's own audit log; never fails the request. */
+  const auditOf = (c: Context) => {
+    const store = options.myData?.storage?.forParent(parentOf(c)?.caller ?? null);
+    if (!store) return undefined;
+    return async (entry: AuditEntry) => {
+      try {
+        await store.audit({ ...entry, details: { trigger: 'dashboard', ...entry.details } });
+      } catch {}
+    };
+  };
   /** Jobs asked for from the dashboard that have not finished, per parent. */
   const queuedRuns = new Map<string, Set<SyncJobName>>();
 
@@ -443,6 +458,29 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     });
   });
 
+  // The parent's own audit log, newest first, and which key seals their rows.
+  // Never part of a shared view.
+  app.get('/data/audit', async (c) => {
+    const store = options.myData?.storage?.forParent(parentOf(c)?.caller ?? null);
+    if (!store) return c.json({ available: false, events: [] });
+    const category = c.req.query('category');
+    const ok = c.req.query('ok');
+    const before = Number(c.req.query('before'));
+    const limit = Number(c.req.query('limit'));
+    const [events, key] = await Promise.all([
+      store.auditLog({
+        ...(category && (AUDIT_CATEGORIES as readonly string[]).includes(category)
+          ? { category: category as AuditCategory }
+          : {}),
+        ...(ok === 'true' || ok === 'false' ? { ok: ok === 'true' } : {}),
+        ...(Number.isFinite(before) && before > 0 ? { before } : {}),
+        ...(Number.isFinite(limit) && limit > 0 ? { limit } : {}),
+      }),
+      store.keyStatus(),
+    ]);
+    return c.json({ available: true, categories: AUDIT_CATEGORIES, events, key });
+  });
+
   // Starts the jobs and answers at once; the page follows them in /data/sync.
   // A run of every job can take longer than an HTTP request may stay idle.
   app.post('/data/sync/run', async (c) => {
@@ -478,7 +516,14 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (body.all === true) {
       // The files go too, so nothing is left on disk without its row.
       await galleryOf(c)?.remove({ all: true });
-      return c.json({ deleted: await store.delete() });
+      const deleted = await store.delete();
+      await auditOf(c)?.({
+        category: 'data',
+        action: 'delete',
+        ok: true,
+        details: { kind: 'all', deleted },
+      });
+      return c.json({ deleted });
     }
     if (typeof body.kind !== 'string' || !isKind(body.kind)) {
       return c.json({ error: 'give a known kind, or all: true' }, 400);
@@ -490,7 +535,14 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (body.kind === 'post' || body.kind === 'message') {
       await galleryOf(c)?.removeAttachments(body.kind);
     }
-    return c.json({ deleted: await store.delete({ kind: body.kind }) });
+    const deleted = await store.delete({ kind: body.kind });
+    await auditOf(c)?.({
+      category: 'data',
+      action: 'delete',
+      ok: true,
+      details: { kind: body.kind, deleted },
+    });
+    return c.json({ deleted });
   });
 
   // --- sharing: whom this parent shares with, and who shares with them ---
@@ -501,7 +553,9 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (!parent || !sharing) return c.json({ available: false });
     const id = callerId(parent.caller);
     // Shares waiting for this parent's verified email become theirs.
-    if (parent.email) await sharing.shares.claim(id, parent.email);
+    if (parent.email && (await sharing.shares.claim(id, parent.email)) > 0) {
+      await auditOf(c)?.({ category: 'sharing', action: 'claim', ok: true });
+    }
     const [granted, owners] = await Promise.all([
       sharing.shares.granted(id),
       sharing.shares.owners(id),
@@ -531,6 +585,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     }
     const id = callerId(parent.caller);
     await sharing.shares.grant(id, parent.name, email);
+    await auditOf(c)?.({ category: 'sharing', action: 'grant', ok: true, details: { email } });
     return c.json({ granted: await sharing.shares.granted(id) });
   });
 
@@ -545,6 +600,12 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (!(await sharing.shares.revoke(id, body.email))) {
       return c.json({ error: 'not shared with that email' }, 404);
     }
+    await auditOf(c)?.({
+      category: 'sharing',
+      action: 'revoke',
+      ok: true,
+      details: { email: normalEmail(body.email) },
+    });
     return c.json({ granted: await sharing.shares.granted(id) });
   });
 
@@ -680,12 +741,14 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       signalDone = resolve;
     });
     const onSaved = changedFor(c);
+    const audit = auditOf(c);
     const session: LoginSession = {
       sessionId,
       username,
       owner: ownerOf(c),
       store: storeOf(c),
       ...(onSaved ? { onSaved } : {}),
+      ...(audit ? { audit } : {}),
       pendingIdentity: null,
       bufferedEvents: [],
       abort: new AbortController(),
@@ -765,6 +828,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
   app.post('/logout', async (c) => {
     await storeOf(c).clear();
     changedFor(c)?.();
+    await auditOf(c)?.({ category: 'account', action: 'aula_logout', ok: true });
     return c.json({ ok: true });
   });
 
@@ -772,6 +836,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
 }
 
 async function runLogin(session: LoginSession, logger: Logger): Promise<void> {
+  const started = Date.now();
   const http = new AulaHttpClient({ logger });
   const client = new AulaLoginClient({ http, logger });
   let lastQrCount = -1;
@@ -868,6 +933,12 @@ async function runLogin(session: LoginSession, logger: Logger): Promise<void> {
     session.terminal = terminal;
     await emit('success', JSON.parse(terminal.data));
     logger.info('setup.login.success', { username: session.username });
+    await session.audit?.({
+      category: 'account',
+      action: 'aula_login',
+      ok: true,
+      durationMs: Date.now() - started,
+    });
   } catch (err) {
     const error = err as Error;
     const terminal = {
@@ -876,6 +947,13 @@ async function runLogin(session: LoginSession, logger: Logger): Promise<void> {
     };
     session.terminal = terminal;
     await emit('error', JSON.parse(terminal.data));
+    await session.audit?.({
+      category: 'account',
+      action: 'aula_login',
+      ok: false,
+      durationMs: Date.now() - started,
+      details: { error: error.message.slice(0, 300) },
+    });
     logger.error('setup.login.failed', {
       username: session.username,
       name: error.name,

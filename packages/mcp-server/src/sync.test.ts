@@ -274,5 +274,41 @@ describe('scheduler', () => {
     expect(status.posts?.ok).toBe(true);
     expect(status.posts?.nextRunAt).toBe(new Date(clock + 30 * MINUTE).toISOString());
     expect(status.messages?.lastRunAt).toBeNull();
+
+    // Each run is in the audit log, the failure with its error.
+    const events = await storage.forParent('a').auditLog({ category: 'sync' });
+    expect(events.map((e) => [e.action, e.ok, e.details.trigger])).toEqual([
+      ['posts', true, 'manual'],
+      ['calendar', false, 'manual'],
+    ]);
+    expect(events[1]?.details).toMatchObject({ error: 'Aula said no', failuresInARow: 1 });
+    expect(events[0]?.details).toMatchObject({ fetched: 1, changed: 1 });
+  });
+
+  test('logs a scheduled run and a repeating parent failure once', async () => {
+    let failing = true;
+    const scheduler = createSyncScheduler({
+      storage,
+      parents: async () => [
+        {
+          parentId: 'a',
+          session: session(fakeClient({})),
+          loggedIn: async () => {
+            if (failing) throw new Error('token store unreadable');
+            return true;
+          },
+        },
+      ],
+      jobs: okJobs([]),
+    });
+    await scheduler.tick();
+    await scheduler.tick();
+    failing = false;
+    await scheduler.tick();
+    const events = await storage.forParent('a').auditLog();
+    expect(events.filter((e) => e.action === 'check')).toHaveLength(1);
+    expect(events.filter((e) => e.ok && e.details.trigger === 'schedule')).toHaveLength(
+      SYNC_JOBS.length,
+    );
   });
 });

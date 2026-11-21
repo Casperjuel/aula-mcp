@@ -395,8 +395,11 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_GALLERY_S3_PREFIX` | — | Fx `aula-mcp/`, skal slutte med `/`. |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — | Nøgler til bucketten. |
 | `AULA_MCP_SQLITE_PATH` | `<AULA_MCP_DIR>/aula.db` | SQLite-filen. |
-| `AULA_MCP_DATABASE_URL` | – | PostgreSQL-URL (fx fra en CNPG-secret). Kræves med `AULA_MCP_STORAGE=postgres`. Flyt fra sqlite med `bun packages/mcp-server/src/storage-copy.ts <aula.db>` (samme `storage.key`; rækker, der allerede findes, beholdes, og den kan køres igen). |
+| `AULA_MCP_DATABASE_URL` | – | PostgreSQL-URL (fx fra en CNPG-secret). Kræves med `AULA_MCP_STORAGE=postgres`. Findes `<AULA_MCP_DIR>/aula.db`, importeres den automatisk ved start og omdøbes til `aula.db.imported` (rækker, der allerede findes, beholdes). Manuelt: `bun packages/mcp-server/src/storage-copy.ts <aula.db>`. |
+| `AULA_MCP_STORAGE_IMPORT` | `1` | `0` slår den automatiske sqlite-import fra ved skift til postgres. |
 | `AULA_MCP_STORAGE_KEY` | `<AULA_MCP_DIR>/storage.key` | Nøglen (base64, 32 bytes) data krypteres med. Uden den genereres en nøglefil. Tag backup af nøglen sammen med databasen; uden den kan data ikke læses. |
+| `AULA_MCP_STORAGE_PREVIOUS_KEYS` | – | Tidligere nøgler (base64, kommasepareret), som stadig kan læses efter en nøgleskift. Ved start krypteres rækker med en gammel nøgle igen med den nuværende. Er `AULA_MCP_STORAGE_KEY` sat, regnes en eksisterende `storage.key` også som tidligere nøgle. Fjern dem, når loggen viser 0 tilbage. |
+| `AULA_MCP_AUDIT_DAYS` | `30` | Hvor mange dage loggen (Log i dashboardet, `aula.local.audit_log`) gemmes. |
 
 ### Wire-transcripts
 

@@ -121,6 +121,14 @@ spec:
                 secretKeyRef:
                   name: {{ .key.existingSecret }}
                   key: {{ .key.secretKey }}
+            {{- if .key.previousKeysKey }}
+            - name: AULA_MCP_STORAGE_PREVIOUS_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .key.existingSecret }}
+                  key: {{ .key.previousKeysKey }}
+                  optional: true
+            {{- end }}
             {{- end }}
             {{- end }}
             {{- if not .Values.sync.enabled }}

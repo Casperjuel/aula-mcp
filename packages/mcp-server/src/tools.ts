@@ -26,7 +26,7 @@ import { resolveFamilyProfileIds } from './family-profiles.ts';
 import type { GalleryView } from './gallery.ts';
 import { registerGalleryTools } from './gallery-tools.ts';
 import { registerLocalTools, type SharedAccess } from './local-tools.ts';
-import type { ParentStorage } from './storage.ts';
+import type { AuditDetails, ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
 import { registerSyncTools } from './sync-tools.ts';
 
@@ -370,6 +370,33 @@ export function registerTools(
   env: NodeJS.ProcessEnv = process.env,
   extras: ToolExtras = {},
 ): void {
+  /**
+   * Runs a write to Aula and records it in the caller's audit log: what was
+   * done and to which ids, never the text that was sent.
+   */
+  const audited = async <T>(action: string, details: AuditDetails, write: () => Promise<T>) => {
+    const started = Date.now();
+    const record = async (ok: boolean, error?: string) => {
+      try {
+        await extras.local?.audit({
+          category: 'aula',
+          action,
+          ok,
+          durationMs: Date.now() - started,
+          details: { trigger: 'tool', ...details, ...(error ? { error } : {}) },
+        });
+      } catch {}
+    };
+    try {
+      const result = await write();
+      await record(true);
+      return result;
+    } catch (err) {
+      await record(false, (err instanceof Error ? err.message : String(err)).slice(0, 300));
+      throw err;
+    }
+  };
+
   if (extras.sync) registerSyncTools(server, extras.sync);
   if (extras.gallery) registerGalleryTools(server, extras.gallery, extras.shared);
   if (extras.local) registerLocalTools(server, extras.local, extras.shared);
@@ -548,7 +575,9 @@ export function registerTools(
         }
 
         // Aula has no "mark as read" verb; see AulaClient.setLastReadMessage.
-        const result = await client.setLastReadMessage(args.threadId, messageId);
+        const result = await audited('mark_read', { threadId: args.threadId, messageId }, () =>
+          client.setLastReadMessage(args.threadId, messageId),
+        );
         await storeRead(args.threadId, true);
         return jsonContent({ ok: true, threadId: args.threadId, messageId, read: true, result });
       },
@@ -600,7 +629,11 @@ export function registerTools(
           subscriptionId = thread.subscriptionId;
         }
 
-        const result = await client.setThreadsRead([subscriptionId], false);
+        const result = await audited(
+          'mark_unread',
+          { threadId: args.threadId, subscriptionId },
+          () => client.setThreadsRead([subscriptionId], false),
+        );
         await storeRead(args.threadId, false);
         return jsonContent({
           ok: true,
@@ -690,19 +723,31 @@ export function registerTools(
         const repeat = args.repeat ?? 'never';
 
         const client = await context.getClient();
-        const result = await client.updatePresenceTemplate({
-          institutionProfileId: args.institutionProfileId,
-          date: args.date,
-          activityType: args.activityType,
-          repeatPattern: repeat,
-          ...(args.entryTime ? { entryTime: args.entryTime } : {}),
-          ...(args.exitTime ? { exitTime: args.exitTime } : {}),
-          ...(args.pickedUpBy ? { pickedUpBy: args.pickedUpBy } : {}),
-          ...(args.selfDeciderStartTime ? { selfDeciderStartTime: args.selfDeciderStartTime } : {}),
-          ...(args.selfDeciderEndTime ? { selfDeciderEndTime: args.selfDeciderEndTime } : {}),
-          ...(args.comment !== undefined ? { comment: args.comment } : {}),
-          ...(args.repeatUntil ? { repeatUntil: args.repeatUntil } : {}),
-        });
+        const result = await audited(
+          'presence_set_template',
+          {
+            institutionProfileId: args.institutionProfileId,
+            date: args.date,
+            activityType: args.activityType,
+            repeat,
+          },
+          () =>
+            client.updatePresenceTemplate({
+              institutionProfileId: args.institutionProfileId,
+              date: args.date,
+              activityType: args.activityType,
+              repeatPattern: repeat,
+              ...(args.entryTime ? { entryTime: args.entryTime } : {}),
+              ...(args.exitTime ? { exitTime: args.exitTime } : {}),
+              ...(args.pickedUpBy ? { pickedUpBy: args.pickedUpBy } : {}),
+              ...(args.selfDeciderStartTime
+                ? { selfDeciderStartTime: args.selfDeciderStartTime }
+                : {}),
+              ...(args.selfDeciderEndTime ? { selfDeciderEndTime: args.selfDeciderEndTime } : {}),
+              ...(args.comment !== undefined ? { comment: args.comment } : {}),
+              ...(args.repeatUntil ? { repeatUntil: args.repeatUntil } : {}),
+            }),
+        );
         return jsonContent({ ok: true, result });
       },
     );
@@ -808,10 +853,15 @@ export function registerTools(
           }
         }
 
-        const result = await client.updatePresenceStatus({
-          institutionProfileIds: args.institutionProfileIds,
-          status: args.sick ? PRESENCE_STATUS_CODE.SICK : PRESENCE_STATUS_CODE.NOT_PRESENT,
-        });
+        const result = await audited(
+          args.sick ? 'presence_report_sick' : 'presence_undo_sick',
+          { children: args.institutionProfileIds.length },
+          () =>
+            client.updatePresenceStatus({
+              institutionProfileIds: args.institutionProfileIds,
+              status: args.sick ? PRESENCE_STATUS_CODE.SICK : PRESENCE_STATUS_CODE.NOT_PRESENT,
+            }),
+        );
         return jsonContent({ ok: true, result });
       },
     );
@@ -857,7 +907,11 @@ export function registerTools(
         const client = await context.getClient();
         // Same guardian-profile priming as the other messaging tools.
         await context.getGuardianUserId();
-        const result = await client.replyToThread(args.threadId, plainTextToHtml(args.text));
+        const result = await audited(
+          'reply',
+          { threadId: args.threadId, characters: args.text.length },
+          () => client.replyToThread(args.threadId, plainTextToHtml(args.text)),
+        );
         return jsonContent({ ok: true, sent: true, threadId: args.threadId, result });
       },
     );

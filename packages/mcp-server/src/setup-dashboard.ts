@@ -757,6 +757,7 @@ const VIEWS = [
   { id: 'gennemse', label: 'Gennemse', icon: 'search', bottom: true },
   { id: 'kalender', label: 'Kalender', icon: 'cal' },
   { id: 'sync', label: 'Synkronisering', short: 'Sync', icon: 'sync', bottom: true },
+  { id: 'log', label: 'Log', icon: 'task' },
   { id: 'galleri', label: 'Galleri', icon: 'image', bottom: true },
   { id: 'vaerktoejer', label: 'Værktøjer', icon: 'tools' },
   { id: 'live', label: 'Live fra Aula', icon: 'live' },
@@ -793,6 +794,7 @@ const state = {
   summary: null,
   summaryError: null,
   sync: null,
+  audit: { loaded: false, loading: false, available: false, events: [], more: false, category: '', failed: false, key: null, error: null },
   live: null,
   liveError: null,
   tools: null,
@@ -1880,6 +1882,75 @@ function pollSync() {
   if (finished) { loadSummary().then(() => { renderNav(current()); if (current() !== 'gennemse') route(); }); }
   if (busy && busy.length) pollTimer = setTimeout(async () => { await loadSync(); rerender('sync'); rerender('oversigt'); rerender('galleri'); pollSync(); }, 2500);
 }
+
+/* ---------- log ---------- */
+const AUDIT_LABEL = { sync: 'Synkronisering', aula: 'Handlinger i Aula', account: 'Login', sharing: 'Deling', data: 'Sletning', storage: 'Lagring' };
+const AUDIT_DETAIL = {
+  trigger: 'Startet af', fetched: 'Hentet', changed: 'Ændret', skipped: 'Sprunget over', more: 'Mere at hente', failuresInARow: 'Fejl i træk',
+  deleted: 'Slettet', kind: 'Type', email: 'E-mail', claimed: 'Hentet ind', threadId: 'Tråd', messageId: 'Besked', subscriptionId: 'Abonnement',
+  children: 'Børn', date: 'Dato', characters: 'Tegn', reencrypted: 'Krypteret igen', unreadable: 'Ulæselige', keyId: 'Nøgle',
+  parents: 'Forældre', itemsRead: 'Læst', itemsCopied: 'Kopieret', renamedTo: 'Gammel fil',
+};
+const TRIGGER = { schedule: 'tidsplan', manual: 'dig, Kør nu', tool: 'AI-assistent', dashboard: 'dashboard' };
+const auditAction = (e) => (e.category === 'sync' ? (e.action === 'check' ? 'Tjek af login' : jobLabel(e.action)) : e.action.replace(/_/g, ' '));
+async function loadAudit(more) {
+  const a = state.audit;
+  if (a.loading) return;
+  a.loading = true;
+  const q = new URLSearchParams({ limit: '100' });
+  if (a.category) q.set('category', a.category);
+  if (a.failed) q.set('ok', 'false');
+  const last = more && a.events.length ? a.events[a.events.length - 1] : null;
+  if (last) q.set('before', String(last.at));
+  try {
+    const data = await getJson('data/audit?' + q);
+    a.available = data.available;
+    a.key = data.key || null;
+    a.events = last ? a.events.concat(data.events) : data.events;
+    a.more = data.events.length === 100;
+    a.error = null;
+  } catch (err) { a.error = err.message; }
+  a.loading = false;
+  a.loaded = true;
+  rerender('log');
+}
+function auditFilter(patch) { Object.assign(state.audit, patch, { events: [], more: false }); loadAudit(false); rerender('log'); }
+R.log = () => {
+  const a = state.audit;
+  const top = head('Log', 'Hvad aula-mcp har gjort for dig de seneste 30 dage: synkroniseringer, handlinger i Aula, login, deling og sletning. Kun antal og numre, aldrig indholdet af beskeder.',
+    el('button', { class: 'btn', disabled: a.loading, onclick: () => auditFilter({}) }, icon('sync'), 'Opdater'));
+  if (!a.loaded) { loadAudit(false); return [top, skeleton()]; }
+  if (a.error && !a.events.length) return [top, banner('warn', 'warn', el('p', {}, 'Kunne ikke hente loggen: ' + a.error))];
+  if (!a.available) return [top, storageOff()];
+  const k = a.key;
+  const chip = (label, pressed, onclick) => el('button', { class: 'chip', 'aria-pressed': String(pressed), onclick }, label);
+  return [
+    top,
+    k ? banner(k.stale ? 'warn' : 'info', k.stale ? 'warn' : 'lock', el('p', {},
+      el('strong', {}, 'Lagringsnøgle ' + k.keyId + '. '),
+      k.stale ? fmt(k.stale) + ' rækker er stadig krypteret med en tidligere nøgle og krypteres igen ved næste genstart.' : 'Alle dine data er krypteret med den nuværende nøgle.',
+      k.previousKeys ? ' ' + k.previousKeys + ' tidligere nøgle' + (k.previousKeys > 1 ? 'r' : '') + ' kan stadig læses.' : '')) : null,
+    el('div', { class: 'chips', style: 'margin-bottom:12px' },
+      chip('Alle', !a.category, () => auditFilter({ category: '' })),
+      Object.keys(AUDIT_LABEL).map((c) => chip(AUDIT_LABEL[c], a.category === c, () => auditFilter({ category: c }))),
+      chip('Kun fejl', a.failed, () => auditFilter({ failed: !a.failed }))),
+    el('section', { class: 'panel' },
+      a.events.length ? el('div', { class: 'table-wrap' }, el('table', { class: 'count-table' },
+        el('thead', {}, el('tr', {}, el('th', {}, 'Tid'), el('th', {}, 'Hvad'), el('th', {}, 'Status'), el('th', { class: 'hide-sm' }, 'Detaljer'))),
+        el('tbody', {}, a.events.map((e) => el('tr', {},
+          el('td', { style: 'white-space:nowrap' }, rel(e.at), el('br'), el('span', { class: 'muted small' }, hm(new Date(e.at)) + ':' + pad(new Date(e.at).getSeconds()))),
+          el('td', {}, el('strong', {}, auditAction(e)), el('br'), el('span', { class: 'muted small' }, AUDIT_LABEL[e.category] || e.category)),
+          el('td', {}, el('span', { class: 'pill ' + (e.ok ? 'ok' : 'err') }, e.ok ? 'OK' : 'Fejl'),
+            e.durationMs ? el('div', { class: 'muted small' }, e.durationMs < 1000 ? e.durationMs + ' ms' : (e.durationMs / 1000).toFixed(1) + ' s') : null),
+          el('td', { class: 'hide-sm small' },
+            e.details.error ? el('div', { class: 'errbox' }, String(e.details.error)) : null,
+            Object.keys(e.details).filter((d) => d !== 'error').map((d) => el('span', { style: 'margin-right:12px;white-space:nowrap' },
+              el('span', { class: 'muted' }, (AUDIT_DETAIL[d] || d) + ': '),
+              d === 'trigger' ? (TRIGGER[e.details[d]] || String(e.details[d])) : typeof e.details[d] === 'boolean' ? (e.details[d] ? 'ja' : 'nej') : String(e.details[d])))))))))
+        : el('p', { class: 'muted' }, a.failed ? 'Ingen fejl i perioden.' : 'Intet i loggen endnu.'),
+      a.more ? el('div', { style: 'margin-top:12px' }, el('button', { class: 'btn btn-sm', disabled: a.loading, onclick: () => loadAudit(true) }, a.loading ? 'Henter…' : 'Vis ældre')) : null),
+  ];
+};
 
 /* ---------- galleri ---------- */
 const GALLERY_LEDE = 'Billeder og videoer fra Aula, hentet i original kvalitet og ordnet pr. barn og år.';

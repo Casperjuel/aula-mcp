@@ -98,6 +98,7 @@ describe('aula.local tools', () => {
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual([
       'aula.local.activity',
+      'aula.local.audit_log',
       'aula.local.calendar',
       'aula.local.get',
       'aula.local.message_roles',
@@ -105,6 +106,22 @@ describe('aula.local tools', () => {
       'aula.local.search',
     ]);
     for (const tool of tools) expect((tool.description ?? '').length).toBeGreaterThan(150);
+  });
+
+  test("audit_log reads only the caller's own log, filtered", async () => {
+    await storage
+      .forParent('a')
+      .audit({ category: 'sync', action: 'posts', ok: false, details: { error: 'nej' } });
+    await storage.forParent('a').audit({ category: 'aula', action: 'mark_read', ok: true });
+    await storage.forParent('b').audit({ category: 'sync', action: 'messages', ok: false });
+    const all = (await call('aula.local.audit_log')).json();
+    expect(all.events.map((e: { action: string }) => e.action)).toEqual(['mark_read', 'posts']);
+    expect(all.events[0].at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(all.storageKey.stale).toBe(0);
+    const failed = (await call('aula.local.audit_log', { failedOnly: true })).json();
+    expect(failed.events.map((e: { details: { error: string } }) => e.details.error)).toEqual([
+      'nej',
+    ]);
   });
 
   test('overview counts this parent only', async () => {

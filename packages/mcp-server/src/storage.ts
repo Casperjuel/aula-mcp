@@ -12,13 +12,27 @@
  *   AULA_MCP_DATABASE_URL — PostgreSQL connection URL; required for postgres
  *   AULA_MCP_STORAGE_KEY  — base64 key the stored data is encrypted with
  *                           (default: generated into <AULA_MCP_DIR>/storage.key)
+ *   AULA_MCP_STORAGE_PREVIOUS_KEYS — earlier keys, which still open the rows
+ *                           they sealed until reencrypt() seals them again
+ *   AULA_MCP_STORAGE_IMPORT — `0` to not import the SQLite file when
+ *                           switching to postgres (see openStorage)
+ *   AULA_MCP_AUDIT_DAYS   — days the audit log keeps (default 30)
  *
- * Kept forever: nothing is deleted unless a parent deletes it.
+ * Kept forever: nothing is deleted unless a parent deletes it. The audit log
+ * is the exception: it keeps AULA_MCP_AUDIT_DAYS.
  */
 
+import { randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { loadStorageKey, type ParentCipher, parentCipher } from './storage-crypto.ts';
+import {
+  keyId,
+  loadStorageKeys,
+  type ParentCipher,
+  parentCipher,
+  type StorageKeys,
+} from './storage-crypto.ts';
 import { postgresDriver, type SqlDriver, sqliteDriver } from './storage-sql.ts';
 
 /** The parent id rows are stored under in single-parent mode. */
@@ -96,6 +110,47 @@ export interface SyncState {
   changed: number;
 }
 
+/** What the audit log records: the processes and actions, never Aula content. */
+export const AUDIT_CATEGORIES = ['sync', 'aula', 'account', 'sharing', 'data', 'storage'] as const;
+export type AuditCategory = (typeof AUDIT_CATEGORIES)[number];
+
+/** Counts, ids, short codes and error messages only; strings are cut to 300 characters. */
+export type AuditDetails = Record<string, string | number | boolean | null>;
+
+export interface AuditEntry {
+  category: AuditCategory;
+  /** The job or action, e.g. `messages`, `mark_read`, `login`. */
+  action: string;
+  ok: boolean;
+  durationMs?: number | null;
+  details?: AuditDetails;
+}
+
+export interface AuditEvent extends Required<AuditEntry> {
+  id: string;
+  /** Unix milliseconds. */
+  at: number;
+}
+
+export interface AuditQuery {
+  category?: AuditCategory;
+  ok?: boolean;
+  /** Unix milliseconds: only events before it, for the next page. */
+  before?: number;
+  limit?: number;
+}
+
+/** Which key seals a parent's rows, and how many still wait for it. */
+export interface KeyStatus {
+  keyId: string;
+  previousKeys: number;
+  /** Rows sealed with an earlier key, or before key ids. */
+  stale: number;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+let lastAuditAt = 0;
+
 export interface StorageInfo {
   type: 'sqlite' | 'postgres';
   /** Where it is, without credentials. */
@@ -132,6 +187,11 @@ export interface Storage {
   sharedWith(viewerId: string, ownerId: string): Promise<ParentStorage | null>;
   /** Every parent with stored data. */
   parents(): Promise<string[]>;
+  /**
+   * Seals every row not sealed with the current key again, after a key
+   * change. Rows no key opens are left as they are and counted.
+   */
+  reencrypt(): Promise<{ parents: number; reencrypted: number; unreadable: number }>;
   close(): Promise<void>;
 }
 
@@ -139,7 +199,17 @@ export class StorageConfigError extends Error {
   override name = 'StorageConfigError';
 }
 
-/** Opens and migrates the configured storage; null when it is turned off. */
+/**
+ * Opens and migrates the configured storage; null when it is turned off.
+ *
+ * Switching from sqlite to postgres moves the data: when the SQLite file
+ * (AULA_MCP_SQLITE_PATH, default <AULA_MCP_DIR>/aula.db) is there, its rows
+ * are copied into postgres before the server starts, and the file is renamed
+ * to <file>.imported so it is not copied again. Rows postgres already has are
+ * kept. The rows stay sealed with the key that wrote them; give that key as a
+ * previous key (the old key file is used by itself) and reencrypt() seals
+ * them with the new one.
+ */
 export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise<Storage | null> {
   const type = env.AULA_MCP_STORAGE ?? 'sqlite';
   const dir = env.AULA_MCP_DIR ?? join(homedir(), '.config', 'aula-mcp');
@@ -149,41 +219,79 @@ export async function openStorage(env: NodeJS.ProcessEnv = process.env): Promise
       `AULA_MCP_STORAGE must be sqlite, postgres or none, not "${type}".`,
     );
   }
-  const key = await loadStorageKey(env.AULA_MCP_STORAGE_KEY, join(dir, 'storage.key'));
+  const keys = await loadStorageKeys(env, join(dir, 'storage.key'));
+  const path = env.AULA_MCP_SQLITE_PATH ?? join(dir, 'aula.db');
+  const options = { auditDays: auditDays(env.AULA_MCP_AUDIT_DAYS) };
   if (type === 'postgres') {
     const url = env.AULA_MCP_DATABASE_URL;
     if (!url)
       throw new StorageConfigError('AULA_MCP_STORAGE=postgres needs AULA_MCP_DATABASE_URL.');
-    return createStorage(postgresDriver(url), key, { type, location: redactUrl(url) });
+    const driver = postgresDriver(url);
+    if (env.AULA_MCP_STORAGE_IMPORT !== '0' && existsSync(path)) {
+      const { importSqlite } = await import('./storage-copy.ts');
+      await importSqlite(path, driver, keys);
+    }
+    return createStorage(driver, keys, { type, location: redactUrl(url) }, options);
   }
-  const path = env.AULA_MCP_SQLITE_PATH ?? join(dir, 'aula.db');
-  return createStorage(sqliteDriver(path), key, { type, location: path });
+  return createStorage(sqliteDriver(path), keys, { type, location: path }, options);
 }
 
 export async function createStorage(
   driver: SqlDriver,
-  storageKey: Buffer,
+  storageKeys: Buffer | StorageKeys,
   info: StorageInfo,
+  options: { auditDays?: number } = {},
 ): Promise<Storage> {
   await migrate(driver);
   const shares = new Shares(driver);
+  const keys = Buffer.isBuffer(storageKeys) ? { current: storageKeys, previous: [] } : storageKeys;
+  const audit = { days: options.auditDays ?? 30, previousKeys: keys.previous.length };
+  const forParent = (parentId: string) =>
+    new ParentStorage(driver, parentCipher(keys, parentId), parentId, null, audit);
+  const parents = async () =>
+    (
+      await driver.all<{ parent_id: string }>(
+        'SELECT DISTINCT parent_id FROM items ORDER BY parent_id',
+      )
+    ).map((row) => row.parent_id);
   return {
     info,
-    forParent: (parentId) =>
-      new ParentStorage(driver, parentCipher(storageKey, parentId), parentId),
+    forParent,
     shares,
     sharedWith: async (viewerId, ownerId) =>
       viewerId !== ownerId && (await shares.allows(ownerId, viewerId))
-        ? new ParentStorage(driver, parentCipher(storageKey, ownerId), ownerId, viewerId)
+        ? new ParentStorage(driver, parentCipher(keys, ownerId), ownerId, viewerId, audit)
         : null,
-    parents: async () =>
-      (
-        await driver.all<{ parent_id: string }>(
-          'SELECT DISTINCT parent_id FROM items ORDER BY parent_id',
-        )
-      ).map((row) => row.parent_id),
+    parents,
+    reencrypt: async () => {
+      const result = { parents: 0, reencrypted: 0, unreadable: 0 };
+      for (const parentId of await parents()) {
+        const store = forParent(parentId);
+        const started = Date.now();
+        const done = await store.reencrypt();
+        if (done.reencrypted === 0 && done.unreadable === 0) continue;
+        result.parents += 1;
+        result.reencrypted += done.reencrypted;
+        result.unreadable += done.unreadable;
+        await store
+          .audit({
+            category: 'storage',
+            action: 'reencrypt',
+            ok: done.unreadable === 0,
+            durationMs: Date.now() - started,
+            details: { keyId: keyId(keys.current), ...done },
+          })
+          .catch(() => {});
+      }
+      return result;
+    },
     close: () => driver.close(),
   };
+}
+
+function auditDays(value: string | undefined): number {
+  const days = Number(value);
+  return value && Number.isFinite(days) && days > 0 ? days : 30;
 }
 
 /**
@@ -269,6 +377,10 @@ export class ParentStorage {
     readonly parentId: string,
     /** A shared view: hide what this parent has stored, and change nothing. */
     readonly viewerId: string | null = null,
+    private readonly auditOptions: { days: number; previousKeys: number } = {
+      days: 30,
+      previousKeys: 0,
+    },
   ) {}
 
   /** Read-only: a view of another parent's data. */
@@ -468,6 +580,126 @@ export class ParentStorage {
     );
   }
 
+  /**
+   * Records a process or action in this parent's audit log, and drops what
+   * is older than the log keeps. Never pass Aula content: counts, ids and
+   * error messages only.
+   */
+  async audit(entry: AuditEntry): Promise<void> {
+    this.writable();
+    // A millisecond after the last entry at least, so entries keep their order.
+    const at = Math.max(Date.now(), lastAuditAt + 1);
+    lastAuditAt = at;
+    const details: AuditDetails = {};
+    for (const [key, value] of Object.entries(entry.details ?? {})) {
+      if (value === undefined) continue;
+      details[key] = typeof value === 'string' ? value.slice(0, 300) : value;
+    }
+    await this.db.run(
+      `INSERT INTO audit_log (parent_id, id, at, category, action, ok, duration_ms, details)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        this.parentId,
+        randomUUID(),
+        at,
+        entry.category,
+        entry.action.slice(0, 64),
+        entry.ok ? 1 : 0,
+        entry.durationMs === undefined || entry.durationMs === null
+          ? null
+          : Math.round(entry.durationMs),
+        JSON.stringify(details),
+      ],
+    );
+    await this.db.run('DELETE FROM audit_log WHERE parent_id = $1 AND at < $2', [
+      this.parentId,
+      at - this.auditOptions.days * DAY_MS,
+    ]);
+  }
+
+  /** Newest first. Empty in a shared view: the owner's log is not shared. */
+  async auditLog(query: AuditQuery = {}): Promise<AuditEvent[]> {
+    if (this.viewerId !== null) return [];
+    const params: Array<string | number> = [this.parentId];
+    const where = ['parent_id = $1'];
+    const add = (clause: string, value: string | number) => {
+      params.push(value);
+      where.push(clause.replace('?', `$${params.length}`));
+    };
+    if (query.category) add('category = ?', query.category);
+    if (query.ok !== undefined) add('ok = ?', query.ok ? 1 : 0);
+    if (query.before !== undefined) add('at < ?', query.before);
+    params.push(Math.min(Math.max(query.limit ?? 100, 1), 500));
+    const rows = await this.db.all<Record<string, unknown>>(
+      `SELECT id, at, category, action, ok, duration_ms, details FROM audit_log
+       WHERE ${where.join(' AND ')} ORDER BY at DESC, id LIMIT $${params.length}`,
+      params,
+    );
+    return rows.map((row) => ({
+      id: String(row.id),
+      at: Number(row.at),
+      category: row.category as AuditCategory,
+      action: String(row.action),
+      ok: Number(row.ok) === 1,
+      durationMs: numberOrNull(row.duration_ms),
+      details: JSON.parse(String(row.details)) as AuditDetails,
+    }));
+  }
+
+  /** Which key seals this parent's rows. Reads no content. */
+  async keyStatus(): Promise<KeyStatus> {
+    const rows = await this.db.all<{ count: unknown }>(
+      'SELECT COUNT(*) AS count FROM items WHERE parent_id = $1 AND payload NOT LIKE $2',
+      [this.parentId, `${this.cipher.currentPrefix}%`],
+    );
+    return {
+      keyId: this.cipher.currentPrefix.split('.')[1] ?? '',
+      previousKeys: this.auditOptions.previousKeys,
+      stale: Number(rows[0]?.count ?? 0),
+    };
+  }
+
+  /** Seals this parent's rows not sealed with the current key again. */
+  async reencrypt(): Promise<{ reencrypted: number; unreadable: number }> {
+    this.writable();
+    let reencrypted = 0;
+    let unreadable = 0;
+    let after: [string, string] = ['', ''];
+    for (;;) {
+      const rows = await this.db.all<{ kind: string; id: string; payload: string }>(
+        `SELECT kind, id, payload FROM items
+         WHERE parent_id = $1 AND payload NOT LIKE $2 AND (kind > $3 OR (kind = $3 AND id > $4))
+         ORDER BY kind, id LIMIT 200`,
+        [this.parentId, `${this.cipher.currentPrefix}%`, after[0], after[1]],
+      );
+      for (const row of rows) {
+        let plaintext: string;
+        try {
+          plaintext = this.cipher.open(this.aad(row.kind, row.id), row.payload);
+        } catch {
+          unreadable += 1;
+          continue;
+        }
+        // Only if the row has not changed since it was read.
+        reencrypted += await this.db.run(
+          `UPDATE items SET payload = $1, content_hash = $2
+           WHERE parent_id = $3 AND kind = $4 AND id = $5 AND payload = $6`,
+          [
+            this.cipher.seal(this.aad(row.kind, row.id), plaintext),
+            this.cipher.hash(plaintext),
+            this.parentId,
+            row.kind,
+            row.id,
+            row.payload,
+          ],
+        );
+      }
+      const last = rows.at(-1);
+      if (!last || rows.length < 200) return { reencrypted, unreadable };
+      after = [last.kind, last.id];
+    }
+  }
+
   private aad(kind: string, id: string): string {
     return `${this.parentId}\n${kind}\n${id}`;
   }
@@ -543,6 +775,23 @@ const MIGRATIONS: string[][] = [
      )`,
     'CREATE INDEX shares_by_viewer ON shares (viewer_id)',
     'CREATE INDEX shares_by_email ON shares (email)',
+  ],
+  [
+    // What ran and what was done, for each parent: counts, ids and error
+    // messages only, never Aula content, so it is not encrypted. `at` is in
+    // milliseconds, so events of one run keep their order.
+    `CREATE TABLE audit_log (
+       parent_id TEXT NOT NULL,
+       id TEXT NOT NULL,
+       at BIGINT NOT NULL,
+       category TEXT NOT NULL,
+       action TEXT NOT NULL,
+       ok INTEGER NOT NULL,
+       duration_ms INTEGER,
+       details TEXT NOT NULL,
+       PRIMARY KEY (parent_id, id)
+     )`,
+    'CREATE INDEX audit_by_time ON audit_log (parent_id, at)',
   ],
 ];
 

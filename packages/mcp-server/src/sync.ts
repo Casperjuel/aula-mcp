@@ -31,7 +31,7 @@ import {
   type ParentGallery,
   syncGallery,
 } from './gallery.ts';
-import type { ItemInput, ParentStorage, Storage } from './storage.ts';
+import type { AuditEntry, ItemInput, ParentStorage, Storage } from './storage.ts';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -413,10 +413,20 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
   const states = async (store: ParentStorage) =>
     new Map((await store.syncStates()).map((state) => [state.job, state]));
 
+  /** The audit log is a record, not part of the job: a failed write is dropped. */
+  const audit = async (store: ParentStorage, entry: AuditEntry) => {
+    try {
+      await store.audit(entry);
+    } catch {}
+  };
+  /** The last parent-level error per parent, so a repeating one is logged once. */
+  const parentErrors = new Map<string, string>();
+
   async function runJobs(
     parentId: string,
     session: SyncSession,
     due: SyncJobName[],
+    trigger: 'schedule' | 'manual',
   ): Promise<SyncRunReport[]> {
     const store = options.storage.forParent(parentId);
     const known = await states(store);
@@ -464,6 +474,19 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
         });
         reports.push({ job, ok: true, ...result });
         logger.info('sync.job_done', { parent: parentId, job, ...result });
+        await audit(store, {
+          category: 'sync',
+          action: job,
+          ok: true,
+          durationMs: now() - started,
+          details: {
+            trigger,
+            fetched: result.fetched,
+            changed: result.changed,
+            ...(result.skipped !== undefined ? { skipped: result.skipped } : {}),
+            ...(result.more ? { more: true } : {}),
+          },
+        });
       } catch (err) {
         const failures = (previous?.failures ?? 0) + 1;
         const message = errorMessage(err);
@@ -487,6 +510,13 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
           .catch(() => {});
         reports.push({ job, ok: false, fetched: 0, changed: 0, error: message });
         logger.warn('sync.job_failed', { parent: parentId, job, failures, error: message });
+        await audit(store, {
+          category: 'sync',
+          action: job,
+          ok: false,
+          durationMs: now() - started,
+          details: { trigger, failuresInARow: failures, error: message },
+        });
       } finally {
         running.delete(key);
       }
@@ -505,9 +535,22 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
           const known = await states(options.storage.forParent(parent.parentId));
           const due = SYNC_JOBS.filter((job) => (known.get(job)?.nextRunAt ?? 0) * 1000 <= now());
           if (due.length > 0)
-            await withLock(parent.parentId, () => runJobs(parent.parentId, parent.session, due));
+            await withLock(parent.parentId, () =>
+              runJobs(parent.parentId, parent.session, due, 'schedule'),
+            );
+          parentErrors.delete(parent.parentId);
         } catch (err) {
-          logger.warn('sync.parent_failed', { parent: parent.parentId, error: errorMessage(err) });
+          const message = errorMessage(err);
+          logger.warn('sync.parent_failed', { parent: parent.parentId, error: message });
+          if (parentErrors.get(parent.parentId) !== message) {
+            parentErrors.set(parent.parentId, message);
+            await audit(options.storage.forParent(parent.parentId), {
+              category: 'sync',
+              action: 'check',
+              ok: false,
+              details: { trigger: 'schedule', error: message },
+            });
+          }
         }
       }
     } catch (err) {
@@ -545,7 +588,7 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
       },
       run: (selected) =>
         withLock(parentId, () =>
-          runJobs(parentId, session, selected?.length ? selected : [...SYNC_JOBS]),
+          runJobs(parentId, session, selected?.length ? selected : [...SYNC_JOBS], 'manual'),
         ),
     }),
   };

@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createStorage, openStorage, type Storage, StorageConfigError } from './storage.ts';
-import { loadStorageKey, StorageKeyError } from './storage-crypto.ts';
+import { keyId, loadStorageKey, loadStorageKeys, StorageKeyError } from './storage-crypto.ts';
 import { postgresDriver, type SqlDriver, sqliteDriver } from './storage-sql.ts';
 
 const KEY = Buffer.alloc(32, 7);
@@ -20,11 +20,75 @@ for (const [name, driver] of backends) {
     const open = async () => {
       const db = driver();
       if (name === 'postgres')
-        await db.run('DROP TABLE IF EXISTS items, sync_state, shares, schema_migrations');
+        await db.run(
+          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, schema_migrations',
+        );
       storage = await createStorage(db, KEY, { type: name as 'sqlite', location: 'test' });
       return storage;
     };
     afterEach(() => storage?.close());
+
+    test('a new key opens what the old one sealed, and reencrypt moves the rows to it', async () => {
+      const db = driver();
+      if (name === 'postgres')
+        await db.run(
+          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, schema_migrations',
+        );
+      const old = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
+      await old.forParent('p').put([
+        { kind: 'message', id: '1', data: { text: 'en' } },
+        { kind: 'post', id: '2', data: { title: 'to' } },
+      ]);
+      // A payload from before key ids still opens.
+      await db.run("UPDATE items SET payload = 'v1.' || substr(payload, 13) WHERE kind = 'post'");
+      const NEW = Buffer.alloc(32, 8);
+      storage = await createStorage(db, { current: NEW, previous: [KEY] }, old.info);
+      const store = storage.forParent('p');
+      expect((await store.get('message', '1'))?.data).toEqual({ text: 'en' });
+      expect((await store.get('post', '2'))?.data).toEqual({ title: 'to' });
+      expect(await store.keyStatus()).toEqual({ keyId: keyId(NEW), previousKeys: 1, stale: 2 });
+
+      expect(await storage.reencrypt()).toEqual({ parents: 1, reencrypted: 2, unreadable: 0 });
+      expect((await store.keyStatus()).stale).toBe(0);
+      const [event] = await store.auditLog({ category: 'storage' });
+      expect(event).toMatchObject({ action: 'reencrypt', ok: true });
+      expect(event?.details).toMatchObject({ keyId: keyId(NEW), reencrypted: 2 });
+
+      // The old key is no longer needed.
+      const onlyNew = await createStorage(db, NEW, old.info);
+      expect((await onlyNew.forParent('p').get('post', '2'))?.data).toEqual({ title: 'to' });
+      expect(await storage.reencrypt()).toEqual({ parents: 0, reencrypted: 0, unreadable: 0 });
+    });
+
+    test('the audit log is per parent, filters, drops old entries and is not shared', async () => {
+      const store = await open();
+      const a = store.forParent('a');
+      await a.audit({ category: 'sync', action: 'messages', ok: true, details: { fetched: 3 } });
+      await a.audit({
+        category: 'sync',
+        action: 'posts',
+        ok: false,
+        durationMs: 12.4,
+        details: { error: 'x'.repeat(400) },
+      });
+      await a.audit({ category: 'aula', action: 'mark_read', ok: true, details: { threadId: 5 } });
+      await store.forParent('b').audit({ category: 'sync', action: 'messages', ok: true });
+
+      const all = await a.auditLog();
+      expect(all.map((e) => e.action)).toEqual(['mark_read', 'posts', 'messages']);
+      expect(all[1]?.durationMs).toBe(12);
+      expect(String(all[1]?.details.error)).toHaveLength(300);
+      expect((await a.auditLog({ ok: false })).map((e) => e.action)).toEqual(['posts']);
+      expect((await a.auditLog({ category: 'aula' })).map((e) => e.action)).toEqual(['mark_read']);
+      expect(await a.auditLog({ before: all[2]?.at ?? 0 })).toEqual([]);
+      expect(await store.forParent('b').auditLog()).toHaveLength(1);
+
+      await store.shares.grant('a', 'A', 'b@example.dk');
+      await store.shares.claim('b', 'b@example.dk');
+      const view = await store.sharedWith('b', 'a');
+      expect(await view?.auditLog()).toEqual([]);
+      await expect(view?.audit({ category: 'sync', action: 'x', ok: true })).rejects.toThrow();
+    });
 
     test('shares read-only, and only what the viewer lacks', async () => {
       const store = await open();
@@ -178,13 +242,15 @@ for (const [name, driver] of backends) {
     test('payloads are encrypted at rest and bound to their parent and id', async () => {
       const db = driver();
       if (name === 'postgres')
-        await db.run('DROP TABLE IF EXISTS items, sync_state, shares, schema_migrations');
+        await db.run(
+          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, schema_migrations',
+        );
       storage = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await storage
         .forParent('parent-a')
         .put([{ kind: 'message', id: '1', data: { text: 'hemmelig' } }]);
       const [row] = await db.all<{ payload: string }>('SELECT payload FROM items');
-      expect(row?.payload.startsWith('v1.')).toBe(true);
+      expect(row?.payload.startsWith(`v2.${keyId(KEY)}.`)).toBe(true);
       expect(row?.payload).not.toContain('hemmelig');
 
       // Moving the row to another parent does not make it readable there.
@@ -197,10 +263,12 @@ for (const [name, driver] of backends) {
     test('migrations run once', async () => {
       const db = driver();
       if (name === 'postgres')
-        await db.run('DROP TABLE IF EXISTS items, sync_state, shares, schema_migrations');
+        await db.run(
+          'DROP TABLE IF EXISTS items, sync_state, shares, audit_log, schema_migrations',
+        );
       storage = await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
       await createStorage(db, KEY, { type: 'sqlite', location: 'test' });
-      expect(await db.all('SELECT version FROM schema_migrations')).toHaveLength(3);
+      expect(await db.all('SELECT version FROM schema_migrations')).toHaveLength(4);
     });
 
     test('keeps sync state per parent', async () => {
@@ -255,6 +323,29 @@ describe('openStorage', () => {
     await expect(
       openStorage({ AULA_MCP_DIR: dir, AULA_MCP_STORAGE_KEY: 'too-short' }),
     ).rejects.toBeInstanceOf(StorageKeyError);
+  });
+
+  test('the key file and AULA_MCP_STORAGE_PREVIOUS_KEYS become previous keys', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'aula-storage-'));
+    const file = join(dir, 'storage.key');
+    const fromFile = await loadStorageKey(undefined, file);
+    const other = Buffer.alloc(32, 9).toString('base64');
+    const keys = await loadStorageKeys(
+      {
+        AULA_MCP_STORAGE_KEY: KEY.toString('base64'),
+        AULA_MCP_STORAGE_PREVIOUS_KEYS: `${other}, ${KEY.toString('base64')}`,
+      },
+      file,
+    );
+    expect(keys.current.equals(KEY)).toBe(true);
+    expect(keys.previous.map((k) => k.toString('base64'))).toEqual([
+      other,
+      fromFile.toString('base64'),
+    ]);
+    // Without a key in the environment the file is the current key.
+    const plain = await loadStorageKeys({}, file);
+    expect(plain.current.equals(fromFile)).toBe(true);
+    expect(plain.previous).toEqual([]);
   });
 
   test('a key in the environment wins over the key file', async () => {
