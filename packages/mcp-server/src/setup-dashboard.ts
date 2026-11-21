@@ -161,7 +161,7 @@ main {
   padding-block: 20px calc(96px + env(safe-area-inset-bottom, 0px));
   min-width: 0;
 }
-.view { max-width: 1040px; margin: 0 auto; display: grid; gap: 18px; }
+.view { width: 100%; min-width: 0; display: grid; gap: 18px; }
 .view-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
 .view-head .lede { color: var(--muted); max-width: 60ch; margin-top: 6px; }
 
@@ -232,8 +232,7 @@ main {
 
 .panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 18px; min-width: 0; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
-.grid-2 { display: grid; gap: 18px; grid-template-columns: 1fr; }
-@media (min-width: 700px) { .grid-2 { grid-template-columns: 1fr 1fr; } }
+.grid-2 { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: .78rem; font-weight: 700; white-space: nowrap; }
 .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .pill.ok { background: var(--ok-soft); color: var(--ok); }
