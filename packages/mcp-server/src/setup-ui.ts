@@ -106,7 +106,7 @@ import { type ParentSync, SYNC_JOBS, type SyncJobName } from './sync.ts';
 import { DEFAULT_RENEW_WITHIN_SECONDS } from './token-keepalive.ts';
 import { type ToolInfo, toolCatalog } from './tool-catalog.ts';
 import { toolNameStyle } from './tool-names.ts';
-import { validateSetTemplateArgs } from './tools.ts';
+import { plainTextToHtml, validateSetTemplateArgs } from './tools.ts';
 
 /** Max time we'll hold a login session waiting on the user to pick their
  *  MitID identity after the picker is shown. After this the login rejects
@@ -941,8 +941,14 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     return threadChange(c, 'mark_read', { read: true }, (d, id) => {
       const messageId = (d.latestMessage as { id?: unknown } | null | undefined)?.id;
       if (messageId == null) return 'latest message id';
-      // Aula has no "mark as read" verb; see AulaClient.setLastReadMessage.
-      return (client) => client.setLastReadMessage(id, String(messageId));
+      // The read marker is what the web client moves when a thread opens; the
+      // subscription status is the app's read flag. Set both so every Aula
+      // client agrees right away.
+      const subscriptionId = d.subscriptionId;
+      return async (client) => {
+        await client.setLastReadMessage(id, String(messageId));
+        if (typeof subscriptionId === 'number') await client.setThreadsRead([subscriptionId], true);
+      };
     });
   });
   app.post('/data/messages/:id/unread', async (c) => {
@@ -964,6 +970,50 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       { marked },
       (_d, id) => (client) => client.setThreadsMarked([id], marked),
     );
+  });
+
+  // A reply in one of the parent's own threads, written and confirmed by the
+  // parent in the page; like the child shortcuts it does not wait for
+  // AULA_MCP_WRITE. It cannot be recalled. The audit keeps the thread id and
+  // the length, never the text.
+  app.post('/data/messages/:id/reply', async (c) => {
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'thread must be an id' }, 400);
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (!text || text.length > 5000) {
+      return c.json({ error: 'text must be 1 to 5000 characters' }, 400);
+    }
+    const store = options.myData?.storage?.forParent(parentOf(c)?.caller ?? null);
+    if (!store) return c.json({ error: 'local storage is off' }, 404);
+    if (!(await store.get('message_thread', String(id))))
+      return c.json({ error: 'not found' }, 404);
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const started = Date.now();
+    const details = { threadId: id, characters: text.length };
+    try {
+      await options.myData?.contextFor(parentOf(c)?.caller ?? null).getGuardianUserId();
+      await client.replyToThread(id, plainTextToHtml(text));
+    } catch (err) {
+      await auditOf(c)?.({
+        category: 'aula',
+        action: 'reply',
+        ok: false,
+        durationMs: Date.now() - started,
+        details: { ...details, error: (err as Error).message.slice(0, 300) },
+      });
+      return aulaFailed(c, 'reply', err);
+    }
+    await auditOf(c)?.({
+      category: 'aula',
+      action: 'reply',
+      ok: true,
+      durationMs: Date.now() - started,
+      details,
+    });
+    return c.json({ ok: true });
   });
 
   app.get('/data/items/:kind/:id', async (c) => {
@@ -999,6 +1049,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       ...(messages ? { messages } : {}),
       ...(thread ? { thread } : {}),
       ...(canChange ? { canChange: true } : {}),
+      ...(kind === 'message_thread' && !sharedViews.has(c.req.raw) ? { canReply: true } : {}),
     });
   });
 

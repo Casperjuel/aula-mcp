@@ -333,6 +333,22 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
       read: true,
       messages: [
         ['mette', -6, 'I næste uge laver vi trivselsundersøgelse. Den tager cirka 20 minutter.'],
+        [
+          'maria',
+          -5.9,
+          'Tak for beskeden. Alma har været lidt stille på det seneste, så vi er glade for, at I spørger.\n\nHun fortæller, at frikvartererne er svære, fordi pigerne i klassen har delt sig i to grupper. Hun ved ikke helt, hvor hun hører til.\n\nKan vi tage en snak om det, når undersøgelsen er lavet?',
+        ],
+        [
+          'mette',
+          -5.5,
+          'Selvfølgelig. Vi ser på svarene sammen med jer i uge 3. Jeg sender en invitation.',
+        ],
+        ['maria', -5.4, 'Det lyder godt. Tak.'],
+        [
+          'mette',
+          -4,
+          'Hej igen. Her er tiderne til samtalerne:\n\nTirsdag kl. 14.00, 14.30 og 15.00\nOnsdag kl. 8.15 og 15.30\nTorsdag kl. 13.00\n\nSkriv, hvilken tid der passer jer bedst. Samtalen tager cirka 25 minutter og foregår i klasselokalet.',
+        ],
       ],
     },
   ];
@@ -652,6 +668,7 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
     setLastReadMessage: async () => ({}),
     setThreadsRead: async () => ({}),
     setThreadsMarked: async () => ({}),
+    replyToThread: async () => ({}),
     getProfilesByLogin: async () => ({
       profiles: [
         {

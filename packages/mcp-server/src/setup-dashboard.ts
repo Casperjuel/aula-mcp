@@ -256,6 +256,13 @@ main {
 .pill.flag svg { width: 12px; height: 12px; }
 .pill.pinned::before { display: none; }
 .thread-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
+.reply { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 4px; display: grid; gap: 8px; }
+.reply textarea { min-height: 96px; resize: vertical; font: inherit; }
+.reply-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.msg.pending { opacity: .75; }
+.reply-preview { max-height: 40vh; overflow-y: auto; background: var(--surface-2); border-radius: 8px; padding: 10px 12px; }
+/* A long thread scrolls inside the panel, beside the list. */
+@media (min-width: 1100px) { .detail { max-height: calc(100vh - 48px); overflow-y: auto; overscroll-behavior: contain; } }
 .pill.run::before { animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
 .tag.files { display: inline-flex; align-items: center; gap: 4px; }
@@ -1572,6 +1579,57 @@ async function loadDetail() {
   if (kind === 'message_thread' && d.item.unread) changeThread(d.item.id, 'read', { auto: true });
   if (kind === 'message' && d.thread && d.thread.unread) changeThread(d.thread.id, 'read', { auto: true });
 }
+/** Writing a reply under the open thread; the draft survives re-renders. */
+function replyBox(it) {
+  const b = state.browse;
+  const drafts = b.drafts || (b.drafts = {});
+  const count = el('span', { class: 'muted small num' });
+  const send = el('button', { class: 'btn btn-primary btn-sm' }, icon('mail'), 'Send svar');
+  const area = el('textarea', { class: 'input', id: 'replyText', maxlength: '5000', placeholder: 'Skriv et svar…' });
+  area.value = drafts[it.id] || '';
+  const update = () => {
+    drafts[it.id] = area.value;
+    const n = area.value.trim().length;
+    count.textContent = n ? fmt(n) + ' / 5.000 tegn' : '';
+    send.disabled = !n;
+  };
+  area.addEventListener('input', update);
+  update();
+  send.onclick = () => {
+    const text = area.value.trim();
+    if (!text) return;
+    confirmDialog({
+      icon: 'mail',
+      title: 'Send svar i Aula?',
+      ok: 'Send svar',
+      body: [
+        el('p', {}, 'Svaret sendes i tråden "' + it.title + '" til alle i tråden. Det kan ikke trækkes tilbage.'),
+        el('p', { class: 'pre reply-preview' }, text),
+        el('p', { class: 'muted small' }, 'Det står i din log under Handlinger i Aula.'),
+      ],
+      onok: async () => {
+        send.disabled = true;
+        try {
+          await postJson('data/messages/' + encodeURIComponent(it.id) + '/reply', { text });
+          delete drafts[it.id];
+          if (b.detail && b.detail.item && b.detail.item.id === it.id && b.detail.messages) {
+            b.detail.messages.push({ id: 'pending:' + Date.now(), from: 'Dig', role: 'guardian', at: Math.floor(Date.now() / 1000), body: text, attachments: [], pending: true });
+          }
+          renderDetail();
+          toast('Svar sendt i Aula');
+          postJson('data/sync/run', { jobs: ['messages'] }).catch(() => {});
+        } catch (err) {
+          send.disabled = false;
+          toast('Kunne ikke sende svaret: ' + err.message);
+        }
+      },
+    });
+  };
+  return el('div', { class: 'reply' },
+    el('label', { for: 'replyText', class: 'small' }, el('strong', {}, 'Svar i tråden')),
+    area,
+    el('div', { class: 'reply-foot' }, count, send));
+}
 /** Changes a thread's read state or pin in Aula, then here: the list, the open thread and the counts. */
 async function changeThread(id, what, opts) {
   const b = state.browse;
@@ -1746,9 +1804,11 @@ function renderDetail() {
           el('div', { style: 'min-width:0' },
             el('div', { class: 'msg-head' }, el('span', { style: 'display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap' }, el('strong', {}, m.from || 'Ukendt afsender'), roleBadge(m.role)), el('span', { class: 'muted num' }, rel(m.at))),
             el('p', { class: 'msg-body pre' }, m.body),
+            m.pending ? el('p', { class: 'muted small' }, 'Sendt herfra. Den kommer med i tråden ved næste synkronisering.') : null,
             attachMedia('message', m.id, m.attachments),
             attachTable('message', m.id, m.attachments)))))
       : el('p', { class: 'muted small' }, 'Beskederne i tråden er ikke hentet endnu. De kommer med næste synkronisering.')) : null,
+    b.detail.canReply ? replyBox(it) : null,
     it.kind === 'message_thread' && b.detail.canChange ? el('p', { class: 'muted small', style: 'margin-top:6px' }, 'Når du åbner en ulæst tråd her, markeres den også som læst i Aula.') : null,
     el('p', { class: 'muted small mono', style: 'margin-top:16px;overflow-wrap:anywhere' }, 'Opdateret ' + rel(it.updatedAt) + ' · id ' + it.kind + ':' + it.id));
 }

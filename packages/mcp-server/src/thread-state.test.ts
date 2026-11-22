@@ -67,6 +67,7 @@ async function setup() {
     setLastReadMessage: record('setLastReadMessage'),
     setThreadsRead: record('setThreadsRead'),
     setThreadsMarked: record('setThreadsMarked'),
+    replyToThread: record('replyToThread'),
   } as unknown as AulaClient;
   let primed = 0;
   const app = createSetupApp({
@@ -104,11 +105,14 @@ afterEach(() => {
 });
 
 describe('dashboard thread state', () => {
-  test('mark read moves the read marker to the latest message and stores it', async () => {
+  test('mark read moves the read marker, sets the read flag and stores it', async () => {
     const { post, thread, audit, calls, primed } = await setup();
     const res = await post('/data/messages/301/read');
     expect(res.status).toBe(200);
-    expect(calls).toEqual([{ method: 'setLastReadMessage', args: [301, 'm.2'] }]);
+    expect(calls).toEqual([
+      { method: 'setLastReadMessage', args: [301, 'm.2'] },
+      { method: 'setThreadsRead', args: [[9301], true] },
+    ]);
     expect(primed()).toBe(1);
     expect((await thread('301')).read).toBe(true);
     const [entry] = await audit();
@@ -190,5 +194,31 @@ describe('dashboard thread state', () => {
       canChange: true,
     });
     expect(await get('/data/items/message_thread/301')).toMatchObject({ canChange: true });
+  });
+
+  test('a reply goes to Aula as HTML and the audit keeps only its length', async () => {
+    const { post, audit, calls } = await setup();
+    const res = await post('/data/messages/301/reply', { text: '  Tak <3\n\nVi kommer  ' });
+    expect(res.status).toBe(200);
+    expect(calls).toEqual([
+      { method: 'replyToThread', args: [301, '<p>Tak &lt;3</p><p>Vi kommer</p>'] },
+    ]);
+    const [entry] = await audit();
+    expect(entry).toMatchObject({ action: 'reply', ok: true });
+    expect(entry?.details).toEqual({ trigger: 'dashboard', threadId: 301, characters: 17 });
+  });
+
+  test('a reply needs text and a stored thread', async () => {
+    const { post, calls } = await setup();
+    expect((await post('/data/messages/301/reply', { text: '   ' })).status).toBe(400);
+    expect((await post('/data/messages/301/reply', { text: 'x'.repeat(5001) })).status).toBe(400);
+    expect((await post('/data/messages/999/reply', { text: 'Hej' })).status).toBe(404);
+    expect(calls).toEqual([]);
+  });
+
+  test('a thread offers a reply box', async () => {
+    const { get } = await setup();
+    expect(await get('/data/items/message_thread/301')).toMatchObject({ canReply: true });
+    expect((await get('/data/items/message/301:m.2')).canReply).toBeUndefined();
   });
 });
