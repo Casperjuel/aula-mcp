@@ -88,6 +88,14 @@ import {
 } from './local-data.ts';
 import type { SharedView } from './local-tools.ts';
 import { type Caller, callerId } from './oidc.ts';
+import {
+  actionOf,
+  noAulaAccess,
+  planWrite,
+  type ThreadPatch,
+  withQueued,
+  withSent,
+} from './queued-thread-changes.ts';
 import { DASHBOARD_ROUTES, isDashboardPath, renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
 import {
@@ -892,17 +900,10 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
   // unread or (un)mark it. Only the parent's own state on their own threads
   // (shared views refuse every POST), off with AULA_MCP_MARK_READ=0 like the
   // MCP tools, audited with ids only. The stored copy follows so the page
-  // agrees with Aula before the next sync.
-  const threadChange = async (
-    c: Context,
-    action: 'mark_read' | 'mark_unread' | 'mark_thread' | 'unmark_thread',
-    patch: Record<string, unknown>,
-    /** The write, or what the stored thread lacks for it. */
-    plan: (
-      thread: Record<string, unknown>,
-      id: number,
-    ) => ((client: AulaClient) => Promise<unknown>) | string,
-  ) => {
+  // agrees with Aula before the next sync. Without access to Aula the stored
+  // copy changes anyway and the change waits for the next messages sync
+  // (queued-thread-changes.ts); the answer says `queued`.
+  const threadChange = async (c: Context, patch: ThreadPatch) => {
     if (process.env.AULA_MCP_MARK_READ === '0') {
       return c.json({ error: 'changing read state is off (AULA_MCP_MARK_READ=0)' }, 403);
     }
@@ -918,18 +919,31 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (Object.entries(patch).every(([k, v]) => data[k] === v)) {
       return c.json({ ok: true, unchanged: true });
     }
-    const write = plan(data, id);
+    const [[key, value]] = Object.entries(patch) as [[keyof ThreadPatch, boolean]];
+    const action = actionOf(key, value);
+    const write = planWrite(data, id, key, value);
     if (typeof write === 'string') {
       return c.json({ error: `the stored thread has no ${write}; sync messages first` }, 409);
     }
-    const client = await clientOf(c);
-    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const queue = async (error: string) => {
+      await store.put([{ ...stored, data: withQueued(data, patch) }]);
+      await auditOf(c)?.({
+        category: 'aula',
+        action,
+        ok: false,
+        details: { threadId: id, queued: true, error: error.slice(0, 300) },
+      });
+      return c.json({ ok: true, queued: true }, 202);
+    };
     const started = Date.now();
     try {
+      const client = await clientOf(c);
+      if (!client) return queue('not logged in to Aula');
       // Messaging answers 403 until the guardian profile is activated.
       await options.myData?.contextFor(parentOf(c)?.caller ?? null).getGuardianUserId();
       await write(client);
     } catch (err) {
+      if (noAulaAccess(err)) return queue((err as Error).message);
       await auditOf(c)?.({
         category: 'aula',
         action,
@@ -939,7 +953,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
       });
       return aulaFailed(c, action, err);
     }
-    await store.put([{ ...stored, data: { ...data, ...patch } }]);
+    await store.put([{ ...stored, data: withSent(data, patch) }]);
     await auditOf(c)?.({
       category: 'aula',
       action,
@@ -952,34 +966,18 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
 
   app.post('/data/messages/:id/read', async (c) => {
     if (!(await changeBody(c))) return c.json({ error: 'expected a JSON body' }, 415);
-    return threadChange(c, 'mark_read', { read: true }, (d, id) => {
-      const messageId = (d.latestMessage as { id?: unknown } | null | undefined)?.id;
-      if (messageId == null) return 'latest message id';
-      // Aula has no "mark as read" verb; see AulaClient.setLastReadMessage.
-      // messaging.updateSubscriptionStatus with isRead: true answered 400
-      // live, so the read marker is the only write here.
-      return (client) => client.setLastReadMessage(id, String(messageId));
-    });
+    return threadChange(c, { read: true });
   });
   app.post('/data/messages/:id/unread', async (c) => {
     if (!(await changeBody(c))) return c.json({ error: 'expected a JSON body' }, 415);
-    return threadChange(c, 'mark_unread', { read: false }, (d) => {
-      const subscriptionId = d.subscriptionId;
-      if (typeof subscriptionId !== 'number') return 'subscription id';
-      return (client) => client.setThreadsRead([subscriptionId], false);
-    });
+    return threadChange(c, { read: false });
   });
   app.post('/data/messages/:id/marked', async (c) => {
     const body = await changeBody(c);
     if (!body) return c.json({ error: 'expected a JSON body' }, 415);
     const marked = body.marked;
     if (typeof marked !== 'boolean') return c.json({ error: 'marked must be true or false' }, 400);
-    return threadChange(
-      c,
-      marked ? 'mark_thread' : 'unmark_thread',
-      { marked },
-      (_d, id) => (client) => client.setThreadsMarked([id], marked),
-    );
+    return threadChange(c, { marked });
   });
 
   // A reply in one of the parent's own threads, written and confirmed by the

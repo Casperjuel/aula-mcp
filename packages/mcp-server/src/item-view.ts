@@ -20,6 +20,8 @@ export interface ItemSummary {
   subtitle: string;
   /** A message thread marked in Aula. */
   marked?: boolean;
+  /** A thread whose read state or mark was changed here and waits to be sent to Aula. */
+  pending?: boolean;
   /** A message thread not read in Aula. */
   unread?: boolean;
   /** A post Aula marks as important ("Vigtig" in Aula's overview). */
@@ -125,6 +127,8 @@ export function summarize(item: StoredItem): ItemSummary {
         subtitle: str(asData(last.sender).fullName),
         ...(d.read === false ? { unread: true } : {}),
         ...(d.marked === true ? { marked: true } : {}),
+        // Changed in the dashboard while Aula could not be reached; not sent yet.
+        ...(d.pendingAula ? { pending: true } : {}),
         senderRole: threadRole(d),
       };
     }

@@ -299,6 +299,10 @@ main {
 .pill.flag svg { width: 12px; height: 12px; }
 .pill.pinned::before { display: none; }
 .thread-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
+.li.thread-row { grid-template-columns: auto 1fr auto; align-items: center; }
+.li-open { min-width: 0; display: block; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; color: var(--ink); font: inherit; }
+.li-acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+@media (max-width: 560px) { .li.thread-row { grid-template-columns: auto 1fr; } .li-acts { grid-column: 2; justify-content: flex-start; } }
 .compose { display: grid; gap: 12px; }
 .compose .field { display: grid; gap: 4px; }
 .compose textarea { min-height: 160px; resize: vertical; font: inherit; }
@@ -888,6 +892,8 @@ const state = {
   liveError: null,
   tools: null,
   recent: null,
+  // Oversigt's latest threads, with read and pin buttons.
+  threads: null,
   browse: { q: '', kind: '', range: '', items: [], offset: 0, more: false, loading: false, sel: null, detail: null, truncated: false },
   toolFilter: { q: '', access: 'alle', open: new Set() },
   syncOpen: new Set(),
@@ -1503,7 +1509,8 @@ const importantPill = (it) => (it.important ? el('span', { class: 'pill err impo
 /** Unread and pinned (Aula's "marked") on a thread, as of the last sync or the last change here. */
 const threadPills = (it) => [
   it.unread ? el('span', { class: 'pill run flag' }, 'Ulæst') : null,
-  it.marked ? el('span', { class: 'pill warn flag pinned', title: 'Fastgjort i Aula' }, icon('pin'), 'Fastgjort') : null];
+  it.marked ? el('span', { class: 'pill warn flag pinned', title: 'Fastgjort i Aula' }, icon('pin'), 'Fastgjort') : null,
+  it.pending ? el('span', { class: 'pill flag', title: 'Ændret her, mens Aula ikke kunne nås. Sendes ved næste synkronisering.' }, 'Venter på Aula') : null];
 function itemRow(item, onclick) {
   const k = kindOf(item.kind);
   return el('button', { class: 'li', onclick },
@@ -1512,6 +1519,28 @@ function itemRow(item, onclick) {
       el('span', { class: 'li-title', style: 'display:block' }, item.unread ? el('span', { class: 'unread-dot' }, '● ') : null, importantPill(item), item.title),
       el('span', { class: 'li-sub', style: 'display:block' }, [k.one, item.subtitle].filter(Boolean).join(' · '))),
     el('span', { class: 'result-date' }, rel(item.occurredAt || item.updatedAt)));
+}
+/** A thread in Oversigt: open it, or mark it read or unread, or pin it, without opening it. */
+function threadRow(it) {
+  return el('div', { class: 'li thread-row' },
+    typeDot(it.kind),
+    el('button', { class: 'li-open', onclick: () => openItem(it) },
+      el('span', { class: 'li-title', style: 'display:block' }, threadPills(it), importantPill(it), it.title),
+      el('span', { class: 'li-sub', style: 'display:block' }, [it.subtitle, rel(it.occurredAt || it.updatedAt)].filter(Boolean).join(' · '))),
+    state.owner ? null : el('div', { class: 'li-acts', role: 'group', 'aria-label': 'Tråden i Aula' },
+      el('button', { class: 'btn btn-sm', onclick: () => changeThread(it.id, it.unread ? 'read' : 'unread') }, icon('mail'), it.unread ? 'Markér som læst' : 'Markér som ulæst'),
+      el('button', { class: 'btn btn-sm', 'aria-pressed': String(Boolean(it.marked)), onclick: () => changeThread(it.id, it.marked ? 'unpin' : 'pin') }, icon('pin'), it.marked ? 'Fjern fastgørelse' : 'Fastgør')));
+}
+function loadThreads() {
+  getJson('data/items?kind=message_thread&limit=8').then((d) => { state.threads = d.items; }).catch(() => { state.threads = []; }).then(() => rerender('oversigt'));
+}
+function threadsPanel() {
+  if (state.owner || !database() || !countOf('message_thread')) return null;
+  return el('section', { class: 'panel' },
+    el('div', { class: 'panel-head' }, el('h2', {}, 'Beskedtråde'), el('button', { class: 'linkish', onclick: () => { state.browse.kind = 'message_thread'; go('gennemse'); } }, 'Se alle')),
+    state.threads === null ? skeleton()
+      : el('div', { class: 'list' }, state.threads.length ? state.threads.map(threadRow) : el('p', { class: 'empty' }, 'Ingen beskedtråde gemt endnu.')),
+    el('p', { class: 'muted small', style: 'margin-top:8px' }, 'Knapperne ændrer tråden i Aula. Kan Aula ikke nås, gemmes ændringen her og sendes ved næste synkronisering. Åbner du en ulæst tråd, markeres den som læst.'));
 }
 const openItem = (item) => {
   state.browse = Object.assign(state.browse, { q: '', kind: '', range: '', items: [], offset: 0, more: false, sel: item.kind + '/' + item.id, detail: null });
@@ -1537,6 +1566,7 @@ R.oversigt = () => {
       galleryStat())
       : state.summary ? storageOff() : null,
     nextEventsPanel(),
+    threadsPanel(),
     db ? el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, 'Senest gemt'), el('button', { class: 'linkish', 'data-go': 'gennemse' }, 'Se alt')),
       recent) : null,
@@ -1568,7 +1598,7 @@ R.gemt = () => {
         el('div', { class: 'lock-list' },
           el('div', {}, icon('lock'), el('p', {}, el('strong', {}, 'Krypteret for dig alene. '), 'Indholdet krypteres med en nøgle, der kun gælder dig. En anden forælder på samme server kan ikke se dine data.')),
           el('div', {}, icon('db'), el('p', {}, el('strong', {}, 'Gemt, til du sletter det. '), 'Intet slettes automatisk. Du bestemmer selv under ', el('button', { class: 'linkish', onclick: () => $('sletData').scrollIntoView({ behavior: 'smooth' }) }, 'Slet data'), '.')),
-          el('div', {}, icon('shield'), el('p', {}, el('strong', {}, 'Kun læsning. '), 'Synkronisering markerer aldrig noget som læst i Aula.')))))
+          el('div', {}, icon('shield'), el('p', {}, el('strong', {}, 'Henter kun. '), 'Synkronisering markerer aldrig selv noget som læst i Aula. Den sender kun de ændringer, du selv har lavet her, mens Aula ikke kunne nås.')))))
       : storageOff(),
     db ? el('section', { class: 'panel' },
       el('div', { class: 'panel-head' }, el('h2', {}, 'Antal pr. type'), el('span', { class: 'muted small num' }, fmt(totalCount()) + ' i alt')),
@@ -1823,12 +1853,14 @@ async function changeThread(id, what, opts) {
     const res = what === 'pin' || what === 'unpin'
       ? await postJson('data/messages/' + encodeURIComponent(id) + '/marked', { marked: what === 'pin' })
       : await postJson('data/messages/' + encodeURIComponent(id) + '/' + what, {});
-    for (const it of b.items) if (it.kind === 'message_thread' && it.id === id) Object.assign(it, patch);
+    patch.pending = Boolean(res.queued);
+    for (const it of [...b.items, ...(state.threads || []), ...(state.recent || [])]) if (it.kind === 'message_thread' && it.id === id) Object.assign(it, patch);
     if (b.detail && b.detail.item && b.detail.item.kind === 'message_thread' && b.detail.item.id === id) Object.assign(b.detail.item, patch);
     if (b.detail && b.detail.thread && b.detail.thread.id === id && 'unread' in patch) b.detail.thread.unread = patch.unread;
     rolesAt = 0;
-    renderResults(); renderDetail();
-    if (!res.unchanged) toast(({ read: 'Markeret som læst i Aula', unread: 'Markeret som ulæst i Aula', pin: 'Fastgjort i Aula', unpin: 'Ikke længere fastgjort i Aula' })[what]);
+    renderResults(); renderDetail(); rerender('oversigt');
+    if (res.queued) { if (!(opts && opts.auto)) toast('Gemt her. Aula kan ikke nås lige nu, så det sendes ved næste synkronisering.'); }
+    else if (!res.unchanged) toast(({ read: 'Markeret som læst i Aula', unread: 'Markeret som ulæst i Aula', pin: 'Fastgjort i Aula', unpin: 'Ikke længere fastgjort i Aula' })[what]);
   } catch (err) {
     if (!(opts && opts.auto && err.status === 403)) toast('Kunne ikke ændre tråden i Aula: ' + err.message);
   }
@@ -2640,7 +2672,7 @@ R.sync = () => {
     top,
     loggedIn() ? null : banner('warn', 'warn', el('p', {}, el('strong', {}, 'Jobbene venter på, at du logger ind på Aula. '), 'De starter selv, når du er logget ind.'),
       el('div', { class: 'banner-actions' }, mitidButton('Log ind med MitID', true))),
-    banner('info', 'info', el('p', {}, el('strong', {}, 'Synkronisering markerer aldrig noget som læst i Aula. '), 'Beskeder og opslag står præcis, som du forlod dem.')),
+    banner('info', 'info', el('p', {}, el('strong', {}, 'Synkronisering markerer aldrig selv noget som læst i Aula. '), 'Beskeder og opslag står præcis, som du forlod dem. Har du markeret en tråd som læst, ulæst eller fastgjort her, mens Aula ikke kunne nås, sendes netop den ændring ved næste synkronisering.')),
     el('section', { class: 'panel' },
       el('div', { class: 'job-head' }, ['Job', 'Seneste', 'Næste', 'Hentet / ændret', 'Status', ''].map((t) => el('span', {}, t))),
       el('div', { class: 'jobs' }, s.jobs.map(jobRow))),
@@ -3501,6 +3533,7 @@ route();
   if (database()) {
     if (!state.gallery.data && !state.gallery.loading) loadGallery();
     getJson('data/items?limit=5').then((d) => { state.recent = d.items; }).catch(() => { state.recent = []; }).then(() => rerender('oversigt'));
+    loadThreads();
   }
   if (loggedIn()) { await loadLive(); rerender('oversigt'); rerender('kalender'); }
 })();

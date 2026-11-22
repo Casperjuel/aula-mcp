@@ -6,7 +6,10 @@
  * - Every parent is synced with their own Aula session only, one parent and
  *   one job at a time, so the server never runs many Aula requests at once.
  * - Parents without an Aula login are skipped until they log in.
- * - Read-only: sync never marks anything read and never writes to Aula.
+ * - The jobs only read: they never mark anything read or write to Aula. The
+ *   one write, before a scheduled messages job, sends the read state and pin
+ *   changes the parent made in the dashboard without access to Aula
+ *   (queued-thread-changes.ts).
  * - Each job has its own interval, with jitter so parents don't all hit Aula
  *   on the same minute, and backs off when it keeps failing.
  *
@@ -31,6 +34,7 @@ import {
   type ParentGallery,
   syncGallery,
 } from './gallery.ts';
+import { keepQueued, type QueueSession, sendQueuedThreadChanges } from './queued-thread-changes.ts';
 import type { AuditEntry, ItemInput, ParentStorage, Storage } from './storage.ts';
 import { traceSyncJob } from './telemetry.ts';
 
@@ -72,7 +76,7 @@ export const SYNC_JOB_DESCRIPTIONS: Record<SyncJobName, string> = {
     'unchanged, with every photo downloaded, is listed again once a day.',
 };
 
-/** The Aula calls sync makes. All of them read; none of them write. */
+/** The Aula calls the sync jobs make. All of them read; none of them write. */
 export type SyncClient = Pick<
   AulaClient,
   | 'getProfilesByLogin'
@@ -139,7 +143,8 @@ const syncMessages: SyncJob = async ({ client, store, gallery, firstRun }) => {
         kind: 'message_thread',
         id: String(thread.id),
         occurredAt: thread.latestMessage?.sendDateTime ?? thread.lastMessage?.sendDateTime ?? null,
-        data: thread,
+        // What the parent changed here without access to Aula stays until sent.
+        data: keepQueued(thread, stored),
       };
       if (stored && latest(stored.data) === latest(thread)) {
         // No new message; the thread itself (read flag, subject) may still change.
@@ -344,6 +349,12 @@ export interface SyncParent {
   session: SyncSession;
   /** Whether the parent has an Aula login to sync with. */
   loggedIn(): Promise<boolean>;
+  /**
+   * Sends the thread changes the parent made in the dashboard without access
+   * to Aula, before the messages job. The jobs themselves only read. Left
+   * out when changing read state is off.
+   */
+  queued?: QueueSession;
 }
 
 export interface SyncJobStatus {
@@ -543,6 +554,19 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
     return reports;
   }
 
+  /** A failure here is logged and the jobs run anyway; what is left waits. */
+  async function sendQueued(parentId: string, session: QueueSession): Promise<void> {
+    try {
+      const { sent, waiting } = await sendQueuedThreadChanges(
+        options.storage.forParent(parentId),
+        session,
+      );
+      if (sent || waiting) logger.info('sync.queued_sent', { parent: parentId, sent, waiting });
+    } catch (err) {
+      logger.warn('sync.queued_failed', { parent: parentId, error: errorMessage(err) });
+    }
+  }
+
   async function tick(): Promise<void> {
     // A slow run is not started twice.
     if (ticking) return;
@@ -554,9 +578,12 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
           const known = await states(options.storage.forParent(parent.parentId));
           const due = SYNC_JOBS.filter((job) => (known.get(job)?.nextRunAt ?? 0) * 1000 <= now());
           if (due.length > 0)
-            await withLock(parent.parentId, () =>
-              runJobs(parent.parentId, parent.session, due, 'schedule'),
-            );
+            await withLock(parent.parentId, async () => {
+              if (parent.queued && due.includes('messages')) {
+                await sendQueued(parent.parentId, parent.queued);
+              }
+              return runJobs(parent.parentId, parent.session, due, 'schedule');
+            });
           parentErrors.delete(parent.parentId);
         } catch (err) {
           const message = errorMessage(err);

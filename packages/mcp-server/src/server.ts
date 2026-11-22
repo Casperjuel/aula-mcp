@@ -274,6 +274,7 @@ async function syncParents(): Promise<SyncParent[]> {
     parentId: id,
     session: context,
     loggedIn: () => context.hasLogin(),
+    ...(process.env.AULA_MCP_MARK_READ === '0' ? {} : { queued: context }),
   }));
 }
 

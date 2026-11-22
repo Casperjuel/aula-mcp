@@ -22,7 +22,9 @@ export function registerSyncTools(server: McpServer, sync: ParentSync): void {
         'stands, one entry per job: when it last ran and succeeded, when it runs next, ' +
         'whether the last run failed and why, and how many items it fetched and changed. ' +
         `Jobs: ${jobList} ` +
-        'Sync only reads from Aula: it never marks anything read and never writes to Aula. ' +
+        'The sync jobs only read from Aula and never mark anything read on their own. The one ' +
+        'write, before the scheduled messages job, sends read, unread and pin changes the ' +
+        'parent made in the dashboard while Aula could not be reached (off with AULA_MCP_MARK_READ=0). ' +
         'Parents without an Aula login are skipped until they log in.',
       inputSchema: {},
     },
