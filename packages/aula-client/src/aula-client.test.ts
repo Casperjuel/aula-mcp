@@ -669,6 +669,30 @@ describe('AulaClient.addVacation', () => {
   });
 });
 
+describe('AulaClient.setThreadsRead', () => {
+  test("posts the status the way Aula's web app does", async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) }, // unread
+      { status: 200, body: envelope({}) }, // read
+    );
+    const c = makeClient(http);
+    await c.setThreadsRead([9302], false);
+    await c.setThreadsRead([9302], true);
+    expect(http.requested[2]?.url).toContain('method=messaging.updateSubscriptionStatus');
+    expect(JSON.parse(String(http.requested[2]?.body))).toEqual({
+      subscriptionIds: [9302],
+      status: 'Unread',
+    });
+    expect(JSON.parse(String(http.requested[3]?.body))).toEqual({
+      subscriptionIds: [9302],
+      status: 'Read',
+    });
+  });
+});
+
 describe('AulaClient ferie requests', () => {
   test('reads registrations by childIds[]', async () => {
     const http = new FakeHttp();
