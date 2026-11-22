@@ -137,6 +137,16 @@ describe('httpTelemetry', () => {
     expect(JSON.stringify(recorded)).not.toContain('999');
   });
 
+  test('names a request answered by a catch-all after it', async () => {
+    spans.reset();
+    const app = new Hono();
+    app.use(httpTelemetry('ui'));
+    app.use('*', async (_c, next) => next());
+    app.all('/data/*', (c) => c.json({}));
+    await app.fetch(new Request('http://t/data/items/message_thread/42'));
+    expect(spans.getFinishedSpans().map((s) => s.name)).toEqual(['GET /data/*']);
+  });
+
   test('continues the caller trace from traceparent', async () => {
     spans.reset();
     const app = new Hono();

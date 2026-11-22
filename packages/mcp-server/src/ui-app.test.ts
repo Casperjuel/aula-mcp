@@ -171,4 +171,36 @@ describe('dashboard server', () => {
     });
     expect((await app.request('/data/summary')).status).toBe(502);
   });
+
+  test('a read is tried once more when the connection drops, a change is not', async () => {
+    let calls = 0;
+    const flaky = (async () => {
+      calls++;
+      if (calls === 1) throw new Error('The connection was closed.');
+      return Response.json({ ok: true });
+    }) as unknown as typeof fetch;
+    const app = (fetchImpl: typeof fetch) =>
+      createUiApp({
+        logger: silentLogger,
+        login: {
+          mount: () => {},
+          parent: () => ({ caller: { issuer: 'https://id', sub: 'a' }, name: 'A' }),
+          sameOrigin: () => true,
+          accessToken: async () => 'tok',
+        },
+        apiUrl: 'http://api',
+        uiKey: UI_KEY,
+        fetch: fetchImpl,
+      });
+    expect((await app(flaky).request('/data/summary')).status).toBe(200);
+    expect(calls).toBe(2);
+    calls = 0;
+    const res = await app(flaky).request('/data/messages/1/read', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    });
+    expect(res.status).toBe(502);
+    expect(calls).toBe(1);
+  });
 });

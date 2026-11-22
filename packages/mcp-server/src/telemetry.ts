@@ -222,11 +222,26 @@ const headerGetter = {
   keys: (carrier: Headers) => [...carrier.keys()],
 };
 
-/** The route template that answered, e.g. `/data/messages/:id/reply`. */
+const headerSetter = {
+  set: (carrier: Headers, key: string, value: string) => carrier.set(key, value),
+};
+
+/** Adds `traceparent` for the active span, so a forwarded request joins its trace. */
+export function injectTraceContext(headers: Headers): void {
+  propagation.inject(context.active(), headers, headerSetter);
+}
+
+/**
+ * The route template that answered, e.g. `/data/messages/:id/reply`. A
+ * request answered by a catch-all (the dashboard server's `/data/*`
+ * forwarding) is named after it rather than called unmatched; middleware on
+ * `*` names nothing.
+ */
 function routeOf(c: Parameters<MiddlewareHandler>[0]): string {
-  const handler = matchedRoutes(c)
-    .filter((r) => r.method !== 'ALL')
-    .at(-1);
+  const routes = matchedRoutes(c);
+  const handler =
+    routes.filter((r) => r.method !== 'ALL').at(-1) ??
+    routes.filter((r) => r.path !== '*' && r.path !== '/*').at(-1);
   return handler?.path ?? 'unmatched';
 }
 

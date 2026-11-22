@@ -16,6 +16,7 @@ import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { isRead, toApiPath } from './api-routes.ts';
 import { DASHBOARD_ROUTES, isDashboardPath, renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
+import { injectTraceContext } from './telemetry.ts';
 
 /** Must match api.ts; kept here so the dashboard server does not load the API. */
 const UI_KEY_HEADER = 'x-aula-ui-key';
@@ -71,16 +72,25 @@ export function createUiApp(options: UiAppOptions): Hono {
       if (value) headers.set(name, value);
     }
     if (token) headers.set('authorization', `Bearer ${token}`);
+    injectTraceContext(headers);
     const target = `${apiUrl}${path}${new URL(c.req.url).search}`;
-    let res: Response;
-    try {
-      res = await fetchImpl(target, {
+    const read = isRead(c.req.method);
+    const send = () =>
+      fetchImpl(target, {
         method: c.req.method,
         headers,
-        ...(isRead(c.req.method) ? {} : { body: c.req.raw.body, duplex: 'half' }),
+        ...(read ? {} : { body: c.req.raw.body, duplex: 'half' }),
         signal: c.req.raw.signal,
         redirect: 'manual',
       } as RequestInit);
+    let res: Response;
+    try {
+      res = await send().catch((err) => {
+        // A kept-alive connection the API closed meanwhile fails the first
+        // try. A read is safe to send again; a change might have arrived.
+        if (!read || c.req.raw.signal.aborted) throw err;
+        return send();
+      });
     } catch (err) {
       logger.error('aula-mcp.ui.api_unreachable', { error: (err as Error).message });
       return c.json({ error: 'the API cannot be reached right now' }, 502);
