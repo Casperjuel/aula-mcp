@@ -58,9 +58,17 @@ interface Provider {
   keys: JWTVerifyGetKey;
 }
 
+/**
+ * Where sign-in may send the browser back to: a plain path on this site. No
+ * `//`, backslash, dot segment or query, so it can never point elsewhere.
+ */
+const RETURN_PATH = /^\/(?!\/)[A-Za-z0-9_%/-]{0,200}$/;
+
 interface Pending {
   verifier: string;
   nonce: string;
+  /** The page to return to after sign-in, a path on this site only. */
+  next: string;
   expiresAt: number;
 }
 
@@ -115,7 +123,13 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
       const state = randomToken();
       const verifier = randomToken();
       const nonce = randomToken();
-      pending.set(state, { verifier, nonce, expiresAt: now + PENDING_TTL_MS });
+      const next = c.req.query('next') ?? '';
+      pending.set(state, {
+        verifier,
+        nonce,
+        next: RETURN_PATH.test(next) ? next : '/',
+        expiresAt: now + PENDING_TTL_MS,
+      });
       setCookie(c, stateCookie, state, { ...cookieOptions, maxAge: PENDING_TTL_MS / 1000 });
 
       const url = new URL(idp.authorizationEndpoint);
@@ -193,7 +207,7 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
         expiresAt: Date.now() + SESSION_TTL_MS,
       });
       setCookie(c, sessionCookie, id, { ...cookieOptions, maxAge: SESSION_TTL_MS / 1000 });
-      return c.redirect(`${publicUrl}/`, 303);
+      return c.redirect(`${publicUrl}${entry.next}`, 303);
     });
 
     app.post('/auth/logout', async (c) => {

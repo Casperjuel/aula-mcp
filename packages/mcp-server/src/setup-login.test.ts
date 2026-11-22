@@ -197,8 +197,18 @@ const claimsFor =
 
 /** Runs the whole sign-in and returns the session cookie header. */
 async function signIn(app: App, sub: string, extra: Record<string, unknown> = {}): Promise<string> {
+  return (await signInFrom(app, '/auth/login', sub, extra)).cookie;
+}
+
+/** Signs in starting at `loginPath`; also returns where the callback sent the browser. */
+async function signInFrom(
+  app: App,
+  loginPath: string,
+  sub: string,
+  extra: Record<string, unknown> = {},
+): Promise<{ cookie: string; landing: string | null }> {
   idTokenClaims = claimsFor(sub, extra);
-  const start = await app.request('/auth/login');
+  const start = await app.request(loginPath);
   const location = new URL(start.headers.get('location') ?? '');
   nonce = location.searchParams.get('nonce') ?? '';
   const state = location.searchParams.get('state') ?? '';
@@ -207,7 +217,10 @@ async function signIn(app: App, sub: string, extra: Record<string, unknown> = {}
     headers: { cookie: `__Host-aula-setup-state=${stateCookie}` },
   });
   expect(callback.status).toBe(303);
-  return `__Host-aula-setup=${cookiesFrom(callback)['__Host-aula-setup']}`;
+  return {
+    cookie: `__Host-aula-setup=${cookiesFrom(callback)['__Host-aula-setup']}`,
+    landing: callback.headers.get('location'),
+  };
 }
 
 describe('setup UI sign-in', () => {
@@ -226,6 +239,31 @@ describe('setup UI sign-in', () => {
     expect(location.searchParams.get('redirect_uri')).toBe(`${PUBLIC_URL}/auth/callback`);
     expect(location.searchParams.get('code_challenge_method')).toBe('S256');
     expect(start.headers.getSetCookie().join()).toContain('HttpOnly');
+  });
+
+  test('a page link survives sign-in, but only as a path on this site', async () => {
+    const { app } = setup();
+    const page = await app.request('/galleri/42');
+    expect(page.status).toBe(302);
+    expect(page.headers.get('location')).toBe('/auth/login?next=%2Fgalleri%2F42');
+    expect((await app.request('/nowhere')).status).toBe(401);
+
+    const back = await signInFrom(app, page.headers.get('location') ?? '', 'parent-a');
+    expect(back.landing).toBe(`${PUBLIC_URL}/galleri/42`);
+    const shown = await app.request('/galleri/42', { headers: { cookie: back.cookie } });
+    expect(shown.status).toBe(200);
+    expect(await shown.text()).toContain('<base href="../">');
+
+    for (const next of [
+      '//evil.example/x',
+      'https://evil.example/',
+      '/\\evil.example',
+      '/a/../b',
+      '/a?x=1',
+    ]) {
+      const out = await signInFrom(app, `/auth/login?next=${encodeURIComponent(next)}`, 'parent-a');
+      expect(out.landing).toBe(`${PUBLIC_URL}/`);
+    }
   });
 
   test('signs in with PKCE and the client secret, then shows the parent their own status', async () => {

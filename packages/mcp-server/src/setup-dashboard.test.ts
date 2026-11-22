@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Logger, StoredTokenRecord, TokenStore } from '@aula-mcp/aula-auth';
 import { GalleryFiles, GalleryView } from './gallery.ts';
-import { renderDashboard } from './setup-dashboard.ts';
+import { DASHBOARD_VIEWS, isDashboardPath, renderDashboard } from './setup-dashboard.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { createStorage, type ParentStorage, type Storage } from './storage.ts';
 import { sqliteDriver } from './storage-sql.ts';
@@ -223,6 +223,30 @@ describe('dashboard page', () => {
     for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g)) {
       expect(() => new Function(script ?? '')).not.toThrow();
     }
+  });
+
+  test('serves each view at its own path, with a base back to the root', () => {
+    expect(renderDashboard()).toContain('<base href="./">');
+    expect(renderDashboard(undefined, '/log')).toContain('<base href="./">');
+    expect(renderDashboard(undefined, '/galleri/opslag/p1')).toContain('<base href="../../">');
+    for (const view of DASHBOARD_VIEWS) {
+      expect(isDashboardPath(`/${view}`)).toBe(true);
+      if (view !== 'slet') expect(renderDashboard()).toContain(`id: '${view}'`);
+    }
+    for (const path of ['/', '/data', '/galleri/7', '/galleri/opslag/abc']) {
+      expect(isDashboardPath(path)).toBe(true);
+    }
+    for (const path of [
+      '/status',
+      '/data/summary',
+      '/galleri/x',
+      '/log/',
+      '/logx',
+      '/auth/login',
+    ]) {
+      expect(isDashboardPath(path)).toBe(false);
+    }
+    expect(renderDashboard()).not.toContain('location.hash =');
   });
 
   test('has the Galleri page instead of a placeholder', () => {

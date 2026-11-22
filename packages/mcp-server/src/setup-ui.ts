@@ -88,7 +88,7 @@ import {
 } from './local-data.ts';
 import type { SharedView } from './local-tools.ts';
 import { type Caller, callerId } from './oidc.ts';
-import { renderDashboard } from './setup-dashboard.ts';
+import { DASHBOARD_ROUTES, isDashboardPath, renderDashboard } from './setup-dashboard.ts';
 import type { SetupLogin } from './setup-login.ts';
 import {
   AUDIT_CATEGORIES,
@@ -273,7 +273,6 @@ interface LoginSession {
 }
 
 /** HTML pages of the setup UI, as opposed to its JSON endpoints. */
-const PAGES = new Set(['/', '/data']);
 
 export const ICON_SVG = `<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 3 1 9l11 6 9-4.91V17h2V9z"/></svg>`;
 
@@ -330,7 +329,10 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     app.use('*', async (c, next) => {
       if (!parents.login.parent(c)) {
         // Pages send the browser to sign in; API calls just get a 401.
-        if (c.req.method === 'GET' && PAGES.has(c.req.path)) return c.redirect('/auth/login', 302);
+        if (c.req.method === 'GET' && isDashboardPath(c.req.path)) {
+          const next = c.req.path === '/' ? '' : `?next=${encodeURIComponent(c.req.path)}`;
+          return c.redirect(`/auth/login${next}`, 302);
+        }
         return c.json({ error: 'not signed in' }, 401);
       }
       if (c.req.method !== 'GET' && !parents.login.sameOrigin(c)) {
@@ -364,9 +366,10 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     });
   }
 
-  // One page for both; /data is where the old "Mine data" page lived.
-  app.get('/', (c) => c.html(renderDashboard(parentOf(c)?.name)));
-  app.get('/data', (c) => c.html(renderDashboard(parentOf(c)?.name)));
+  // One page for every view; the page's script picks the view from the path.
+  for (const route of DASHBOARD_ROUTES) {
+    app.get(route, (c) => c.html(renderDashboard(parentOf(c)?.name, c.req.path)));
+  }
 
   app.get('/status', async (c) => c.json(await loginStatus(storeOf(c))));
 

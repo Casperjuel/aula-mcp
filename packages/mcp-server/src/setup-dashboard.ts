@@ -1,5 +1,5 @@
 /**
- * The setup UI's dashboard: one inline page with hash routes for the
+ * The setup UI's dashboard: one inline page, served at a path per view, for the
  * overview, the parent's stored data, sync jobs, tools, the live Aula view
  * and deleting data. It holds no data itself; every number and item comes
  * from the parent's own /data/* JSON routes in setup-ui.ts.
@@ -11,8 +11,47 @@
  *
  * Plain JS with no build step and nothing loaded from elsewhere, so it works
  * inside the HA addon and behind its ingress. Relative URLs throughout, as
- * the ingress serves the page under a path prefix.
+ * the ingress serves the page under a path prefix; a relative <base> points
+ * them at the page's root whichever view's path it was opened at.
  */
+
+/** The views with a path of their own. The page's script lists the same ids. */
+export const DASHBOARD_VIEWS = [
+  'oversigt',
+  'gennemse',
+  'kalender',
+  'sync',
+  'log',
+  'galleri',
+  'vaerktoejer',
+  'live',
+  'deling',
+  'gemt',
+  'slet',
+] as const;
+
+/** Route templates for every page path; /data is where "Mine data" once lived. */
+export const DASHBOARD_ROUTES = [
+  '/',
+  '/data',
+  `/:view{(?:${DASHBOARD_VIEWS.join('|')})}`,
+  '/galleri/:album{-?[0-9]+}',
+  '/galleri/opslag/:post',
+] as const;
+
+const PAGE_PATH = new RegExp(
+  `^/(?:data|${DASHBOARD_VIEWS.join('|')}|galleri/-?[0-9]+|galleri/opslag/[^/]+)?$`,
+);
+
+export function isDashboardPath(path: string): boolean {
+  return PAGE_PATH.test(path);
+}
+
+/** `./` at the root, one `../` per level below it. */
+function baseHref(path: string): string {
+  const depth = (path.match(/\//g)?.length ?? 1) - 1;
+  return depth > 0 ? '../'.repeat(depth) : './';
+}
 
 // setup-ui.ts imports this file, so it keeps its own escape and no import back.
 function escapeHtml(value: string): string {
@@ -22,8 +61,11 @@ function escapeHtml(value: string): string {
   );
 }
 
-/** `signedInAs` is set in multi-parent mode, for the name and sign-out. */
-export function renderDashboard(signedInAs?: string): string {
+/**
+ * `signedInAs` is set in multi-parent mode, for the name and sign-out. `path`
+ * is the page path the request came in on, which sets the <base>.
+ */
+export function renderDashboard(signedInAs?: string, path = '/'): string {
   const name = signedInAs ? escapeHtml(signedInAs) : '';
   const who = signedInAs
     ? `<div class="who"><div class="avatar" aria-hidden="true">${escapeHtml(initials(signedInAs))}</div><div><strong>${name}</strong><div class="muted small">Logget ind via login-udbyderen</div></div></div>
@@ -36,6 +78,7 @@ export function renderDashboard(signedInAs?: string): string {
 <html lang="da">
 <head>
 <meta charset="utf-8">
+<base href="${baseHref(path)}">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>aula-mcp dashboard</title>
 <script>try { const t = localStorage.getItem('aulamcp-theme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}</script>
@@ -907,8 +950,24 @@ const main = $('main');
 function visibleViews() {
   return VIEWS.filter((v) => (v.id !== 'deling' || (state.share && state.share.available)) && (!state.owner || SHARED_VIEWS.includes(v.id)));
 }
+// Each view has its own path below the page's <base>, so the ingress prefix
+// never shows up here. Old #view links are moved onto their path.
+const BASE = new URL(document.baseURI).pathname;
+function routePath() {
+  const p = location.pathname;
+  return p.startsWith(BASE) ? p.slice(BASE.length).replace(/[/]+$/, '') : '';
+}
+function navigate(path) {
+  const url = new URL(path, document.baseURI);
+  if (url.pathname !== location.pathname) history.pushState(null, '', url.pathname);
+  route();
+}
+if (/^#[a-z]+([/][^#?]*)?$/.test(location.hash)) {
+  history.replaceState(null, '', new URL(location.hash.slice(1), document.baseURI).pathname);
+}
+window.addEventListener('popstate', route);
 function current() {
-  const h = location.hash.slice(1).split('/')[0];
+  const h = routePath().split('/')[0];
   if (state.owner) return SHARED_VIEWS.includes(h) ? h : 'gennemse';
   if (h === 'slet') return 'gemt';
   return VIEWS.some((v) => v.id === h) ? h : 'oversigt';
@@ -929,7 +988,7 @@ function sharedBanner() {
     el('p', {}, el('strong', {}, 'Du ser det, ' + name + ' deler med dig. '), 'Kun læse, og kun det, du ikke selv har, fx beskeder sendt til ' + name + ' alene.'),
     el('div', { class: 'banner-actions' }, el('button', { class: 'btn btn-sm', onclick: () => setOwner('') }, 'Tilbage til mine data')));
 }
-function go(id) { if (location.hash.slice(1) === id) route(); else location.hash = id; }
+function go(id) { navigate(id === 'oversigt' ? './' : id); }
 function navButton(v, cur, cls) {
   const count = v.id === 'gennemse' && database() ? el('span', { class: 'count' }, fmt(totalCount()))
     : v.id === 'sync' && state.summary && !loggedIn() ? el('span', { class: 'count', style: 'color:var(--warn)' }, 'venter') : null;
@@ -956,11 +1015,10 @@ function route() {
   if (cur === 'galleri' || cur === 'gemt') state.gallery.stale = true;
   renderNav(cur);
   fill(main, el('div', { class: 'view' }, sharedBanner(), R[cur]()));
-  if (location.hash === '#slet' && $('sletData')) $('sletData').scrollIntoView();
+  if (routePath() === 'slet' && $('sletData')) $('sletData').scrollIntoView();
   else if (window.innerWidth < 900) window.scrollTo(0, 0);
 }
 function rerender(view) { if (current() === view) { renderNav(view); fill(main, el('div', { class: 'view' }, sharedBanner(), R[view]())); } }
-window.addEventListener('hashchange', route);
 
 const head = (title, lede, action) => el('div', { class: 'view-head' },
   el('div', {}, el('h1', {}, title), lede ? el('p', { class: 'lede' }, lede) : null), action || null);
@@ -2254,7 +2312,7 @@ function openStored(kind, id, k) {
 }
 function openMedia(media) {
   state.gallery.focus = media.mediaId;
-  location.hash = 'galleri/' + media.albumId;
+  navigate('galleri/' + media.albumId);
 }
 /** The day's messages, photos, posts and notifications, for the list under the month. */
 async function loadDayItems(c, k, kinds) {
@@ -2728,13 +2786,13 @@ function dayText(ymd) {
   const [y, m, d] = String(ymd || '').split('-').map(Number);
   return y && m && d ? d + '. ' + MON[m - 1] + ' ' + y : 'Uden dato';
 }
-function postInHash() {
-  const parts = location.hash.slice(1).split('/');
+function postInPath() {
+  const parts = routePath().split('/');
   return parts[1] === 'opslag' && parts[2] ? decodeURIComponent(parts[2]) : null;
 }
 function postAlbumCard(p) {
   const cover = p.media.find((m) => isPicture(m.mediaType));
-  return el('button', { class: 'album', onclick: () => { location.hash = 'galleri/opslag/' + encodeURIComponent(p.postId); } },
+  return el('button', { class: 'album', onclick: () => navigate('galleri/opslag/' + encodeURIComponent(p.postId)) },
     el('span', { class: 'album-cover' }, cover ? lazyImg(attachUrl('post', p.postId, cover.index), 'image') : coverEmpty('image')),
     el('span', { class: 'album-title' }, p.title),
     el('span', { class: 'album-sub' }, (p.date ? dayText(p.date) : 'Uden dato') + (p.author ? ' · ' + p.author : '')),
@@ -2742,7 +2800,7 @@ function postAlbumCard(p) {
 }
 function postAlbumView(id) {
   const g = state.gallery;
-  const back = el('div', {}, el('button', { class: 'btn btn-sm', onclick: () => { location.hash = 'galleri'; } }, icon('left'), 'Alle album'));
+  const back = el('div', {}, el('button', { class: 'btn btn-sm', onclick: () => navigate('galleri') }, icon('left'), 'Alle album'));
   if ((g.stale || (!g.data && !g.error)) && !g.loading) loadGallery();
   if (!g.data) return [back, skeleton()];
   const p = (g.data.posts || []).find((x) => x.postId === id);
@@ -2758,8 +2816,8 @@ function postAlbumView(id) {
     attachMedia('post', p.postId, p.media) || el('section', { class: 'panel empty' }, el('p', {}, 'Ingen billeder, browseren kan vise.')),
   ];
 }
-function albumInHash() {
-  const part = location.hash.slice(1).split('/')[1];
+function albumInPath() {
+  const part = routePath().split('/')[1];
   const id = Number(part);
   return part && Number.isSafeInteger(id) ? id : null;
 }
@@ -2870,7 +2928,7 @@ function downloadPanel(st) {
 }
 function albumCard(a) {
   const missing = a.mediaCount - a.downloaded;
-  return el('button', { class: 'album', onclick: () => { location.hash = 'galleri/' + a.id; } },
+  return el('button', { class: 'album', onclick: () => navigate('galleri/' + a.id) },
     el('span', { class: 'album-cover' },
       a.coverMediaId !== null && a.coverMediaId !== undefined ? lazyImg(mediaUrl('thumb', a.id, a.coverMediaId)) : coverEmpty(),
       missing > 0 ? el('span', { class: 'dl-badge' }, fmt(missing) + ' venter') : null),
@@ -2881,9 +2939,9 @@ function albumCard(a) {
 R.galleri = () => {
   const g = state.gallery;
   if (state.summary && !database()) return [head('Galleri', GALLERY_LEDE), galleryOff()];
-  const postId = postInHash();
+  const postId = postInPath();
   if (postId !== null) return postAlbumView(postId);
-  const albumId = albumInHash();
+  const albumId = albumInPath();
   if (albumId !== null) return albumView(albumId);
   if ((g.stale || (!g.data && !g.error)) && !g.loading) loadGallery();
   const top = head('Galleri', state.owner ? 'Album og billeder, som ' + ownerName() + ' har, og som du ikke selv har.' : GALLERY_LEDE, g.data && !state.owner ? runGallery() : null);
@@ -2931,7 +2989,7 @@ R.galleri = () => {
 function albumView(id) {
   const g = state.gallery;
   if ((g.stale || g.albumFor !== id) && !g.albumLoading) loadAlbum(id);
-  const back = el('div', {}, el('button', { class: 'btn btn-sm', onclick: () => { location.hash = 'galleri'; } }, icon('left'), 'Alle album'));
+  const back = el('div', {}, el('button', { class: 'btn btn-sm', onclick: () => navigate('galleri') }, icon('left'), 'Alle album'));
   if (g.albumFor === id && g.albumError && !g.album) {
     return [back, head('Album'), g.albumError.status === 404
       ? el('section', { class: 'panel empty' }, el('p', {}, el('strong', {}, 'Albummet findes ikke her.')), el('p', { class: 'small' }, 'Det er måske slettet fra Aula, eller linket er forkert.'))
@@ -3060,7 +3118,7 @@ function askGalleryDelete(album) {
         state.gallery.stale = true;
         state.gallery.albumFor = null;
         await loadSummary();
-        if (albumInHash() !== null) location.hash = 'galleri'; else route();
+        if (albumInPath() !== null) navigate('galleri'); else route();
       } catch (err) { toast('Kunne ikke slette: ' + err.message); }
     },
   });
