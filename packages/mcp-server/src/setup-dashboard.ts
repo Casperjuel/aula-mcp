@@ -252,6 +252,7 @@ main {
 .pill.err { background: var(--err-soft); color: var(--err); }
 .pill.neutral { background: var(--surface-2); color: var(--muted); }
 .pill.run { background: var(--accent-soft); color: var(--accent); }
+.li-title .pill.important { padding: 0 8px; margin-right: 6px; font-size: .72rem; vertical-align: 1px; }
 .pill.run::before { animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
 .tag.files { display: inline-flex; align-items: center; gap: 4px; }
@@ -1408,12 +1409,14 @@ function syncPill() {
   if (s.jobs.every((j) => j.ok === null)) return el('span', { class: 'pill neutral' }, 'Ikke kørt endnu');
   return el('span', { class: 'pill ok' }, 'Alt ok');
 }
+/** Aula's "Vigtig" mark on a post. */
+const importantPill = (it) => (it.important ? el('span', { class: 'pill err important' }, 'Vigtig') : null);
 function itemRow(item, onclick) {
   const k = kindOf(item.kind);
   return el('button', { class: 'li', onclick },
     typeDot(item.kind),
     el('span', { style: 'min-width:0;display:block' },
-      el('span', { class: 'li-title', style: 'display:block' }, item.unread ? el('span', { class: 'unread-dot' }, '● ') : null, item.title),
+      el('span', { class: 'li-title', style: 'display:block' }, item.unread ? el('span', { class: 'unread-dot' }, '● ') : null, importantPill(item), item.title),
       el('span', { class: 'li-sub', style: 'display:block' }, [k.one, item.subtitle].filter(Boolean).join(' · '))),
     el('span', { class: 'result-date' }, rel(item.occurredAt || item.updatedAt)));
 }
@@ -1597,7 +1600,7 @@ function renderResults() {
     return el('button', { class: 'result', 'aria-current': String(b.sel === key), onclick: () => selectItem(key) },
       typeDot(it.kind),
       el('span', { style: 'min-width:0;display:block' },
-        el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, it.unread ? el('span', { class: 'unread-dot' }, '● ') : null, it.title), el('span', { class: 'result-date' }, rel(it.occurredAt || it.updatedAt))),
+        el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, it.unread ? el('span', { class: 'unread-dot' }, '● ') : null, importantPill(it), it.title), el('span', { class: 'result-date' }, rel(it.occurredAt || it.updatedAt))),
         it.subtitle ? el('span', { class: 'li-sub', style: 'display:block' }, it.subtitle) : null,
         el('span', { class: 'result-foot' }, el('span', { class: 'tag' }, kindOf(it.kind).one), roleBadge(it.senderRole), fileTags(it.files))));
   });
@@ -1697,7 +1700,7 @@ function renderDetail() {
     back,
     el('p', { class: 'eyebrow' }, k.one),
     el('h2', { style: 'font-size:1.35rem;margin-top:4px;overflow-wrap:anywhere' }, it.title),
-    el('div', { class: 'detail-meta' }, it.subtitle ? el('span', {}, it.subtitle) : null, roleBadge(it.senderRole), el('span', {}, longDate(it.occurredAt || it.updatedAt))),
+    el('div', { class: 'detail-meta' }, importantPill(it), it.subtitle ? el('span', {}, it.subtitle) : null, roleBadge(it.senderRole), el('span', {}, longDate(it.occurredAt || it.updatedAt))),
     it.fields.length ? el('dl', { class: 'kv' }, it.fields.map(([key, value]) => [el('dt', {}, key), el('dd', {}, value)])) : null,
     it.body ? el('p', { class: 'pre', style: 'max-width:65ch' }, it.body) : null,
     attachMedia(it.kind, it.id, it.attachments),
@@ -2071,7 +2074,7 @@ function dayItemList(c, k, act) {
       : el('div', { class: 'list' }, list.map((it) => el('button', { class: 'result day-item', onclick: () => openStored(it.kind, it.id, k) },
         typeDot(it.kind),
         el('span', { style: 'min-width:0;display:block' },
-          el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, it.title), el('span', { class: 'result-date' }, clock(it.occurredAt))),
+          el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, importantPill(it), it.title), el('span', { class: 'result-date' }, clock(it.occurredAt))),
           it.subtitle ? el('span', { class: 'li-sub', style: 'display:block' }, it.subtitle) : null))));
     return el('div', { class: 'day-group' },
       el('h3', { class: 'day-group-head' }, icon(kindOf(kind).icon), label, el('span', { class: 'muted small num' }, fmt(n))),

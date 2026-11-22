@@ -74,6 +74,8 @@ describe('senderRole', () => {
       'guardian',
     );
     expect(summarize(item('post', {})).senderRole).toBeUndefined();
+    expect(summarize(item('post', { isImportant: true })).important).toBe(true);
+    expect('important' in summarize(item('post', { isImportant: false }))).toBe(false);
     expect(threadMessage(item('message', { sender: sender('child') })).role).toBe('child');
   });
 });

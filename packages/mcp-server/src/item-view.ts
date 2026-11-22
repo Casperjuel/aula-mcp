@@ -20,6 +20,8 @@ export interface ItemSummary {
   subtitle: string;
   /** A message thread not read in Aula. */
   unread?: boolean;
+  /** A post Aula marks as important ("Vigtig" in Aula's overview). */
+  important?: boolean;
   /** Who wrote a message, or the latest message in a thread. */
   senderRole?: SenderRole;
   /** What the calendar page needs to place and badge an event. */
@@ -141,6 +143,7 @@ export function summarize(item: StoredItem): ItemSummary {
         ]
           .filter(Boolean)
           .join(' · '),
+        ...(d.isImportant === true ? { important: true } : {}),
         ...fileCounts(d),
       };
     case 'calendar_event': {
