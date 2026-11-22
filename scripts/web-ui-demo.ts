@@ -290,6 +290,12 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
     maria: { fullName: PARENT, portalRole: 'guardian' },
     sofie: { fullName: 'Sofie Madsen', portalRole: 'guardian' },
   };
+  // Made-up mailbox ids for the new-message form.
+  const mailbox = (who: keyof typeof people) => ({
+    id: 7000 + Object.keys(people).indexOf(who),
+    mailBoxOwnerType: 'institutionProfile',
+    portalRole: people[who].portalRole,
+  });
   const threads: Array<{
     id: number;
     subject: string;
@@ -366,6 +372,12 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
         subscriptionId: t.id + 9000,
         latestMessage: { id: `${t.id * 10 + t.messages.length - 1}` },
         lastMessage: { sender: people[last[0]] },
+        institutionCode: '280001',
+        mailBoxOwner: mailbox('maria'),
+        recipients: [...new Set(t.messages.map(([who]) => who))].map((who) => ({
+          fullName: people[who].fullName,
+          mailBoxOwner: mailbox(who),
+        })),
       },
     });
     t.messages.forEach(([who, daysAgo, text], i) => {
@@ -669,6 +681,39 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
     setThreadsRead: async () => ({}),
     setThreadsMarked: async () => ({}),
     replyToThread: async () => ({}),
+    startNewThread: async () => ({}),
+    findRecipients: async (text: string) => ({
+      results: [
+        {
+          id: 7101,
+          profileId: 8101,
+          name: 'Hanne Bech',
+          portalRole: 'employee',
+          institutionCode: '280001',
+          institutionName: 'Skovbakke Skole',
+          docType: 'Profile',
+        },
+        {
+          id: 7102,
+          profileId: 8102,
+          name: 'Jonas Bak',
+          portalRole: 'employee',
+          institutionCode: '280001',
+          institutionName: 'Skovbakke Skole',
+          docType: 'Profile',
+        },
+        {
+          id: 7103,
+          profileId: 8103,
+          name: 'Henrik Nør',
+          portalRole: 'guardian',
+          institutionCode: '280001',
+          institutionName: 'Skovbakke Skole',
+          description: 'Far til Ida',
+          docType: 'Profile',
+        },
+      ].filter((r) => r.name.toLowerCase().includes(text.toLowerCase())),
+    }),
     getProfilesByLogin: async () => ({
       profiles: [
         {

@@ -256,6 +256,18 @@ main {
 .pill.flag svg { width: 12px; height: 12px; }
 .pill.pinned::before { display: none; }
 .thread-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
+.compose { display: grid; gap: 12px; }
+.compose .field { display: grid; gap: 4px; }
+.compose textarea { min-height: 160px; resize: vertical; font: inherit; }
+.to-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.to-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 4px 3px 10px; font-size: .85rem; background: var(--surface-2); }
+.to-chip button { border: 0; background: none; cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 1rem; line-height: 1; }
+.hits { display: grid; gap: 2px; max-height: 260px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.hits:empty { display: none; }
+.hit { display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 0; background: none; padding: 7px 8px; border-radius: 6px; cursor: pointer; color: var(--ink); font: inherit; }
+.hit:hover, .hit:focus-visible { background: var(--surface-2); }
+.hit[disabled] { opacity: .5; cursor: not-allowed; }
+.hit-group { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: 6px 8px 2px; }
 .reply { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 4px; display: grid; gap: 8px; }
 .reply textarea { min-height: 96px; resize: vertical; font: inherit; }
 .reply-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -1561,7 +1573,7 @@ async function loadResults(append) {
 }
 async function loadDetail() {
   const b = state.browse;
-  if (!b.sel) { renderDetail(); return; }
+  if (!b.sel || b.sel === 'compose') { renderDetail(); return; }
   const sel = b.sel;
   b.detail = null;
   renderDetail();
@@ -1578,6 +1590,113 @@ async function loadDetail() {
   if (!d || !d.canChange || state.owner) return;
   if (kind === 'message_thread' && d.item.unread) changeThread(d.item.id, 'read', { auto: true });
   if (kind === 'message' && d.thread && d.thread.unread) changeThread(d.thread.id, 'read', { auto: true });
+}
+/** A new message: recipients from recent threads or an Aula search, then a confirm. */
+function openCompose() {
+  const b = state.browse;
+  b.compose = b.compose || { to: [], subject: '', text: '', q: '', hits: [], contacts: null, institutions: [] };
+  b.sel = 'compose'; b.detail = null;
+  renderResults(); renderDetail();
+  if (window.innerWidth < 1100) window.scrollTo(0, $('browse').offsetTop - 80);
+  if (!b.compose.contacts) {
+    getJson('data/messages/contacts').then((d) => {
+      b.compose.contacts = d.contacts || []; b.compose.institutions = d.institutions || [];
+      if (b.sel === 'compose') renderDetail();
+    }).catch((err) => { b.compose.contacts = []; b.compose.loadError = err.message; if (b.sel === 'compose') renderDetail(); });
+  }
+}
+function composeBox() {
+  const c = state.browse.compose;
+  // A thread is started from your own mailbox at one school, so every
+  // recipient must belong to the same one. With one school it is that one.
+  const instOf = (x) => x.institutionCode || (c.institutions.length === 1 ? c.institutions[0] : null);
+  const chosenInst = () => (c.to.length ? instOf(c.to[0]) : null);
+  const canPick = (x) => instOf(x) && c.institutions.includes(instOf(x)) && (!chosenInst() || instOf(x) === chosenInst());
+  const chips = el('div', { class: 'to-chips', 'aria-live': 'polite' });
+  const hits = el('div', { class: 'hits', role: 'listbox', 'aria-label': 'Forslag' });
+  const send = el('button', { class: 'btn btn-primary' }, icon('mail'), 'Send besked');
+  const status = el('p', { class: 'muted small' });
+  const describe = (x) => [roleOne(x.role), x.note, x.institutionName].filter(Boolean).join(' · ');
+  const update = () => { send.disabled = !(c.to.length && c.subject.trim() && c.text.trim()); };
+  const drawChips = () => {
+    fill(chips, c.to.map((x) => el('span', { class: 'to-chip' }, x.name,
+      el('button', { 'aria-label': 'Fjern ' + x.name, onclick: () => { c.to = c.to.filter((y) => y.key !== x.key); drawChips(); drawHits(); update(); } }, '×'))));
+  };
+  const hit = (x) => el('button', { class: 'hit', role: 'option', disabled: canPick(x) ? null : true,
+    title: canPick(x) ? null : 'En ny besked går til én skole ad gangen.',
+    onclick: () => { if (!canPick(x) || c.to.some((y) => y.key === x.key)) return; c.to.push(x); c.q = ''; $('toSearch').value = ''; c.hits = []; drawChips(); drawHits(); update(); $('toSearch').focus(); } },
+    el('span', {}, el('strong', {}, x.name)), el('span', { class: 'muted small' }, describe(x)));
+  const drawHits = () => {
+    const q = c.q.trim().toLowerCase();
+    if (!q) { fill(hits); status.textContent = ''; return; }
+    const taken = new Set(c.to.map((x) => x.key));
+    const recent = (c.contacts || []).filter((x) => !taken.has(x.key) && x.name.toLowerCase().includes(q)).slice(0, 8);
+    const keys = new Set(recent.map((x) => x.key));
+    const found = c.hits.filter((x) => !taken.has(x.key) && !keys.has(x.key));
+    fill(hits,
+      recent.length ? [el('div', { class: 'hit-group' }, 'Fra dine tråde'), recent.map(hit)] : null,
+      found.length ? [el('div', { class: 'hit-group' }, 'Fra Aula'), found.map(hit)] : null);
+    status.textContent = c.searching ? 'Søger i Aula…' : c.searchError ? 'Søgning i Aula fejlede: ' + c.searchError
+      : !recent.length && !found.length && q.length >= 2 ? 'Ingen fundet.' : '';
+  };
+  let timer;
+  const search = el('input', { class: 'input', id: 'toSearch', type: 'search', autocomplete: 'off', placeholder: 'Skriv et navn…', value: c.q,
+    oninput: (e) => {
+      c.q = e.target.value; c.searchError = null; drawHits();
+      clearTimeout(timer);
+      const q = c.q.trim();
+      if (q.length < 2) { c.hits = []; return; }
+      timer = setTimeout(async () => {
+        c.searching = true; drawHits();
+        try {
+          const d = await getJson('data/messages/recipients?q=' + encodeURIComponent(q));
+          if (c.q.trim() === q) c.hits = d.contacts || [];
+        } catch (err) { c.searchError = err.message; }
+        c.searching = false; if (state.browse.sel === 'compose') drawHits();
+      }, 400);
+    } });
+  const subject = el('input', { class: 'input', id: 'composeSubject', maxlength: '200', value: c.subject, oninput: (e) => { c.subject = e.target.value; update(); } });
+  const text = el('textarea', { class: 'input', id: 'composeText', maxlength: '5000', placeholder: 'Skriv din besked…', oninput: (e) => { c.text = e.target.value; update(); } });
+  text.value = c.text;
+  send.onclick = () => {
+    const inst = chosenInst();
+    confirmDialog({
+      icon: 'mail',
+      title: 'Send ny besked i Aula?',
+      ok: 'Send besked',
+      body: [
+        el('p', {}, 'Beskeden sendes til ' + (c.to.length === 1 ? '1 modtager' : c.to.length + ' modtagere') + '. Den kan ikke trækkes tilbage.'),
+        el('ul', { class: 'small' }, c.to.map((x) => el('li', {}, el('strong', {}, x.name), describe(x) ? ' · ' + describe(x) : ''))),
+        el('p', {}, el('strong', {}, 'Emne: '), c.subject.trim()),
+        el('p', { class: 'pre reply-preview' }, c.text.trim()),
+        el('p', { class: 'muted small' }, 'Det står i din log under Handlinger i Aula, uden modtagere og tekst.'),
+      ],
+      onok: async () => {
+        send.disabled = true;
+        try {
+          await postJson('data/messages/new', { subject: c.subject.trim(), text: c.text.trim(), institutionCode: inst, recipients: c.to.map((x) => x.mailbox) });
+          state.browse.compose = null; state.browse.sel = null;
+          renderResults(); renderDetail();
+          toast('Beskeden er sendt i Aula. Den kommer i listen ved næste synkronisering.');
+          postJson('data/sync/run', { jobs: ['messages'] }).catch(() => {});
+        } catch (err) {
+          update();
+          toast('Kunne ikke sende beskeden: ' + err.message);
+        }
+      },
+    });
+  };
+  queueMicrotask(() => { drawChips(); drawHits(); update(); });
+  return el('div', { class: 'compose' },
+    el('p', { class: 'eyebrow' }, 'Ny besked'),
+    el('h2', { style: 'font-size:1.35rem;margin-top:-6px' }, 'Skriv en ny besked'),
+    c.contacts === null ? el('p', { class: 'muted small' }, 'Henter dine kontakter…') : null,
+    c.loadError ? el('p', { class: 'error-text' }, 'Kunne ikke hente kontakter: ' + c.loadError) : null,
+    c.contacts && !c.institutions.length ? el('p', { class: 'error-text' }, 'Synkronisér beskeder først, så aula-mcp kender din postkasse i Aula.') : null,
+    el('div', { class: 'field' }, el('label', { for: 'toSearch' }, el('strong', {}, 'Til')), chips, search, hits, status),
+    el('div', { class: 'field' }, el('label', { for: 'composeSubject' }, el('strong', {}, 'Emne')), subject),
+    el('div', { class: 'field' }, el('label', { for: 'composeText' }, el('strong', {}, 'Besked')), text),
+    el('div', { class: 'reply-foot' }, el('span', { class: 'muted small' }, 'Du ser hele beskeden, før den sendes.'), send));
 }
 /** Writing a reply under the open thread; the draft survives re-renders. */
 function replyBox(it) {
@@ -1666,7 +1785,9 @@ R.gennemse = () => {
     el('section', { class: 'panel filters' },
       el('div', { class: 'filter-row' },
         el('div', { class: 'field' }, el('label', { for: 'q' }, 'Søg'), search),
-        el('div', { class: 'field' }, el('label', { for: 'frange' }, 'Dato'), range)),
+        el('div', { class: 'field' }, el('label', { for: 'frange' }, 'Dato'), range),
+        state.owner ? null : el('div', { class: 'field', style: 'align-self:end' },
+          el('button', { class: 'btn btn-primary', id: 'newMsg', onclick: () => openCompose() }, icon('mail'), 'Ny besked'))),
       el('div', { class: 'chips', role: 'group', 'aria-label': 'Type' },
         chip('', 'Alle', totalCount()), kinds.map((k) => chip(k, KINDS[k].label, countOf(k)))),
       el('div', { class: 'chips', id: 'roleChips', role: 'group', 'aria-label': 'Afsender', hidden: true })),
@@ -1781,6 +1902,7 @@ function renderDetail() {
     return;
   }
   const back = el('button', { class: 'btn btn-sm back-btn', onclick: () => { b.sel = null; b.detail = null; renderResults(); renderDetail(); } }, icon('left'), 'Tilbage til listen');
+  if (b.sel === 'compose') { fill(box, back, composeBox()); return; }
   if (!b.detail) { fill(box, back, skeleton()); return; }
   if (b.detail.error) { fill(box, back, el('p', { class: 'error-text' }, 'Kunne ikke hente: ' + b.detail.error)); return; }
   const it = b.detail.item;

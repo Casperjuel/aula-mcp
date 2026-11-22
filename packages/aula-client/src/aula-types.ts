@@ -572,6 +572,34 @@ export interface MessageThread {
   latestMessage?: { id?: string; sendDateTime?: string };
 }
 
+/** A mailbox as Aula names one in a thread's `recipients[].mailBoxOwner`. */
+export interface MailBoxOwner {
+  id: number;
+  mailBoxOwnerType: string;
+  profileId?: number;
+  portalRole?: string;
+  isDeactivated?: boolean;
+}
+
+/** One hit from `search.findRecipients`. Profiles carry `id` (the
+ *  institution profile id) and `profileId`; groups have other fields. */
+export interface RecipientSearchItem {
+  docId?: string;
+  docType?: string;
+  id?: number;
+  profileId?: number;
+  name?: string;
+  portalRole?: string;
+  institutionCode?: string;
+  institutionName?: string;
+  description?: string;
+}
+
+export interface RecipientSearchData {
+  totalHits?: number;
+  results?: RecipientSearchItem[];
+}
+
 export interface ThreadsData {
   threads: MessageThread[];
   /** Echo of the requested page. */

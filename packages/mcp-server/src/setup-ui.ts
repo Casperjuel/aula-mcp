@@ -72,6 +72,7 @@ import {
   vacationProblems,
   vacationRequests,
 } from './child-actions.ts';
+import { contactsFrom, contactsFromSearch, mailboxOf } from './compose.ts';
 import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
 import { detail, SENDER_ROLES, type SenderRole, summarize } from './item-view.ts';
@@ -1005,6 +1006,102 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     await auditOf(c)?.({
       category: 'aula',
       action: 'reply',
+      ok: true,
+      durationMs: Date.now() - started,
+      details,
+    });
+    return c.json({ ok: true });
+  });
+
+  // New messages. Only for the parent's own inbox: a shared view never gets a
+  // contact list, a search or a send. Contacts come from the stored threads;
+  // the send starts from the parent's own mailbox at that institution.
+  const ownThreads = async (c: Context) => {
+    if (sharedViews.has(c.req.raw)) return null;
+    const store = options.myData?.storage?.forParent(parentOf(c)?.caller ?? null);
+    if (!store) return null;
+    return contactsFrom(await store.list({ kind: 'message_thread', limit: 2000 }));
+  };
+
+  app.get('/data/messages/contacts', async (c) => {
+    const threads = await ownThreads(c);
+    if (!threads) return c.json({ error: 'local storage is off' }, 404);
+    return c.json({
+      contacts: threads.contacts.slice(0, 500),
+      institutions: [...threads.own.keys()],
+      canSend: threads.own.size > 0,
+    });
+  });
+
+  // A read from Aula: who matches the text. Nothing is stored or audited.
+  app.get('/data/messages/recipients', async (c) => {
+    if (sharedViews.has(c.req.raw)) return c.json({ error: 'not in a shared view' }, 403);
+    const q = (c.req.query('q') ?? '').trim();
+    if (q.length < 2 || q.length > 60)
+      return c.json({ error: 'q must be 2 to 60 characters' }, 400);
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    try {
+      await options.myData?.contextFor(parentOf(c)?.caller ?? null).getGuardianUserId();
+      const found = await client.findRecipients(q, 20);
+      return c.json({ contacts: contactsFromSearch(found.results) });
+    } catch (err) {
+      return aulaFailed(c, 'search recipients', err);
+    }
+  });
+
+  // Starts a thread, written and confirmed by the parent in the page. It
+  // cannot be recalled. The audit keeps counts only: how many recipients and
+  // how long the text is, never who or what.
+  app.post('/data/messages/new', async (c) => {
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const subject = typeof body.subject === 'string' ? body.subject.trim() : '';
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (!subject || subject.length > 200) {
+      return c.json({ error: 'subject must be 1 to 200 characters' }, 400);
+    }
+    if (!text || text.length > 5000)
+      return c.json({ error: 'text must be 1 to 5000 characters' }, 400);
+    const raw = Array.isArray(body.recipients) ? body.recipients : [];
+    const recipients = raw.map(mailboxOf);
+    if (recipients.length === 0 || recipients.length > 50 || recipients.some((r) => !r)) {
+      return c.json({ error: 'recipients must be 1 to 50 Aula mailboxes' }, 400);
+    }
+    const institution = typeof body.institutionCode === 'string' ? body.institutionCode : '';
+    const threads = await ownThreads(c);
+    if (!threads) return c.json({ error: 'local storage is off' }, 404);
+    const creator =
+      threads.own.get(institution) ??
+      (!institution && threads.own.size === 1 ? [...threads.own.values()][0] : undefined);
+    if (!creator) {
+      return c.json({ error: 'no mailbox of yours at that institution; sync messages first' }, 409);
+    }
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const started = Date.now();
+    const details = { recipients: recipients.length, characters: text.length };
+    try {
+      await options.myData?.contextFor(parentOf(c)?.caller ?? null).getGuardianUserId();
+      await client.startNewThread({
+        subject,
+        html: plainTextToHtml(text),
+        recipients: recipients as NonNullable<(typeof recipients)[number]>[],
+        creator,
+      });
+    } catch (err) {
+      await auditOf(c)?.({
+        category: 'aula',
+        action: 'new_thread',
+        ok: false,
+        durationMs: Date.now() - started,
+        details: { ...details, error: (err as Error).message.slice(0, 300) },
+      });
+      return aulaFailed(c, 'new message', err);
+    }
+    await auditOf(c)?.({
+      category: 'aula',
+      action: 'new_thread',
       ok: true,
       durationMs: Date.now() - started,
       details,

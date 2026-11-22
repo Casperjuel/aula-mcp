@@ -36,11 +36,13 @@ import type {
   GetCalendarEventsArgs,
   GetPostsArgs,
   GetPresenceTemplatesArgs,
+  MailBoxOwner,
   MessageThread,
   PostsData,
   PresenceTemplatesData,
   ProfileContextData,
   ProfilesByLoginData,
+  RecipientSearchData,
   ThreadMessage,
   ThreadMessagesData,
   ThreadsData,
@@ -687,6 +689,48 @@ export class AulaClient {
         message: { text: html, attachmentIds: [] },
         commonInboxId: null,
         bundleId: null,
+      }),
+    );
+  }
+
+  /**
+   * `search.findRecipients` — look up people who can get a message, the
+   * search behind "Til" in Aula's new-message form. Only `text`, `limit` and
+   * `instCode` are known query parameters. Endpoint and shape from the
+   * reverse-engineered app (eisbaw/aulalibre); not verified against a live
+   * account.
+   */
+  async findRecipients(text: string, limit = 20): Promise<RecipientSearchData> {
+    return this.getJson<RecipientSearchData>('search.findRecipients', {
+      text,
+      limit: String(limit),
+    });
+  }
+
+  /**
+   * `messaging.startNewThread` — start a new thread in the guardian's personal
+   * inbox. Recipients and `creator` are mailboxes in the shape a thread's
+   * `recipients[].mailBoxOwner` has; `creator` is the guardian's own mailbox
+   * at the recipients' institution. `html` is the body as Aula stores it.
+   * Request shape from the reverse-engineered app (eisbaw/aulalibre,
+   * StartNewThreadRequestArguments); not verified against a live account.
+   */
+  async startNewThread(args: {
+    subject: string;
+    html: string;
+    recipients: MailBoxOwner[];
+    creator: MailBoxOwner;
+    sensitive?: boolean;
+  }): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.startNewThread',
+      JSON.stringify({
+        message: { text: args.html, attachmentIds: [] },
+        subject: args.subject,
+        recipients: args.recipients,
+        bccRecipients: [],
+        sensitive: args.sensitive ?? false,
+        creator: args.creator,
       }),
     );
   }
