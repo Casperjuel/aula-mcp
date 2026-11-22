@@ -30,7 +30,10 @@ export class AulaStepUpRequiredError extends AulaClientError {
  * the message and sub code, cut short and reduced to plain characters. These
  * are Aula's error texts, not mailbox content. When Aula gives no message,
  * the body's shape is named instead (field names, Aula's own status code,
- * length), never its values.
+ * length), never its values. A body that is not JSON comes from the web
+ * server in front of the API, not from a mailbox, so its words are kept, cut
+ * short: an HTML page's title (or text), with long tokens such as a JWT
+ * removed in case the page echoes the request URL.
  */
 export function aulaReason(body: string | undefined): string {
   if (!body) return 'empty body';
@@ -38,7 +41,8 @@ export function aulaReason(body: string | undefined): string {
   try {
     parsed = JSON.parse(body);
   } catch {
-    return `not JSON, ${body.length} characters`;
+    const text = errorPageText(body);
+    return `not JSON, ${body.length} characters${text ? `: ${text}` : ''}`;
   }
   const keys = (v: unknown) =>
     v && typeof v === 'object' && !Array.isArray(v)
@@ -66,6 +70,17 @@ export function aulaReason(body: string | undefined): string {
   if (reason) return reason;
   const code = typeof status.code === 'number' ? `code ${status.code}; ` : '';
   return `no message; ${code}status fields ${keys(status)}; fields ${keys(parsed)}`;
+}
+
+/** The gist of a web server's error page, plain characters only. */
+function errorPageText(body: string): string {
+  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1];
+  return (title ?? body.replace(/<[^>]*>/g, ' '))
+    .replace(/[A-Za-z0-9_.~+/=-]{25,}/g, ' ')
+    .replace(/[^\p{L}\p{N} .,:;_()'-]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
 }
 
 /** Catch-all for non-2xx responses that aren't otherwise typed. */
