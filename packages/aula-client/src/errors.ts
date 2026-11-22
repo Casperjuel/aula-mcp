@@ -25,6 +25,34 @@ export class AulaStepUpRequiredError extends AulaClientError {
   override readonly name: string = 'AulaStepUpRequiredError';
 }
 
+/**
+ * Aula's own reason for a failed call, from the `status` of its JSON envelope:
+ * the message and sub code, cut short and reduced to plain characters. These
+ * are Aula's error texts, not mailbox content. Empty when the body is not
+ * such an envelope.
+ */
+export function aulaReason(body: string | undefined): string {
+  if (!body) return '';
+  let status: Record<string, unknown> | undefined;
+  try {
+    status = (JSON.parse(body) as { status?: Record<string, unknown> })?.status;
+  } catch {
+    return '';
+  }
+  if (!status || typeof status !== 'object') return '';
+  const clean = (v: unknown) =>
+    typeof v === 'string' || typeof v === 'number'
+      ? String(v)
+          .replace(/[^\p{L}\p{N} .,:;_()'-]/gu, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 120)
+      : '';
+  return [clean(status.message), status.subCode != null ? `subCode ${clean(status.subCode)}` : '']
+    .filter(Boolean)
+    .join(', ');
+}
+
 /** Catch-all for non-2xx responses that aren't otherwise typed. */
 export class AulaApiError extends AulaClientError {
   override readonly name: string = 'AulaApiError';

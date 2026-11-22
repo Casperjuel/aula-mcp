@@ -59,6 +59,7 @@ import {
   AulaApiVersionError,
   AulaClientError,
   AulaStepUpRequiredError,
+  aulaReason,
 } from './errors.ts';
 import { postWebUrl, threadWebUrl } from './web-urls.ts';
 
@@ -851,7 +852,13 @@ export class AulaClient {
       return this.parseEnvelope<T>(await send(newVersion), send);
     }
     if (status !== 200) {
-      throw new AulaApiError(`API returned status ${status}`, status, url, body.slice(0, 300));
+      const reason = aulaReason(body);
+      throw new AulaApiError(
+        `API returned status ${status}${reason ? ` (Aula: ${reason})` : ''}`,
+        status,
+        url,
+        body.slice(0, 300),
+      );
     }
     const env = JSON.parse(body) as AulaEnvelope<T>;
     if (env.status?.code && env.status.code !== 0) {
