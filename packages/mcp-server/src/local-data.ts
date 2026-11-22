@@ -5,6 +5,7 @@
  * stored data is encrypted, so the filters run here and not in SQL.
  */
 
+import { threadMessageItems } from './attachments.ts';
 import { type SenderRole, searchText, senderRole, threadMessage } from './item-view.ts';
 import type { ItemKind, ParentStorage, StoredItem } from './storage.ts';
 
@@ -160,7 +161,5 @@ export async function activityByDay(
 
 /** The stored messages of a thread, oldest first. */
 export async function threadMessages(store: ParentStorage, threadId: string) {
-  return (await store.list({ kind: 'message', idPrefix: `${threadId}:`, limit: 500 }))
-    .reverse()
-    .map(threadMessage);
+  return (await threadMessageItems(store, threadId)).map(threadMessage);
 }

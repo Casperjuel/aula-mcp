@@ -17,7 +17,7 @@ threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With
 | [`aula.gallery.media`](#aulagallerymedia) | read | Media in an album |
 | [`aula.gallery.thumbnail`](#aulagallerythumbnail) | read | Show a thumbnail |
 | [`aula.gallery.post_albums`](#aulagallerypost_albums) | read | Photos from posts |
-| [`aula.gallery.attachment`](#aulagalleryattachment) | read | Show a saved attachment |
+| [`aula.gallery.attachment`](#aulagalleryattachment) | read | Open a kept attachment |
 | [`aula.local.overview`](#aulalocaloverview) | read | What is stored locally |
 | [`aula.local.search`](#aulalocalsearch) | read | Search stored Aula data |
 | [`aula.local.get`](#aulalocalget) | read | One stored item in full |
@@ -142,15 +142,15 @@ Posts (opslag) with photos or videos attached, newest first, each shown as an al
 
 ## `aula.gallery.attachment`
 
-**Show a saved attachment** · read
+**Open a kept attachment** · read
 
-One saved attachment of a stored post or message. A photo (JPEG, PNG, GIF, WebP, up to 5 MB) comes back as an image and a text file as text; anything else (PDF, Word, video) comes back as its name, type and size only, to open in the dashboard. Take `kind` and `id` from aula.local.search, and `index` from the attachments aula.local.get lists (0 is the first). The posts and messages sync save attachments while their Aula links are fresh; answers with an error when no copy is saved. For a file that was never saved use aula.posts.get_attachment or aula.messages.get_attachment, which ask Aula.
+The bytes of one attachment of a stored post, message or message thread, from the local store only: never calls Aula. A photo (JPEG, PNG, GIF, WebP) comes back as image content; any other file (PDF, Word, video, text) as an embedded resource with the bytes base64 in `blob`. A second text part carries name, mediaType and bytes. Files over 10 MB answer with an error; open those in the dashboard. Take `kind` and `id` from aula.local.search, and `index` from the attachments aula.local.get lists (0 is the first): for kind "message_thread" the index counts across all messages of the thread, for "message" (id "<thread>:<message>") within that message. Only attachments aula.local.get marks `kept` can be opened; the posts and messages sync keep them while their Aula links are fresh. For a file that was never kept use aula.posts.get_attachment or aula.messages.get_attachment, which ask Aula.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
-| `kind` | string | yes | post or message. |
+| `kind` | string | yes | post, message or message_thread. |
 | `id` | string | yes | Id from aula.local.search. |
-| `index` | integer | yes | Attachment number, 0 first. |
+| `index` | integer | yes | Attachment index from aula.local.get, 0 first. |
 
 ## `aula.local.overview`
 
@@ -180,7 +180,7 @@ Search the caller's own Aula data in the local database, newest first. Every fil
 
 **One stored item in full** · read
 
-One item from the local database as the parent would read it: Danish title, the text as plain text (HTML removed), labelled fields (for a calendar event: type, start, end, place, who made it, invited, response) and the attachments (index, name, type, size; open a saved one with aula.gallery.attachment). A message_thread comes with all its stored messages, oldest first, each with sender, time, text and sender role. Set `raw` for Aula's own JSON as it was stored. Take `kind` and `id` from aula.local.search. Never calls Aula and never marks anything read.
+One item from the local database as the parent would read it: Danish title, the text as plain text (HTML removed), labelled fields (for a calendar event: type, start, end, place, who made it, invited, response) and the attachments of a post or message: `index`, `name`, `mediaType`, `size` (bytes, null when unknown) and `kept` (a copy is in the local store; open it with aula.gallery.attachment, which never calls Aula). A message_thread comes with all its stored messages, oldest first, each with id, sender, time, text, sender role and its attachments; a thread numbers its files across all its messages (index 0 is the first file of the oldest message), each with the `messageId` it belongs to, and opens them with kind "message_thread". The thread's own `attachments` list is empty. Set `raw` for Aula's own JSON as it was stored. Take `kind` and `id` from aula.local.search. Never calls Aula and never marks anything read.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -506,7 +506,7 @@ Read a PDF from a local absolute path — typically one returned by aula.posts.g
 
 **Mark a message thread as read** · write (`on unless AULA_MCP_MARK_READ=0`)
 
-Move the read marker in a thread to its newest message, clearing the unread badge in Aula. WRITES to Aula (only your own read state) — on by default, off when AULA_MCP_MARK_READ=0. Pass `messageId` from `aula.messages.list_threads` (thread.latestMessage.id); omit it to mark the thread read up to whatever its newest message is right now. Undo with `aula.messages.mark_unread`. Only call this for threads the user has actually seen.
+Move the read marker in a thread to its newest message, clearing the unread badge in Aula. WRITES to Aula (only your own read state) — on by default, off when AULA_MCP_MARK_READ=0. Pass `messageId` from `aula.messages.list_threads` (thread.latestMessage.id); omit it to mark the thread read up to its newest stored message (what aula.local.get shows), or, for a thread not stored, its newest message in Aula right now. The stored thread is marked read too, so aula.local.search agrees at once. Undo with `aula.messages.mark_unread`. Only call this for threads the user has actually seen.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |
@@ -517,7 +517,7 @@ Move the read marker in a thread to its newest message, clearing the unread badg
 
 **Mark a message thread as unread** · write (`on unless AULA_MCP_MARK_READ=0`)
 
-Set a thread back to unread in Aula, the same as "Markér som ulæst" there, so its unread badge returns. WRITES to Aula (only your own read state) — on by default, off when AULA_MCP_MARK_READ=0. Undo with `aula.messages.mark_read`. Pass `subscriptionId` from `aula.messages.list_threads` (thread.subscriptionId — not the thread id); omit it to look it up from the newest threads.
+Set a thread back to unread in Aula, the same as "Markér som ulæst" there, so its unread badge returns. WRITES to Aula (only your own read state) — on by default, off when AULA_MCP_MARK_READ=0. Undo with `aula.messages.mark_read`. Pass `subscriptionId` from `aula.messages.list_threads` (thread.subscriptionId — not the thread id); omit it to take it from the stored thread, or to look it up among the newest threads in Aula when not stored. The stored thread is marked unread too, so aula.local.search agrees at once.
 
 | Parameter | Type | Required | Description |
 | --- | --- | --- | --- |

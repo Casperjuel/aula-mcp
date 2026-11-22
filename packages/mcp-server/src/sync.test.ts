@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AulaApiError, AulaStepUpRequiredError, type CalendarEvent } from '@aula-mcp/aula-client';
+import { GalleryFiles } from './gallery.ts';
 import { createStorage, type Storage } from './storage.ts';
 import { sqliteDriver } from './storage-sql.ts';
 import {
@@ -113,6 +117,62 @@ describe('messages job', () => {
       skipped: 1,
     });
     expect(await storage.forParent('p').get('message_thread', '9')).toBeNull();
+  });
+});
+
+describe('messages job keeps the files', () => {
+  test('reads an unchanged thread again only while a file of it is not kept', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'aula-sync-files-'));
+    try {
+      let refuse = true;
+      const downloads: string[] = [];
+      const files = new GalleryFiles(
+        { dir, downloads: true, stopAt: 1 },
+        {
+          fetch: (async (url: string) => {
+            downloads.push(String(url));
+            return refuse ? new Response(null, { status: 403 }) : new Response('pdf');
+          }) as typeof fetch,
+        },
+      );
+      const client = fakeClient({
+        getThreadsPage: async () => ({
+          threads: [{ id: 3, read: true, latestMessage: { id: 'm1' } }],
+          page: 0,
+          hasMorePages: false,
+        }),
+        getMessagesForThread: async () =>
+          ({
+            messages: [
+              {
+                id: 'm1',
+                sendDateTime: '2026-11-19T08:00:00Z',
+                attachments: [
+                  { file: { name: 'brev.pdf', url: 'https://media-prod.aula.dk/file/b?s=1' } },
+                ],
+              },
+            ],
+          }) as never,
+      });
+      const run = (firstRun: boolean) =>
+        SYNC_JOB_RUNNERS.messages({ ...input(client, firstRun), gallery: files.forParent('p') });
+
+      await run(true);
+      expect(downloads).toHaveLength(1);
+      // The download failed: the next run reads the thread again for a fresh link.
+      refuse = false;
+      client.calls.length = 0;
+      await run(false);
+      expect(client.calls).toEqual(['getThreadsPage', 'getMessagesForThread']);
+      expect(await files.forParent('p').exists('attachments/message/3_3Am1/0.pdf')).toBe(true);
+      // Kept now: nothing more to read.
+      client.calls.length = 0;
+      await run(false);
+      expect(client.calls).toEqual(['getThreadsPage']);
+      expect(downloads).toHaveLength(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

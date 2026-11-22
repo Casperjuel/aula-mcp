@@ -11,9 +11,16 @@
 
 import { extname } from 'node:path';
 import type { ParentGallery } from './gallery.ts';
-import type { ItemInput, ParentStorage } from './storage.ts';
+import type { ItemInput, ParentStorage, StoredItem } from './storage.ts';
 
+/** The kinds whose files are saved, and the folder they are saved under. */
 export type AttachmentKind = 'post' | 'message';
+
+/**
+ * The kinds a saved file can be opened by. A thread's files are those of its
+ * messages, numbered across the thread (threadAttachmentFiles).
+ */
+export type OpenableKind = AttachmentKind | 'message_thread';
 
 export interface AttachmentFile {
   index: number;
@@ -32,6 +39,19 @@ export interface AttachmentView {
   size: number | null;
   /** Whether a copy is saved and can be opened. */
   saved?: boolean;
+}
+
+/** What aula.local.get lists for one attachment: no link, and whether a copy is kept. */
+export interface LocalAttachment {
+  /** For a thread numbered across all its messages, oldest first; what the file tool takes. */
+  index: number;
+  name: string;
+  mediaType: string;
+  size: number | null;
+  /** The bytes are in the local store, so the file tool can return them. */
+  kept: boolean;
+  /** For a thread: the stored id of the message the file is attached to. */
+  messageId?: string;
 }
 
 /** Most files one item may carry. */
@@ -158,6 +178,90 @@ export async function saveAttachments(
   return { saved, failed };
 }
 
+/**
+ * The stored messages of a thread, oldest first: by when they were sent,
+ * then by id, so the order (and the numbering of the thread's files) stays
+ * the same from one read to the next.
+ */
+export async function threadMessageItems(
+  store: ParentStorage,
+  threadId: string,
+): Promise<StoredItem[]> {
+  const rows = await store.list({ kind: 'message', idPrefix: `${threadId}:`, limit: 500 });
+  return rows.sort(
+    (a, b) =>
+      (a.occurredAt ?? -Infinity) - (b.occurredAt ?? -Infinity) ||
+      (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+}
+
+/**
+ * A thread's files, numbered across its messages in the order given (oldest
+ * first). A new message only adds numbers at the end.
+ */
+export function threadAttachmentFiles(
+  messages: StoredItem[],
+): Array<{ index: number; messageId: string; file: AttachmentFile }> {
+  let index = 0;
+  return messages.flatMap((m) =>
+    attachmentFiles(m.data).map((file) => ({ index: index++, messageId: m.id, file })),
+  );
+}
+
+/** A post's or message's files as aula.local.get lists them. */
+export async function keptAttachments(
+  files: ParentGallery | null,
+  kind: AttachmentKind,
+  id: string,
+  data: unknown,
+): Promise<LocalAttachment[]> {
+  return Promise.all(
+    attachmentFiles(data).map(async ({ url: _url, ...view }) => ({
+      ...view,
+      kept: files ? await files.exists(attachmentRel(kind, id, view as AttachmentFile)) : false,
+    })),
+  );
+}
+
+/** A thread's files as aula.local.get lists them, each with its message. */
+export async function keptThreadAttachments(
+  files: ParentGallery | null,
+  messages: StoredItem[],
+): Promise<LocalAttachment[]> {
+  return Promise.all(
+    threadAttachmentFiles(messages).map(async ({ index, messageId, file }) => ({
+      index,
+      name: file.name,
+      mediaType: file.mediaType,
+      size: file.size,
+      kept: files ? await files.exists(attachmentRel('message', messageId, file)) : false,
+      messageId,
+    })),
+  );
+}
+
+/**
+ * Whether a stored thread has a file the sync could keep but has not: one
+ * Aula gave a link for that is not saved. False while downloads are off or
+ * the volume is at its limit, so the sync does not read the thread for nothing.
+ */
+export async function unkeptThreadFiles(
+  files: ParentGallery,
+  store: ParentStorage,
+  threadId: string,
+): Promise<boolean> {
+  if (!files.config.downloads) return false;
+  const candidates = threadAttachmentFiles(await threadMessageItems(store, threadId)).filter(
+    (f) => f.file.url,
+  );
+  if (!candidates.length) return false;
+  if (((await files.disk())?.used ?? 0) >= files.config.stopAt) return false;
+  for (const { messageId, file } of candidates) {
+    if (!(await files.exists(attachmentRel('message', messageId, file)))) return true;
+  }
+  return false;
+}
+
 /** The views of a stored item, each marked saved or not. */
 export async function storedAttachments(
   store: ParentStorage,
@@ -175,18 +279,30 @@ export async function storedAttachments(
   );
 }
 
-/** One saved file, for the dashboard; null when there is no copy. */
+/**
+ * One saved file, for the dashboard and aula.gallery.attachment; null when
+ * there is no copy. Reads the local store only, never Aula. For a thread,
+ * `index` counts across its messages (threadAttachmentFiles).
+ */
 export async function openAttachment(
   store: ParentStorage,
   files: ParentGallery,
-  kind: AttachmentKind,
+  kind: OpenableKind,
   id: string,
   index: number,
 ) {
-  const item = await store.get(kind, id);
-  const file = item ? attachmentFiles(item.data)[index] : undefined;
-  if (!file) return null;
-  const opened = await files.open(attachmentRel(kind, id, file));
+  let found: { kind: AttachmentKind; id: string; file: AttachmentFile } | undefined;
+  if (kind === 'message_thread') {
+    const hit = threadAttachmentFiles(await threadMessageItems(store, id))[index];
+    if (hit) found = { kind: 'message', id: hit.messageId, file: hit.file };
+  } else {
+    const item = await store.get(kind, id);
+    const file = item ? attachmentFiles(item.data)[index] : undefined;
+    if (file) found = { kind, id, file };
+  }
+  if (!found) return null;
+  const { file } = found;
+  const opened = await files.open(attachmentRel(found.kind, found.id, file));
   return opened ? { ...opened, name: file.name, mediaType: file.mediaType } : null;
 }
 

@@ -36,6 +36,7 @@ import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
 import { registerGalleryTools } from './gallery-tools.ts';
 import { registerLocalTools, type SharedAccess } from './local-tools.ts';
+import { withSent } from './queued-thread-changes.ts';
 import { registerSessionStatusTool } from './session-status.ts';
 import type { AuditDetails, FeedStatus, ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
@@ -413,7 +414,9 @@ export function registerTools(
   registerSessionStatusTool(server, context);
   if (extras.sync) registerSyncTools(server, extras.sync);
   if (extras.gallery) registerGalleryTools(server, extras.gallery, extras.shared);
-  if (extras.local) registerLocalTools(server, extras.local, extras.shared, extras.feedStatus);
+  if (extras.local) {
+    registerLocalTools(server, extras.local, extras.shared, extras.feedStatus, extras.gallery);
+  }
 
   // --- aula.discover -------------------------------------------------------
 
@@ -611,12 +614,21 @@ export function registerTools(
           `(~${pagesRead * 20} threads), or carries no ${what}. Pass ${what} explicitly ` +
           '— aula.messages.list_threads returns it on the thread.',
       });
+    /** The thread as the last sync stored it, or null. */
+    const storedThread = async (threadId: number): Promise<Record<string, unknown> | null> => {
+      const stored = await extras.local?.get('message_thread', String(threadId));
+      return stored && typeof stored.data === 'object' && stored.data !== null
+        ? (stored.data as Record<string, unknown>)
+        : null;
+    };
+    // The stored thread follows Aula, and a change the dashboard queued for
+    // the same flag is done with, so aula.local.search shows it at once.
     const storeRead = async (threadId: number, read: boolean) => {
       const local = extras.local;
       if (!local) return;
       const stored = await local.get('message_thread', String(threadId));
       if (!stored || typeof stored.data !== 'object' || stored.data === null) return;
-      await local.put([{ ...stored, data: { ...(stored.data as object), read } }]);
+      await local.put([{ ...stored, data: withSent(stored.data, { read }) }]);
     };
 
     server.registerTool(
@@ -627,9 +639,11 @@ export function registerTools(
           'Move the read marker in a thread to its newest message, clearing the unread ' +
           'badge in Aula. WRITES to Aula (only your own read state) — on by default, off ' +
           'when AULA_MCP_MARK_READ=0. Pass `messageId` from `aula.messages.list_threads` ' +
-          '(thread.latestMessage.id); omit it to mark the thread read up to whatever its ' +
-          'newest message is right now. Undo with `aula.messages.mark_unread`. Only call ' +
-          'this for threads the user has actually seen.',
+          '(thread.latestMessage.id); omit it to mark the thread read up to its newest ' +
+          'stored message (what aula.local.get shows), or, for a thread not stored, its ' +
+          'newest message in Aula right now. The stored thread is marked read too, so ' +
+          'aula.local.search agrees at once. Undo with `aula.messages.mark_unread`. Only ' +
+          'call this for threads the user has actually seen.',
         inputSchema: {
           threadId: z
             .number()
@@ -653,6 +667,10 @@ export function registerTools(
         await context.getGuardianUserId();
 
         let messageId = args.messageId;
+        const storedLatest = (await storedThread(args.threadId))?.latestMessage as
+          | { id?: unknown }
+          | undefined;
+        if (!messageId && storedLatest?.id != null) messageId = String(storedLatest.id);
         if (!messageId) {
           const { thread, pagesRead } = await findThread(client, args.threadId);
           if (thread?.latestMessage?.id == null) {
@@ -679,8 +697,9 @@ export function registerTools(
           'its unread badge returns. WRITES to Aula (only your own read state) — on by ' +
           'default, off when AULA_MCP_MARK_READ=0. Undo with `aula.messages.mark_read`. ' +
           'Pass `subscriptionId` from `aula.messages.list_threads` ' +
-          '(thread.subscriptionId — not the thread id); omit it to look it up from the ' +
-          'newest threads.',
+          '(thread.subscriptionId — not the thread id); omit it to take it from the stored ' +
+          'thread, or to look it up among the newest threads in Aula when not stored. The ' +
+          'stored thread is marked unread too, so aula.local.search agrees at once.',
         inputSchema: {
           threadId: z
             .number()
@@ -703,6 +722,10 @@ export function registerTools(
         await context.getGuardianUserId();
 
         let subscriptionId = args.subscriptionId;
+        const storedSubscription = (await storedThread(args.threadId))?.subscriptionId;
+        if (subscriptionId === undefined && typeof storedSubscription === 'number') {
+          subscriptionId = storedSubscription;
+        }
         if (subscriptionId === undefined) {
           const { thread, pagesRead } = await findThread(client, args.threadId);
           if (thread?.subscriptionId == null) {

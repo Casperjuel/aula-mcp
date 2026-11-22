@@ -11,16 +11,16 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { keptAttachments, keptThreadAttachments, threadMessageItems } from './attachments.ts';
 import { addDays, startOfDayCopenhagen } from './calendar-range.ts';
 import type { GalleryView } from './gallery.ts';
-import { detail, type ItemSummary, summarize } from './item-view.ts';
+import { detail, type ItemSummary, summarize, threadMessage } from './item-view.ts';
 import {
   ACTIVITY_KINDS,
   ACTIVITY_MAX_DAYS,
   activityByDay,
   roleCounts,
   searchItems,
-  threadMessages,
 } from './local-data.ts';
 import {
   AUDIT_CATEGORIES,
@@ -88,12 +88,17 @@ export function registerLocalTools(
   shared?: SharedAccess,
   /** The caller's calendar feed link: whether it exists, never the link itself. */
   feedStatus?: () => Promise<FeedStatus | null>,
+  /** The caller's own gallery, to tell which attachments are kept. */
+  gallery?: GalleryView,
 ): void {
   const owner = ownerArg(shared);
   const sharedNote = shared ? ` ${OWNER_TEXT}` : '';
   /** The caller's own store, or the shared view `args.owner` asks for. */
   const storeFor = async (args: { owner?: string | undefined }): Promise<ParentStorage | null> =>
     args.owner ? ((await shared?.open(args.owner))?.store ?? null) : own;
+  /** The gallery files that go with storeFor's store; null when none are kept. */
+  const filesFor = async (args: { owner?: string | undefined }) =>
+    (args.owner ? (await shared?.open(args.owner))?.gallery : gallery)?.files ?? null;
 
   if (shared) {
     server.registerTool(
@@ -222,11 +227,16 @@ export function registerLocalTools(
         'One item from the local database as the parent would read it: Danish title, ' +
         'the text as plain text (HTML removed), labelled fields (for a calendar event: ' +
         'type, start, end, place, who made it, invited, response) and the attachments ' +
-        '(index, name, type, size; open a saved one with aula.gallery.attachment). ' +
+        'of a post or message: `index`, `name`, `mediaType`, `size` (bytes, null when ' +
+        'unknown) and `kept` (a copy is in the local store; open it with ' +
+        'aula.gallery.attachment, which never calls Aula). ' +
         'A message_thread comes with all its stored messages, oldest first, each with ' +
-        "sender, time, text and sender role. Set `raw` for Aula's own JSON as it was " +
-        'stored. Take `kind` and `id` from aula.local.search. Never calls Aula and never ' +
-        'marks anything read.' +
+        'id, sender, time, text, sender role and its attachments; a thread numbers its ' +
+        'files across all its messages (index 0 is the first file of the oldest message), ' +
+        'each with the `messageId` it belongs to, and opens them with kind ' +
+        '"message_thread". The thread\'s own `attachments` list is empty. Set `raw` for ' +
+        "Aula's own JSON as it was stored. Take `kind` and `id` from aula.local.search. " +
+        'Never calls Aula and never marks anything read.' +
         sharedNote,
       inputSchema: {
         kind: z.enum(ITEM_KINDS).describe('Kind from aula.local.search.'),
@@ -240,19 +250,31 @@ export function registerLocalTools(
       if (!store) return errorContent(NOT_SHARED);
       const item = await store.get(args.kind, args.id);
       if (!item) return errorContent(`No stored ${args.kind} with id ${args.id}.`);
+      const files = await filesFor(args);
       const { occurredAt, updatedAt, ...rest } = detail(item);
+      let messages: unknown[] | undefined;
+      if (item.kind === 'message_thread') {
+        const rows = await threadMessageItems(store, item.id);
+        const kept = await keptThreadAttachments(files, rows);
+        messages = rows.map((row) => {
+          const { at, ...m } = threadMessage(row);
+          return {
+            ...m,
+            at: iso(at),
+            attachments: kept.filter((a) => a.messageId === row.id),
+          };
+        });
+      }
+      const attachments =
+        item.kind === 'post' || item.kind === 'message'
+          ? await keptAttachments(files, item.kind, item.id, item.data)
+          : rest.attachments;
       return jsonContent({
         ...rest,
+        attachments,
         occurred: iso(occurredAt),
         updated: iso(updatedAt),
-        ...(args.kind === 'message_thread'
-          ? {
-              messages: (await threadMessages(store, item.id)).map(({ at, ...m }) => ({
-                ...m,
-                at: iso(at),
-              })),
-            }
-          : {}),
+        ...(messages ? { messages } : {}),
         ...(args.raw ? { raw: item.data } : {}),
       });
     },

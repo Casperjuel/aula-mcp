@@ -185,21 +185,32 @@ export function registerGalleryTools(
   server.registerTool(
     'aula.gallery.attachment',
     {
-      title: 'Show a saved attachment',
+      title: 'Open a kept attachment',
       description:
-        'One saved attachment of a stored post or message. A photo (JPEG, PNG, GIF, ' +
-        'WebP, up to 5 MB) comes back as an image and a text file as text; anything ' +
-        'else (PDF, Word, video) comes back as its name, type and size only, to open in ' +
+        'The bytes of one attachment of a stored post, message or message thread, from ' +
+        'the local store only: never calls Aula. A photo (JPEG, PNG, GIF, WebP) comes ' +
+        'back as image content; any other file (PDF, Word, video, text) as an embedded ' +
+        'resource with the bytes base64 in `blob`. A second text part carries name, ' +
+        `mediaType and bytes. Files over ${MAX_MB} MB answer with an error; open those in ` +
         'the dashboard. Take `kind` and `id` from aula.local.search, and `index` from ' +
-        'the attachments aula.local.get lists (0 is the first). The posts and messages ' +
-        'sync save attachments while their Aula links are fresh; answers with an error ' +
-        'when no copy is saved. For a file that was never saved use ' +
+        'the attachments aula.local.get lists (0 is the first): for kind ' +
+        '"message_thread" the index counts across all messages of the thread, for ' +
+        '"message" (id "<thread>:<message>") within that message. Only attachments ' +
+        'aula.local.get marks `kept` can be opened; the posts and messages sync keep ' +
+        'them while their Aula links are fresh. For a file that was never kept use ' +
         'aula.posts.get_attachment or aula.messages.get_attachment, which ask Aula.' +
         sharedNote,
       inputSchema: {
-        kind: z.enum(['post', 'message']).describe('post or message.'),
+        kind: z
+          .enum(['post', 'message', 'message_thread'])
+          .describe('post, message or message_thread.'),
         id: z.string().min(1).describe('Id from aula.local.search.'),
-        index: z.number().int().min(0).max(19).describe('Attachment number, 0 first.'),
+        index: z
+          .number()
+          .int()
+          .min(0)
+          .max(9999)
+          .describe('Attachment index from aula.local.get, 0 first.'),
         ...owner,
       },
     },
@@ -210,29 +221,52 @@ export function registerGalleryTools(
       if (!file) {
         return {
           isError: true,
-          content: [{ type: 'text' as const, text: 'No saved copy of that attachment.' }],
+          content: [{ type: 'text' as const, text: 'No kept copy of that attachment.' }],
         };
       }
       const about = { name: file.name, mediaType: file.mediaType, bytes: file.bytes };
-      const image = /^image\/(jpeg|png|gif|webp)$/.test(file.mediaType);
-      const text = file.mediaType === 'text/plain';
-      if ((!image && !text) || file.bytes > 5 * 1024 * 1024) {
+      if (file.bytes > MAX_BYTES) {
         file.stream.destroy();
-        return jsonContent({ ...about, shown: false });
+        return {
+          isError: true,
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({ ...about, error: `larger than ${MAX_MB} MB` }),
+            },
+          ],
+        };
       }
       const chunks: Buffer[] = [];
       for await (const chunk of file.stream) chunks.push(chunk as Buffer);
-      const data = Buffer.concat(chunks);
+      const data = Buffer.concat(chunks).toString('base64');
+      const image = /^image\/(jpeg|png|gif|webp)$/.test(file.mediaType);
       return {
         content: [
-          { type: 'text' as const, text: JSON.stringify(about) },
           image
-            ? { type: 'image' as const, data: data.toString('base64'), mimeType: file.mediaType }
-            : { type: 'text' as const, text: data.toString('utf8') },
+            ? { type: 'image' as const, data, mimeType: file.mediaType }
+            : {
+                type: 'resource' as const,
+                resource: {
+                  uri: attachmentUri(args.kind, args.id, args.index, file.name),
+                  mimeType: file.mediaType,
+                  blob: data,
+                },
+              },
+          { type: 'text' as const, text: JSON.stringify(about) },
         ],
       };
     },
   );
+}
+
+/** Largest attachment aula.gallery.attachment returns; base64 adds a third on top. */
+const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_MB = MAX_BYTES / 1024 / 1024;
+
+/** Names the file in an embedded resource; nothing can be fetched from it. */
+export function attachmentUri(kind: string, id: string, index: number, name: string): string {
+  return `aula://attachments/${kind}/${encodeURIComponent(id)}/${index}/${encodeURIComponent(name)}`;
 }
 
 function jsonContent(data: unknown): { content: Array<{ type: 'text'; text: string }> } {

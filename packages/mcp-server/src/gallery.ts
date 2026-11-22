@@ -36,6 +36,7 @@ import {
   type AttachmentView,
   attachmentFiles,
   attachmentRel,
+  type OpenableKind,
   openAttachment,
   removeAttachments,
   storedAttachments,
@@ -798,7 +799,8 @@ export interface PostAlbum {
 export class GalleryView {
   constructor(
     private readonly store: ParentStorage,
-    private readonly files: ParentGallery,
+    /** Where the files are; aula.local.get asks it which attachments are kept. */
+    readonly files: ParentGallery,
   ) {}
 
   private async rows() {
@@ -927,8 +929,8 @@ export class GalleryView {
     return storedAttachments(this.store, this.files, kind, id);
   }
 
-  /** One saved attachment, or null. */
-  attachment(kind: AttachmentKind, id: string, index: number) {
+  /** One saved attachment, or null. A thread's index counts across its messages. */
+  attachment(kind: OpenableKind, id: string, index: number) {
     return openAttachment(this.store, this.files, kind, id, index);
   }
 

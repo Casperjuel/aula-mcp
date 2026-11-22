@@ -25,7 +25,7 @@ import {
   AulaStepUpRequiredError,
   type CalendarEvent,
 } from '@aula-mcp/aula-client';
-import { saveAttachments } from './attachments.ts';
+import { saveAttachments, unkeptThreadFiles } from './attachments.ts';
 import { addDays, aulaTs, startOfDayCopenhagen } from './calendar-range.ts';
 import { resolveFamilyProfileIds } from './family-profiles.ts';
 import {
@@ -124,10 +124,18 @@ export type SyncJob = (input: SyncJobInput) => Promise<SyncJobResult>;
 
 // --- jobs -------------------------------------------------------------------
 
+/**
+ * Threads per run fetched again only for their files: threads stored before
+ * attachments were kept, or whose file failed to download. Bounded, so a
+ * file that keeps failing costs a few thread reads per run and no more.
+ */
+const MAX_FILE_REFETCHES = 5;
+
 const syncMessages: SyncJob = async ({ client, store, gallery, firstRun }) => {
   let fetched = 0;
   let changed = 0;
   let skipped = 0;
+  let refetches = 0;
   const maxPages = firstRun ? 10 : 3;
   for (let page = 0; page < maxPages; page++) {
     const { threads, hasMorePages } = await client.getThreadsPage({ page });
@@ -149,7 +157,16 @@ const syncMessages: SyncJob = async ({ client, store, gallery, firstRun }) => {
       if (stored && latest(stored.data) === latest(thread)) {
         // No new message; the thread itself (read flag, subject) may still change.
         changed += (await store.put([threadItem])).changed;
-        continue;
+        // Its files are fetched again only while some are not kept: the
+        // stored links have expired, a fresh read of the thread has new ones.
+        if (
+          !gallery ||
+          refetches >= MAX_FILE_REFETCHES ||
+          !(await unkeptThreadFiles(gallery, store, threadItem.id))
+        ) {
+          continue;
+        }
+        refetches++;
       }
       pageChanged = true;
       let messages: Awaited<ReturnType<SyncClient['getMessagesForThread']>>['messages'];

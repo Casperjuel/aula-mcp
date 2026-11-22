@@ -236,6 +236,34 @@ describe('aula.messages.mark_read', () => {
     expect(stored).toHaveLength(1);
   });
 
+  test('takes the ids from the stored thread, without asking Aula for them', async () => {
+    const { markRead, markUnread, calls, unread, pagesRequested, stored } = register(
+      [[{ id: 42, subscriptionId: 1, latestMessage: { id: 'aula.9' } }]],
+      [
+        {
+          kind: 'message_thread',
+          id: '42',
+          occurredAt: 1,
+          data: {
+            id: 42,
+            read: false,
+            subscriptionId: 9001,
+            latestMessage: { id: 'stored.2' },
+            // Queued from the dashboard: done with once this tool writes it.
+            pendingAula: { read: true, marked: true },
+          },
+        },
+      ],
+    );
+    expect(await markRead({ threadId: 42 })).toMatchObject({ ok: true, messageId: 'stored.2' });
+    expect(calls).toEqual([[42, 'stored.2']]);
+    expect(stored[0]?.data).toMatchObject({ read: true, pendingAula: { marked: true } });
+    expect(await markUnread({ threadId: 42 })).toMatchObject({ ok: true, subscriptionId: 9001 });
+    expect(unread).toEqual([[[9001], false]]);
+    expect(pagesRequested).toEqual([]);
+    expect(stored[0]?.data).toMatchObject({ read: false, pendingAula: { marked: true } });
+  });
+
   test('are on by default, and off with AULA_MCP_MARK_READ=0', () => {
     const seen = (env: NodeJS.ProcessEnv) => {
       const names: string[] = [];
