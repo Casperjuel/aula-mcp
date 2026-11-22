@@ -23,6 +23,8 @@
  *   AULA_MCP_RAW=1            — enable the aula.raw_request escape hatch
  *   AULA_MCP_WRITE=1          — enable write tools (aula.presence.set_template);
  *                               the server is read-only without it
+ *   AULA_MCP_MARK_READ=0      — turn off aula.messages.mark_read/mark_unread,
+ *                               which are on by default
  *   AULA_MCP_LOG=1            — verbose console logs from auth/client layers
  *   AULA_MCP_ALLOW_REMOTE=1   — allow binding to non-loopback addresses (refuses
  *                               by default; the server is single-user and any
@@ -38,29 +40,289 @@
  *   AULA_MCP_INGRESS_PORT     — if set, also boots the in-addon setup/login UI
  *                               on this port (bound to 0.0.0.0 for HA Ingress).
  *                               Default unset; the HA addon sets it to 8099.
+ *   AULA_MCP_MULTI_PARENT=1   — multi-parent mode: every request needs an OIDC
+ *                               access token and each parent gets their own
+ *                               Aula session (see server-mode.ts). Requires:
+ *   AULA_MCP_OIDC_ISSUER      — the IdP issuer URL (the tokens' `iss`)
+ *   AULA_MCP_OIDC_AUDIENCE    — the audience aula-mcp's tokens carry (`aud`)
+ *   AULA_MCP_OIDC_ACCEPT_ID_TOKEN — 1 to also accept ID tokens (kagent behind
+ *                               oauth2-proxy forwards only those). Default 0.
+ *   AULA_MCP_ANONYMOUS_TOOL_LIST=1 — answer initialize and tools/list on /mcp
+ *                               without a token (tool-listing.ts), for kagent's
+ *                               tool discovery. Every other call still needs one.
+ *   AULA_MCP_SETUP_URL        — multi-parent setup UI: the origin browsers open
+ *                               it on. Required with AULA_MCP_INGRESS_PORT.
+ *   AULA_MCP_SETUP_CLIENT_ID  — the setup UI's OIDC client; it signs each
+ *                               parent in before their Aula login. Required too.
+ *   AULA_MCP_SETUP_CLIENT_SECRET — for a confidential client. Optional.
+ *   AULA_MCP_API_PORT         — multi-parent mode: also serve the API (/api/v1,
+ *                               see api.ts) on this port. With it:
+ *   AULA_MCP_API_AUDIENCE     — the API tokens' audience (default the /mcp one)
+ *   AULA_MCP_API_WRITE_SCOPE  — scope every change needs (default aula:write;
+ *                               empty for none)
+ *   AULA_MCP_API_UI_KEY       — the dashboard server's key (ui-server.ts), which
+ *                               alone reaches the calendar feed and sharing
+ *   AULA_MCP_UI_URL           — where browsers open that dashboard
+ *   AULA_MCP_STORAGE          — local storage: sqlite (default), postgres or
+ *                               none. See storage.ts for the rest.
+ *   AULA_MCP_SYNC=0           — no background sync into local storage; see
+ *                               sync.ts.
+ *   AULA_MCP_GALLERY_DIR      — gallery downloads (default <AULA_MCP_DIR>/gallery);
+ *                               AULA_MCP_GALLERY=0 lists albums only. See gallery.ts.
+ *   AULA_MCP_OTEL=1           — OpenTelemetry over OTLP/HTTP to
+ *                               OTEL_EXPORTER_OTLP_ENDPOINT; AULA_MCP_OTEL_SIGNALS
+ *                               picks traces,metrics,logs. See telemetry.ts.
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
+import { createApiApp } from './api.ts';
 import { AulaContext } from './aula-context.ts';
-import { createMcpApp, type McpApp } from './setup.ts';
+import { GalleryFiles, GalleryView, galleryConfig } from './gallery.ts';
+import type { SharedAccess } from './local-tools.ts';
+import {
+  authenticateRequest,
+  type Caller,
+  callerId,
+  createOidcVerifier,
+  createTokenVerifier,
+  protectedResourceMetadata,
+  sameCaller,
+} from './oidc.ts';
+import { ParentContexts } from './parent-contexts.ts';
+import { resolveApi, resolveServerMode, ServerModeError } from './server-mode.ts';
+import { createMcpApp, type LoginRequired, type McpApp } from './setup.ts';
+import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
+import { openStorage, SINGLE_PARENT_ID, StorageConfigError } from './storage.ts';
+import { StorageKeyMismatchError } from './storage-copy.ts';
+import { StorageKeyError } from './storage-crypto.ts';
+import { createSyncScheduler, realSyncSchedule, type SyncParent } from './sync.ts';
+import {
+  httpTelemetry,
+  observeGauge,
+  startTelemetry,
+  telemetryConfig,
+  withTelemetryLogs,
+} from './telemetry.ts';
+import { startTokenKeepAlive } from './token-keepalive.ts';
+import { isListingRequest, serveToolListing } from './tool-listing.ts';
+import { VERSION } from './version.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
 const HOST = process.env.AULA_MCP_HOST ?? '127.0.0.1';
 
-const logger = process.env.AULA_MCP_LOG === '1' ? consoleLogger('aula-mcp') : silentLogger;
+const otel = (() => {
+  const config = telemetryConfig(process.env, VERSION);
+  return config ? startTelemetry(config) : null;
+})();
 
-assertSafeBindAddress(HOST);
+const baseLogger = process.env.AULA_MCP_LOG === '1' ? consoleLogger('aula-mcp') : silentLogger;
+const logger = otel ? withTelemetryLogs(baseLogger) : baseLogger;
 
-// One AulaContext for every session on both transports. A context owns the
-// token refresh (de-duplicated per context), the AulaClient and its caches;
-// one per session meant each session refreshed and cached on its own and
-// held its own token-file watcher.
-const aulaContext = new AulaContext({ logger });
+const mode = (() => {
+  try {
+    return resolveServerMode(process.env);
+  } catch (err) {
+    if (!(err instanceof ServerModeError)) throw err;
+    process.stderr.write(`${err.message}\n`);
+    process.exit(2);
+  }
+})();
+
+// Set only in multi-parent mode. Single-parent mode never touches it.
+const multiParent =
+  mode.kind === 'multi-parent'
+    ? {
+        oidc: mode.oidc,
+        setupLogin: mode.setupLogin,
+        verify: createOidcVerifier(mode.oidc),
+        contexts: new ParentContexts({
+          logger,
+          loginHint: mode.setupLogin
+            ? `Log in to Aula again at ${mode.setupLogin.publicUrl}, then ask again.`
+            : 'Ask whoever runs aula-mcp to log you in to Aula again.',
+        }),
+      }
+    : null;
+
+const keepAliveEnabled = process.env.AULA_MCP_KEEPALIVE !== '0';
+
+// Local storage (sqlite by default). A bad setting stops the server rather
+// than silently running without it.
+const storage = await (async () => {
+  try {
+    return await openStorage(process.env);
+  } catch (err) {
+    if (
+      !(
+        err instanceof StorageConfigError ||
+        err instanceof StorageKeyError ||
+        err instanceof StorageKeyMismatchError
+      )
+    )
+      throw err;
+    process.stderr.write(`${err.message}\n`);
+    process.exit(2);
+  }
+})();
+
+// After a key change (or the sqlite import), rows still sealed with an
+// earlier key are sealed with the current one in the background. Counts only.
+if (storage) {
+  void storage
+    .reencrypt()
+    .then((done) => {
+      if (done.reencrypted > 0 || done.unreadable > 0)
+        process.stderr.write(`aula-mcp: storage reencrypt ${JSON.stringify(done)}\n`);
+    })
+    .catch((err) => {
+      process.stderr.write(`aula-mcp: storage reencrypt failed: ${(err as Error).message}\n`);
+    });
+}
+
+// Gallery downloads, next to local storage. A bad setting stops the server too.
+const galleryFiles = storage
+  ? (() => {
+      try {
+        return new GalleryFiles(galleryConfig(process.env));
+      } catch (err) {
+        process.stderr.write(`${(err as Error).message}\n`);
+        process.exit(2);
+      }
+    })()
+  : null;
+
+/** The caller's own gallery, read through their own rows and folder. */
+function galleryFor(caller: Caller | null): GalleryView | null {
+  if (!storage || !galleryFiles) return null;
+  const parentId = parentIdOf(caller);
+  return new GalleryView(storage.forParent(parentId), galleryFiles.forParent(parentId));
+}
+
+/**
+ * What other parents share with the caller: read-only views of their rows
+ * and gallery files, without what the caller stored themselves. Multi-parent
+ * mode only.
+ */
+function sharedFor(caller: Caller | null): SharedAccess | null {
+  if (!multiParent || !caller || !storage) return null;
+  const viewerId = callerId(caller);
+  return {
+    owners: () => storage.shares.owners(viewerId),
+    open: async (ownerId) => {
+      const store = await storage.sharedWith(viewerId, ownerId);
+      if (!store) return null;
+      return {
+        store,
+        gallery: galleryFiles ? new GalleryView(store, galleryFiles.forParent(ownerId)) : null,
+      };
+    },
+  };
+}
+
+/** Whose rows: the caller in multi-parent mode, the one parent otherwise. */
+function parentIdOf(caller: Caller | null): string {
+  if (!multiParent) return SINGLE_PARENT_ID;
+  if (!caller) throw new Error('No caller to pick stored data for.');
+  return callerId(caller);
+}
+
+// In multi-parent mode every request is authenticated, so the server is no
+// longer "anyone who reaches /mcp is the user" and may bind remotely.
+if (!multiParent) assertSafeBindAddress(HOST);
+
+// Single-parent: one AulaContext for every session on both transports. A
+// context owns the token refresh (de-duplicated per context), the AulaClient
+// and its caches; one per session meant each session refreshed and cached on
+// its own and held its own token-file watcher.
+//
+// Multi-parent: no shared context at all, so no code path can fall back to
+// one login for everyone. Each session gets its caller's own context.
+const sharedContext = multiParent ? null : new AulaContext({ logger });
+
+function contextFor(caller: Caller | null): AulaContext {
+  if (sharedContext) return sharedContext;
+  if (!multiParent || !caller) throw new Error('No caller to pick an Aula session for.');
+  return multiParent.contexts.get(caller);
+}
+
+/**
+ * Multi-parent: a parent with no Aula tokens yet gets a session with just the
+ * login tool (see LoginRequired in setup.ts). A token file that can't be read
+ * counts as logged in, so its error reaches the parent through the tools.
+ */
+async function loginRequiredFor(caller: Caller | null): Promise<LoginRequired | undefined> {
+  if (!multiParent || !caller) return undefined;
+  const store = multiParent.contexts.store(caller);
+  const hasTokens = async () => (await store.load().catch(() => 'unreadable')) !== null;
+  if (await hasTokens()) return undefined;
+  return { setupUrl: multiParent.setupLogin?.publicUrl ?? null, loggedIn: hasTokens };
+}
+
+/** Every parent to sync, each with their own Aula session only. */
+async function syncParents(): Promise<SyncParent[]> {
+  const contexts = multiParent
+    ? await multiParent.contexts.entries()
+    : sharedContext
+      ? [{ id: SINGLE_PARENT_ID, context: sharedContext }]
+      : [];
+  return contexts.map(({ id, context }) => ({
+    parentId: id,
+    session: context,
+    loggedIn: () => context.hasLogin(),
+    ...(process.env.AULA_MCP_MARK_READ === '0' ? {} : { queued: context }),
+  }));
+}
+
+// Background sync into local storage. Off without storage; AULA_MCP_SYNC=0
+// stops the schedule but keeps aula.sync.run.
+const sync = storage
+  ? createSyncScheduler({
+      storage,
+      ...(galleryFiles ? { gallery: galleryFiles } : {}),
+      parents: syncParents,
+      logger,
+      ...(process.env.AULA_MCP_SYNC === '0' ? {} : { schedule: realSyncSchedule }),
+    })
+  : null;
+
+/** A new session's McpApp: the caller's own context, or just the login tool. */
+async function sessionAppFor(caller: Caller | null): Promise<McpApp> {
+  const loginRequired = await loginRequiredFor(caller);
+  const context = contextFor(caller);
+  const gallery = galleryFor(caller);
+  const shared = sharedFor(caller);
+  return createMcpApp({
+    logger,
+    context,
+    ...(loginRequired ? { loginRequired } : {}),
+    ...(sync ? { sync: sync.forParent(parentIdOf(caller), context) } : {}),
+    ...(gallery ? { gallery } : {}),
+    ...(storage
+      ? {
+          local: storage.forParent(parentIdOf(caller)),
+          feedStatus: () => storage.feeds.status(parentIdOf(caller)),
+        }
+      : {}),
+    ...(shared ? { shared } : {}),
+  });
+}
+
+/** The caller (null in single-parent mode), or the 401/503 to send instead. */
+async function authenticate(request: Request): Promise<Caller | null | Response> {
+  if (!multiParent) return null;
+  return authenticateRequest(multiParent.verify, request, logger);
+}
+
+/** A session may only be used by the caller who opened it. */
+function ownsSession(owner: Caller | null, caller: Caller | null): boolean {
+  if (!owner || !caller) return owner === caller;
+  return sameCaller(owner, caller);
+}
 
 // Streamable HTTP transport.
 //
@@ -88,6 +350,8 @@ const aulaContext = new AulaContext({ logger });
 interface StreamableHttpSession {
   transport: WebStandardStreamableHTTPServerTransport;
   app: McpApp;
+  /** Who opened the session; null in single-parent mode. */
+  caller: Caller | null;
   lastActivityAt: number;
 }
 
@@ -138,16 +402,48 @@ httpSweeper.unref?.();
 
 const app = new Hono();
 
+if (otel) app.use(httpTelemetry('mcp'));
+
 app.get('/healthz', (c) => c.json({ ok: true, name: 'aula-mcp' }));
 
+if (multiParent) {
+  // RFC 9728: tells MCP clients which IdP issues tokens for /mcp. Both the
+  // root form and the path-suffixed form for the /mcp resource.
+  const { oidc } = multiParent;
+  const metadata = (c: Context) =>
+    c.json(protectedResourceMetadata(oidc, new URL('/mcp', c.req.url).href));
+  app.get('/.well-known/oauth-protected-resource', metadata);
+  app.get('/.well-known/oauth-protected-resource/mcp', metadata);
+}
+
+// Multi-parent: the tool list without a token, for clients that list tools on
+// their own (see tool-listing.ts). Opt-in; everything else still signs in.
+const anonymousToolList = Boolean(multiParent) && process.env.AULA_MCP_ANONYMOUS_TOOL_LIST === '1';
+
 async function handleMcp(request: Request): Promise<Response> {
+  if (anonymousToolList && (await isListingRequest(request))) {
+    return serveToolListing(request, logger, {
+      sync: Boolean(sync),
+      gallery: Boolean(storage && galleryFiles),
+      local: Boolean(storage),
+      shared: Boolean(storage),
+    });
+  }
+  const caller = await authenticate(request);
+  if (caller instanceof Response) return caller;
+
   const sessionId = request.headers.get('mcp-session-id');
 
   // Existing MCP session: route back to the transport that owns it.
   if (sessionId) {
     const session = streamableHttpSessions.get(sessionId);
 
-    if (!session) {
+    // Another parent's session answers exactly like an unknown one, so a
+    // session id can't be probed or taken over.
+    if (session && !ownsSession(session.caller, caller)) {
+      logger.warn('aula-mcp.http.session_caller_mismatch', { sessionId });
+    }
+    if (!session || !ownsSession(session.caller, caller)) {
       return Response.json(
         {
           jsonrpc: '2.0',
@@ -189,7 +485,7 @@ async function handleMcp(request: Request): Promise<Response> {
 
   let createdSessionId: string | undefined;
 
-  const sessionApp = createMcpApp({ logger, context: aulaContext });
+  const sessionApp = await sessionAppFor(caller);
 
   const transport = new WebStandardStreamableHTTPServerTransport({
     enableJsonResponse: true,
@@ -201,6 +497,7 @@ async function handleMcp(request: Request): Promise<Response> {
       streamableHttpSessions.set(newSessionId, {
         transport,
         app: sessionApp,
+        caller,
         lastActivityAt: Date.now(),
       });
 
@@ -277,12 +574,21 @@ app.delete('/mcp', (c) => handleMcp(c.req.raw));
 interface SseSession {
   transport: HonoSseTransport;
   app: McpApp;
+  /** Who opened the session; null in single-parent mode. */
+  caller: Caller | null;
   lastActivityAt: number;
 }
 const SSE_MAX_SESSIONS = Math.max(1, Number(process.env.AULA_MCP_SSE_MAX_SESSIONS ?? 16));
 const SSE_IDLE_MS = Math.max(1_000, Number(process.env.AULA_MCP_SSE_IDLE_MS ?? 300_000));
 const SSE_SWEEP_INTERVAL_MS = Math.max(1_000, Math.floor(SSE_IDLE_MS / 4));
 const sseSessions = new Map<string, SseSession>();
+
+if (otel) {
+  observeGauge('aula_mcp.sessions', 'Open MCP sessions, by transport.', () => [
+    { value: streamableHttpSessions.size, attributes: { transport: 'streamable_http' } },
+    { value: sseSessions.size, attributes: { transport: 'sse' } },
+  ]);
+}
 
 async function closeSseSession(sessionId: string, reason: string): Promise<void> {
   const session = sseSessions.get(sessionId);
@@ -325,7 +631,9 @@ const sseSweeper: ReturnType<typeof setInterval> = setInterval(() => {
 }, SSE_SWEEP_INTERVAL_MS);
 sseSweeper.unref?.();
 
-app.get('/sse', (c) => {
+app.get('/sse', async (c) => {
+  const caller = await authenticate(c.req.raw);
+  if (caller instanceof Response) return caller;
   if (sseSessions.size >= SSE_MAX_SESSIONS) {
     logger.error('aula-mcp.sse.session_rejected_cap', {
       active: sseSessions.size,
@@ -353,10 +661,11 @@ app.get('/sse', (c) => {
     });
     // McpServer.connect() binds a single transport, so we instantiate a
     // fresh server per SSE connection; the AulaContext is shared.
-    const sessionApp = createMcpApp({ logger, context: aulaContext });
+    const sessionApp = await sessionAppFor(caller);
     sseSessions.set(sessionId, {
       transport: sseTransport,
       app: sessionApp,
+      caller,
       lastActivityAt: Date.now(),
     });
 
@@ -388,10 +697,17 @@ app.get('/sse', (c) => {
 });
 
 app.post('/messages', async (c) => {
+  const caller = await authenticate(c.req.raw);
+  if (caller instanceof Response) return caller;
   const sessionId = c.req.query('sessionId');
   if (!sessionId) return c.json({ error: 'missing sessionId query parameter' }, 400);
   const session = sseSessions.get(sessionId);
-  if (!session) return c.json({ error: 'unknown sessionId' }, 404);
+  if (session && !ownsSession(session.caller, caller)) {
+    logger.warn('aula-mcp.sse.session_caller_mismatch', { sessionId });
+  }
+  if (!session || !ownsSession(session.caller, caller)) {
+    return c.json({ error: 'unknown sessionId' }, 404);
+  }
   let body: unknown;
   try {
     body = await c.req.json();
@@ -405,8 +721,20 @@ app.post('/messages', async (c) => {
   return c.body(null, 202);
 });
 
-logger.info('aula-mcp.listening', { host: HOST, port: PORT });
+// Keep the access token renewed in the background so an idle server doesn't
+// let the refresh_token chain go stale. Opt out with AULA_MCP_KEEPALIVE=0.
+// Multi-parent mode renews each parent's own context and never reads the
+// shared one.
+if (keepAliveEnabled) {
+  if (multiParent) startTokenKeepAlive({ contexts: () => multiParent.contexts.all(), logger });
+  else if (sharedContext) startTokenKeepAlive({ context: sharedContext, logger });
+}
+
+logger.info('aula-mcp.listening', { host: HOST, port: PORT, mode: mode.kind });
 process.stdout.write(`aula-mcp listening on http://${HOST}:${PORT}/mcp (healthz at /healthz)\n`);
+if (multiParent) {
+  process.stdout.write(`multi-parent mode: OIDC issuer ${multiParent.oidc.issuer}\n`);
+}
 
 const server = Bun.serve({
   port: PORT,
@@ -418,6 +746,52 @@ const server = Bun.serve({
   idleTimeout: 240,
   fetch: app.fetch,
 });
+
+/** What the dashboard's routes read and change, for the in-process UI and the API.
+ *  `publicUrl` is where browsers open the dashboard, for the calendar feed link. */
+function dashboardData(publicUrl: string | null) {
+  return {
+    contextFor,
+    ...(storage
+      ? {
+          storage: {
+            info: storage.info,
+            forParent: (caller: Caller | null) => storage.forParent(parentIdOf(caller)),
+          },
+        }
+      : {}),
+    ...(sync
+      ? {
+          sync: {
+            forParent: (caller: Caller | null) =>
+              sync.forParent(parentIdOf(caller), contextFor(caller)),
+          },
+        }
+      : {}),
+    ...(galleryFiles
+      ? { gallery: { forParent: (caller: Caller | null) => galleryFor(caller) as GalleryView } }
+      : {}),
+    ...(storage
+      ? {
+          feeds: {
+            tokens: storage.feeds,
+            parentIdOf,
+            storageFor: (parentId: string) => storage.forParent(parentId),
+            publicUrl,
+          },
+        }
+      : {}),
+    ...(multiParent && storage
+      ? {
+          sharing: {
+            shares: storage.shares,
+            open: (viewer: Caller, ownerId: string) =>
+              (sharedFor(viewer) as SharedAccess).open(ownerId),
+          },
+        }
+      : {}),
+  };
+}
 
 // Optional in-addon setup/login UI. The HA addon sets AULA_MCP_INGRESS_PORT
 // to 8099; HA Supervisor proxies its Ingress traffic to that port, giving
@@ -431,7 +805,30 @@ if (INGRESS_PORT_RAW) {
     process.stderr.write(`AULA_MCP_INGRESS_PORT="${INGRESS_PORT_RAW}" is not a valid port.\n`);
     process.exit(2);
   }
-  const setupApp = createSetupApp({ logger });
+  // Multi-parent: each parent signs in with the identity provider first and
+  // logs in to Aula for themselves only.
+  const setupLogin = multiParent?.setupLogin;
+  const myData = dashboardData(setupLogin?.publicUrl ?? null);
+  const setupApp = createSetupApp(
+    multiParent && setupLogin
+      ? {
+          logger,
+          parents: {
+            login: createSetupLogin({ ...setupLogin, issuer: multiParent.oidc.issuer, logger }),
+            storeFor: (caller) => multiParent.contexts.store(caller),
+            changed: (caller) => multiParent.contexts.invalidate(caller),
+          },
+          autoRenew: keepAliveEnabled,
+          myData,
+          ...(otel ? { middleware: httpTelemetry('setup') } : {}),
+        }
+      : {
+          logger,
+          autoRenew: keepAliveEnabled,
+          myData,
+          ...(otel ? { middleware: httpTelemetry('setup') } : {}),
+        },
+  );
   setupServer = Bun.serve({
     port: ingressPort,
     // HA Ingress proxies from the Supervisor host *to* this port, so bind on
@@ -448,6 +845,46 @@ if (INGRESS_PORT_RAW) {
   process.stdout.write(
     `aula-mcp setup UI listening on http://0.0.0.0:${ingressPort}/ (HA Ingress)\n`,
   );
+}
+
+// Optional API on its own port (api.ts), multi-parent mode only. In this
+// process because it shares each parent's Aula session with /mcp.
+let apiServer: ReturnType<typeof Bun.serve> | null = null;
+const api = (() => {
+  try {
+    return resolveApi(process.env, mode);
+  } catch (err) {
+    if (!(err instanceof ServerModeError)) throw err;
+    process.stderr.write(`${err.message}\n`);
+    process.exit(2);
+  }
+})();
+if (api && multiParent) {
+  const apiApp = createApiApp({
+    logger,
+    verify: createTokenVerifier({ ...multiParent.oidc, audience: api.audience }),
+    writeScope: api.writeScope,
+    uiKey: api.uiKey,
+    version: VERSION,
+    ...(otel ? { middleware: httpTelemetry('api') } : {}),
+    setup: {
+      autoRenew: keepAliveEnabled,
+      myData: dashboardData(api.uiUrl),
+      parents: {
+        storeFor: (caller) => multiParent.contexts.store(caller),
+        changed: (caller) => multiParent.contexts.invalidate(caller),
+      },
+    },
+  });
+  apiServer = Bun.serve({
+    port: api.port,
+    hostname: HOST,
+    // Aula logins stream their progress over SSE, as on the setup UI.
+    idleTimeout: 240,
+    fetch: apiApp.fetch,
+  });
+  logger.info('aula-mcp.api.listening', { port: api.port });
+  process.stdout.write(`aula-mcp API listening on http://${HOST}:${api.port}/api/v1\n`);
 }
 
 // Graceful shutdown — finish in-flight requests before exiting.
@@ -468,9 +905,14 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     ]);
     await server.stop();
     if (setupServer) await setupServer.stop();
+    if (apiServer) await apiServer.stop();
+    sync?.stop();
+    multiParent?.contexts.dispose();
+    await storage?.close();
   } catch (err) {
     logger.error('aula-mcp.shutdown_error', { error: (err as Error).message });
   }
+  await otel?.shutdown();
   process.exit(0);
 }
 process.on('SIGINT', shutdown);

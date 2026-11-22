@@ -1,0 +1,398 @@
+import { beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { AulaApiError, AulaStepUpRequiredError, type CalendarEvent } from '@aula-mcp/aula-client';
+import { GalleryFiles } from './gallery.ts';
+import { createStorage, type Storage } from './storage.ts';
+import { sqliteDriver } from './storage-sql.ts';
+import {
+  createSyncScheduler,
+  SYNC_JOB_RUNNERS,
+  SYNC_JOBS,
+  type SyncClient,
+  type SyncJob,
+  type SyncJobName,
+  type SyncSession,
+} from './sync.ts';
+
+const KEY = Buffer.alloc(32, 3);
+const MINUTE = 60_000;
+
+let storage: Storage;
+beforeEach(async () => {
+  storage = await createStorage(sqliteDriver(':memory:'), KEY, { type: 'sqlite', location: 't' });
+});
+
+/** A client that only has the given read methods; touching anything else throws. */
+function fakeClient(methods: Partial<SyncClient>): SyncClient & { calls: string[] } {
+  const calls: string[] = [];
+  return new Proxy({ calls } as unknown as SyncClient & { calls: string[] }, {
+    get(_target, prop) {
+      if (prop === 'calls') return calls;
+      // Not a thenable: it is resolved from getClient().
+      if (prop === 'then') return undefined;
+      const method = (methods as Record<string | symbol, unknown>)[prop];
+      if (typeof method !== 'function') throw new Error(`sync called ${String(prop)}`);
+      return (...args: unknown[]) => {
+        calls.push(String(prop));
+        return method(...args);
+      };
+    },
+  });
+}
+
+const session = (client: SyncClient): SyncSession => ({
+  getClient: async () => client,
+  getGuardianUserId: async () => 'guardian',
+});
+
+const input = (client: SyncClient, firstRun = true) => ({
+  client,
+  store: storage.forParent('p'),
+  childIds: async () => [11],
+  firstRun,
+  now: new Date('2026-11-20T10:00:00Z'),
+});
+
+describe('messages job', () => {
+  test('stores threads and their messages, and refetches only changed threads', async () => {
+    let latest = 'm2';
+    const client = fakeClient({
+      getThreadsPage: async () => ({
+        threads: [
+          {
+            id: 1,
+            read: false,
+            latestMessage: { id: latest, sendDateTime: '2026-11-20T09:00:00Z' },
+          },
+          { id: 2, read: true, latestMessage: { id: 'x1', sendDateTime: '2026-11-19T09:00:00Z' } },
+        ],
+        page: 0,
+        hasMorePages: false,
+      }),
+      getMessagesForThread: async (id) =>
+        ({
+          messages: [
+            { id: `${id}-a`, sendDateTime: '2026-11-19T08:00:00Z', text: { plain: 'hej' } },
+          ],
+        }) as never,
+    });
+
+    const first = await SYNC_JOB_RUNNERS.messages(input(client));
+    expect(first).toEqual({ fetched: 4, changed: 4 });
+    const store = storage.forParent('p');
+    expect((await store.list({ kind: 'message' })).map((m) => m.id).sort()).toEqual([
+      '1:1-a',
+      '2:2-a',
+    ]);
+
+    client.calls.length = 0;
+    expect(await SYNC_JOB_RUNNERS.messages(input(client, false))).toEqual({
+      fetched: 2,
+      changed: 0,
+    });
+    expect(client.calls).toEqual(['getThreadsPage']);
+
+    latest = 'm3';
+    client.calls.length = 0;
+    await SYNC_JOB_RUNNERS.messages(input(client, false));
+    expect(client.calls).toEqual(['getThreadsPage', 'getMessagesForThread']);
+  });
+
+  test('skips sensitive threads and tries them again next time', async () => {
+    const client = fakeClient({
+      getThreadsPage: async () => ({
+        threads: [{ id: 9, read: false, latestMessage: { id: 'z' } }],
+        page: 0,
+        hasMorePages: false,
+      }),
+      getMessagesForThread: async () => {
+        throw new AulaStepUpRequiredError('step up');
+      },
+    });
+    expect(await SYNC_JOB_RUNNERS.messages(input(client))).toEqual({
+      fetched: 1,
+      changed: 0,
+      skipped: 1,
+    });
+    expect(await storage.forParent('p').get('message_thread', '9')).toBeNull();
+  });
+});
+
+describe('messages job keeps the files', () => {
+  test('reads an unchanged thread again only while a file of it is not kept', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'aula-sync-files-'));
+    try {
+      let refuse = true;
+      const downloads: string[] = [];
+      const files = new GalleryFiles(
+        { dir, downloads: true, stopAt: 1 },
+        {
+          fetch: (async (url: string) => {
+            downloads.push(String(url));
+            return refuse ? new Response(null, { status: 403 }) : new Response('pdf');
+          }) as typeof fetch,
+        },
+      );
+      const client = fakeClient({
+        getThreadsPage: async () => ({
+          threads: [{ id: 3, read: true, latestMessage: { id: 'm1' } }],
+          page: 0,
+          hasMorePages: false,
+        }),
+        getMessagesForThread: async () =>
+          ({
+            messages: [
+              {
+                id: 'm1',
+                sendDateTime: '2026-11-19T08:00:00Z',
+                attachments: [
+                  { file: { name: 'brev.pdf', url: 'https://media-prod.aula.dk/file/b?s=1' } },
+                ],
+              },
+            ],
+          }) as never,
+      });
+      const run = (firstRun: boolean) =>
+        SYNC_JOB_RUNNERS.messages({ ...input(client, firstRun), gallery: files.forParent('p') });
+
+      await run(true);
+      expect(downloads).toHaveLength(1);
+      // The download failed: the next run reads the thread again for a fresh link.
+      refuse = false;
+      client.calls.length = 0;
+      await run(false);
+      expect(client.calls).toEqual(['getThreadsPage', 'getMessagesForThread']);
+      expect(await files.forParent('p').exists('attachments/message/3_3Am1/0.pdf')).toBe(true);
+      // Kept now: nothing more to read.
+      client.calls.length = 0;
+      await run(false);
+      expect(client.calls).toEqual(['getThreadsPage']);
+      expect(downloads).toHaveLength(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('other jobs', () => {
+  test('posts, notifications, presence, calendar and directory store their items', async () => {
+    const client = fakeClient({
+      rawRequest: async () => [{ institutionProfile: { id: 5, role: 'guardian' } }],
+      getPosts: async () => ({
+        posts: [{ id: 7, title: 'Tur', publishAt: '2026-11-18T08:00:00Z' }],
+        moreMessagesExist: false,
+      }),
+      getNotifications: async () =>
+        ({ notifications: [{ notificationId: 'n1', triggered: '2026-11-20T07:00:00Z' }] }) as never,
+      getDailyOverview: async () => [{ status: 1, institutionProfile: { id: 11 } }],
+      getCalendarEvents: async () =>
+        [
+          { id: 3, type: 'event', startDateTime: '2026-11-21T08:00:00Z', endDateTime: 'x' },
+          { id: 3, type: 'event', startDateTime: '2026-11-21T08:00:00Z', endDateTime: 'x' },
+        ] as never,
+      getGroups: async () => [{ id: 40, name: '3.A' }],
+      getContactList: async ({ page }) =>
+        page === 1 ? { results: [{ id: 1 }, { id: 2 }] } : { results: [] },
+    });
+    for (const job of ['posts', 'notifications', 'presence', 'calendar', 'directory'] as const) {
+      await SYNC_JOB_RUNNERS[job](input(client));
+    }
+    const stats = Object.fromEntries(
+      (await storage.forParent('p').stats()).map((s) => [s.kind, s.count]),
+    );
+    expect(stats).toEqual({
+      calendar_event: 1,
+      contact: 2,
+      group: 1,
+      notification: 1,
+      post: 1,
+      presence: 1,
+    });
+    const presence = await storage.forParent('p').get('presence', '11:2026-11-20');
+    expect(presence?.childId).toBe('11');
+  });
+
+  test('calendar reads in windows Aula accepts', async () => {
+    const windows: Array<[string, string]> = [];
+    const client = fakeClient({
+      rawRequest: async () => [{ institutionProfile: { id: 5, role: 'guardian' } }],
+      getCalendarEvents: async ({ start, end }) => {
+        windows.push([start, end]);
+        return [];
+      },
+    });
+    await SYNC_JOB_RUNNERS.calendar(input(client));
+    expect(windows).toHaveLength(3);
+    for (const [start, end] of windows) {
+      expect(Date.parse(end) - Date.parse(start)).toBeLessThanOrEqual(22 * 86_400_000);
+    }
+    expect(windows[1]?.[0]).toBe(windows[0]?.[1] as string);
+  });
+
+  test('calendar drops stored events Aula no longer has in the window', async () => {
+    const store = storage.forParent('p');
+    await store.put([
+      { kind: 'calendar_event', id: '901', occurredAt: '2026-12-21T00:00:00+01:00', data: {} },
+      { kind: 'calendar_event', id: '902', occurredAt: '2026-11-25T08:00:00+01:00', data: {} },
+      // Outside the window: kept, Aula was not asked about it.
+      { kind: 'calendar_event', id: '903', occurredAt: '2026-09-01T08:00:00+02:00', data: {} },
+    ]);
+    let answer: CalendarEvent[] = [];
+    const client = fakeClient({
+      rawRequest: async () => [{ institutionProfile: { id: 5, role: 'guardian' } }],
+      getCalendarEvents: async ({ start }) =>
+        start.startsWith('2026-11-13') ? answer : ([] as CalendarEvent[]),
+    });
+    // An empty answer drops nothing.
+    await SYNC_JOB_RUNNERS.calendar(input(client));
+    expect(await store.get('calendar_event', '901')).not.toBeNull();
+    answer = [{ id: 902, startDateTime: '2026-11-25T08:00:00+01:00' } as unknown as CalendarEvent];
+    await SYNC_JOB_RUNNERS.calendar(input(client));
+    expect(await store.get('calendar_event', '901')).toBeNull();
+    expect(await store.get('calendar_event', '902')).not.toBeNull();
+    expect(await store.get('calendar_event', '903')).not.toBeNull();
+  });
+
+  test("calendar also stores Aula's important dates, once each", async () => {
+    const holiday = { id: 7, type: 'presence_holiday', startDateTime: '2026-12-24T00:00:00+01:00' };
+    const client = fakeClient({
+      rawRequest: async (method: string) =>
+        method === 'calendar.getImportantDates'
+          ? [holiday]
+          : [{ institutionProfile: { id: 5, role: 'guardian' } }],
+      getCalendarEvents: async () => [holiday as never],
+    });
+    await SYNC_JOB_RUNNERS.calendar(input(client));
+    const rows = await storage.forParent('p').list({ kind: 'calendar_event' });
+    expect(rows.map((r) => r.id)).toEqual(['7']);
+  });
+
+  test('directory skips a group without a contact list', async () => {
+    const client = fakeClient({
+      getGroups: async () => [{ id: 40 }, { id: 41 }],
+      getContactList: async ({ groupId, page }) => {
+        if (groupId === 40) throw new AulaApiError('API returned status 404', 404, 'https://x');
+        return page === 1 ? { results: [{ id: 1 }] } : { results: [] };
+      },
+    });
+    await SYNC_JOB_RUNNERS.directory(input(client));
+    expect((await storage.forParent('p').list({ kind: 'contact' })).map((c) => c.id)).toEqual([
+      '41:1',
+    ]);
+  });
+});
+
+describe('scheduler', () => {
+  const okJobs = (log: string[]): Record<SyncJobName, SyncJob> =>
+    Object.fromEntries(
+      SYNC_JOBS.map((job) => [
+        job,
+        (async ({ store }) => {
+          log.push(`${store.parentId}:${job}`);
+          return { fetched: 1, changed: 1 };
+        }) satisfies SyncJob,
+      ]),
+    ) as Record<SyncJobName, SyncJob>;
+
+  test('runs due jobs per parent with their own session, skips parents without login', async () => {
+    let clock = 1_000_000_000_000;
+    const log: string[] = [];
+    const sessions: string[] = [];
+    const sessionFor = (name: string): SyncSession => ({
+      getClient: async () => {
+        sessions.push(name);
+        return fakeClient({});
+      },
+      getGuardianUserId: async () => name,
+    });
+    const scheduler = createSyncScheduler({
+      storage,
+      parents: async () => [
+        { parentId: 'a', session: sessionFor('a'), loggedIn: async () => true },
+        { parentId: 'b', session: sessionFor('b'), loggedIn: async () => false },
+      ],
+      jobs: okJobs(log),
+      now: () => clock,
+      random: () => 0.5,
+    });
+
+    await scheduler.tick();
+    expect(log).toEqual(SYNC_JOBS.map((job) => `a:${job}`));
+    expect(sessions).toEqual(['a']);
+
+    log.length = 0;
+    await scheduler.tick();
+    expect(log).toEqual([]);
+
+    clock += 16 * MINUTE;
+    await scheduler.tick();
+    expect(log).toEqual(['a:messages', 'a:notifications']);
+    expect(await storage.forParent('b').syncStates()).toEqual([]);
+  });
+
+  test('backs off after a failure and reports it in status', async () => {
+    const clock = 1_000_000_000_000;
+    const jobs = okJobs([]);
+    jobs.calendar = async () => {
+      throw new Error('Aula said no');
+    };
+    const scheduler = createSyncScheduler({
+      storage,
+      parents: async () => [],
+      jobs,
+      now: () => clock,
+      random: () => 0.5,
+    });
+    const parent = scheduler.forParent('a', session(fakeClient({})));
+    const reports = await parent.run(['calendar', 'posts']);
+    expect(reports).toEqual([
+      { job: 'calendar', ok: false, fetched: 0, changed: 0, error: 'Aula said no' },
+      { job: 'posts', ok: true, fetched: 1, changed: 1 },
+    ]);
+    const status = Object.fromEntries((await parent.status()).map((s) => [s.job, s]));
+    expect(status.calendar?.ok).toBe(false);
+    expect(status.calendar?.lastError).toBe('Aula said no');
+    expect(status.calendar?.nextRunAt).toBe(new Date(clock + 5 * MINUTE).toISOString());
+    expect(status.posts?.ok).toBe(true);
+    expect(status.posts?.nextRunAt).toBe(new Date(clock + 30 * MINUTE).toISOString());
+    expect(status.messages?.lastRunAt).toBeNull();
+
+    // Each run is in the audit log, the failure with its error.
+    const events = await storage.forParent('a').auditLog({ category: 'sync' });
+    expect(events.map((e) => [e.action, e.ok, e.details.trigger])).toEqual([
+      ['posts', true, 'manual'],
+      ['calendar', false, 'manual'],
+    ]);
+    expect(events[1]?.details).toMatchObject({ error: 'Aula said no', failuresInARow: 1 });
+    expect(events[0]?.details).toMatchObject({ fetched: 1, changed: 1 });
+  });
+
+  test('logs a scheduled run and a repeating parent failure once', async () => {
+    let failing = true;
+    const scheduler = createSyncScheduler({
+      storage,
+      parents: async () => [
+        {
+          parentId: 'a',
+          session: session(fakeClient({})),
+          loggedIn: async () => {
+            if (failing) throw new Error('token store unreadable');
+            return true;
+          },
+        },
+      ],
+      jobs: okJobs([]),
+    });
+    await scheduler.tick();
+    await scheduler.tick();
+    failing = false;
+    await scheduler.tick();
+    const events = await storage.forParent('a').auditLog();
+    expect(events.filter((e) => e.action === 'check')).toHaveLength(1);
+    expect(events.filter((e) => e.ok && e.details.trigger === 'schedule')).toHaveLength(
+      SYNC_JOBS.length,
+    );
+  });
+});

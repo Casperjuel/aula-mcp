@@ -1,7 +1,18 @@
 import { describe, expect, test } from 'bun:test';
 import type { AulaTokens } from '@aula-mcp/aula-auth';
 import { AulaClient } from './aula-client.ts';
-import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
+import {
+  type AulaNotification,
+  isKnownNotification,
+  KNOWN_NOTIFICATION_EVENT_TYPES,
+  type KnownNotification,
+} from './aula-types.ts';
+import {
+  AulaApiError,
+  AulaApiVersionError,
+  AulaClientError,
+  AulaStepUpRequiredError,
+} from './errors.ts';
 import { FakeHttp } from './test-helpers.ts';
 
 const TOKENS: AulaTokens = {
@@ -635,6 +646,125 @@ describe('AulaClient presence templates', () => {
   });
 });
 
+describe('AulaClient.addVacation', () => {
+  test('posts one interval to calendar.addVacation with CSRF', async () => {
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-9');
+    http.enqueue(
+      { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) }, // post
+    );
+    const c = makeClient(http);
+    await c.addVacation({ childIds: [42], startDate: '2026-12-21', endDate: '2027-01-01' });
+    const post = http.requested[2];
+    expect(post?.method).toBe('POST');
+    expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
+    expect(post?.url).toContain('method=calendar.addVacation');
+    expect(JSON.parse(String(post?.body))).toEqual({
+      childIds: [42],
+      intervals: [{ startDate: '2026-12-21', endDate: '2027-01-01' }],
+      comment: '',
+    });
+  });
+});
+
+describe('AulaClient.setThreadsRead', () => {
+  test("posts the status the way Aula's web app does", async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({}) }, // probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) }, // unread
+      { status: 200, body: envelope({}) }, // read
+    );
+    const c = makeClient(http);
+    await c.setThreadsRead([9302], false);
+    await c.setThreadsRead([9302], true);
+    expect(http.requested[2]?.url).toContain('method=messaging.updateSubscriptionStatus');
+    expect(JSON.parse(String(http.requested[2]?.body))).toEqual({
+      subscriptionIds: [9302],
+      status: 'Unread',
+    });
+    expect(JSON.parse(String(http.requested[3]?.body))).toEqual({
+      subscriptionIds: [9302],
+      status: 'Read',
+    });
+  });
+});
+
+describe('AulaClient ferie requests', () => {
+  test('reads registrations by childIds[]', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope([]) }, // probe
+      { status: 200, body: envelope([{ child: { id: 42 }, vacationRegistrations: [] }]) },
+    );
+    const c = makeClient(http);
+    expect(await c.getVacationRegistrations([42, 43])).toEqual([
+      { child: { id: 42 }, vacationRegistrations: [] },
+    ]);
+    const url = http.requested.at(-1)?.url ?? '';
+    expect(url).toContain('method=presence.getVacationRegistrationsByChildren');
+    expect(url).toContain('childIds%5B%5D=42');
+    expect(url).toContain('childIds%5B%5D=43');
+  });
+
+  test('answers with per-day isComing, times only on days the child comes', async () => {
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-9');
+    http.enqueue(
+      { status: 200, body: envelope({}) },
+      { status: 200, body: envelope({}) },
+      { status: 200, body: envelope({}) },
+    );
+    const c = makeClient(http);
+    await c.respondToVacationRequest({
+      childId: 42,
+      responseId: 7,
+      days: [
+        { date: '2026-12-22', isComing: true, entryTime: '08:00', exitTime: '15:00' },
+        { date: '2026-12-23', isComing: false, entryTime: '08:00' },
+      ],
+    });
+    const post = http.requested[2];
+    expect(post?.url).toContain('method=calendar.respondToVacationRegistrationRequest');
+    expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
+    expect(JSON.parse(String(post?.body))).toEqual({
+      childId: 42,
+      vacationRegistrationResponseId: 7,
+      days: [
+        { date: '2026-12-22', entryTime: '08:00', exitTime: '15:00', isComing: true },
+        { date: '2026-12-23', entryTime: null, exitTime: null, isComing: false },
+      ],
+      comment: '',
+    });
+  });
+
+  test('reads announced ferie by childIds[] and deletes one by vacationId', async () => {
+    const http = new FakeHttp();
+    http.setCookie('Csrfp-Token', 'CSRF-9');
+    http.enqueue(
+      { status: 200, body: envelope([]) }, // probe
+      { status: 200, body: envelope([{ child: { id: 42 }, vacationAnnouncements: [] }]) },
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope({}) },
+    );
+    const c = makeClient(http);
+    expect(await c.getVacationAnnouncements([42])).toEqual([
+      { child: { id: 42 }, vacationAnnouncements: [] },
+    ]);
+    const url = http.requested[1]?.url ?? '';
+    expect(url).toContain('method=presence.getVacationAnnouncementsByChildren');
+    expect(url).toContain('childIds%5B%5D=42');
+    await c.deleteVacation(901);
+    const post = http.requested.at(-1);
+    expect(post?.url).toContain('method=calendar.deleteEvent');
+    expect(post?.headers?.['csrfp-token']).toBe('CSRF-9');
+    expect(JSON.parse(String(post?.body))).toEqual({ id: 901 });
+  });
+});
+
 describe('AulaClient.getPosts', () => {
   test('scopes the feed to parent=profile and institutionProfileIds[]', async () => {
     const http = new FakeHttp();
@@ -669,5 +799,290 @@ describe('AulaClient.getPosts', () => {
 
     await c.getPosts({ institutionProfileIds: [1], onlyUnread: true });
     expect(http.requested.at(-1)?.url).toContain('isUnread=true');
+  });
+});
+
+describe('AulaClient.getFamilyInstitutionProfileIds', () => {
+  const guardian = (id: number) => ({ institutionProfile: { id, role: 'guardian' } });
+  const child = (id: number) => ({ institutionProfile: { id, role: 'child' } });
+
+  function clientWithConsents(entries: unknown) {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // version probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      { status: 200, body: envelope(entries) },
+    );
+    return { http, client: makeClient(http) };
+  }
+
+  test('returns guardians first, then children, without duplicates', async () => {
+    const { client } = clientWithConsents([
+      child(2001),
+      guardian(1001),
+      child(2002),
+      child(2001),
+      guardian(1002),
+    ]);
+    await expect(client.getFamilyInstitutionProfileIds()).resolves.toEqual([
+      1001, 1002, 2001, 2002,
+    ]);
+  });
+
+  test('activates the profile context first and asks for already-answered consents too', async () => {
+    const { http, client } = clientWithConsents([guardian(1001)]);
+    await client.getFamilyInstitutionProfileIds();
+    expect(http.requested.map((r) => new URL(r.url).searchParams.get('method'))).toEqual([
+      'profiles.getProfilesByLogin',
+      'profiles.getProfileContext',
+      'consents.getConsentResponses',
+    ]);
+    // Without this Aula only lists consents still waiting for an answer, which
+    // would drop every child that has already been consented.
+    expect(http.requested.at(-1)?.url).toContain('returnOnlyPendingConsentResponses=false');
+  });
+
+  test('skips entries that carry no id', async () => {
+    const { client } = clientWithConsents([
+      guardian(1001),
+      { institutionProfile: { role: 'child' } },
+      {},
+      child(2001),
+    ]);
+    await expect(client.getFamilyInstitutionProfileIds()).resolves.toEqual([1001, 2001]);
+  });
+
+  test('throws when the consent list holds no guardian to authorize the call', async () => {
+    const { client } = clientWithConsents([child(2001)]);
+    await expect(client.getFamilyInstitutionProfileIds()).rejects.toBeInstanceOf(AulaClientError);
+  });
+});
+
+describe('AulaClient.getNotifications', () => {
+  // Synthetic: shaped like responses observed live, but every id, title and
+  // timestamp is made up so no real family or school data lives in the repo.
+  const base = {
+    institutionProfileId: 1001,
+    institutionCode: '000000',
+    notificationType: 'Badge',
+    expires: '2030-01-03T08:00:00+00:00',
+    triggered: '2030-01-01T08:00:00+00:00',
+    relatedChildInstitutionProfileId: null,
+  };
+  const postShared = {
+    ...base,
+    notificationId: 'PostSharedWithMe:2001:Badge',
+    notificationEventType: 'PostSharedWithMe',
+    notificationArea: 'Posts',
+    postId: 2001,
+    postTitle: 'Example post',
+    groupId: null,
+    groupName: null,
+  } satisfies KnownNotification;
+  const newMedia = {
+    ...base,
+    notificationId: 'NewMedia:3001:Badge',
+    notificationEventType: 'NewMedia',
+    notificationArea: 'Album',
+    mediaId: 3001,
+    albumId: 3002,
+    relatedChildName: null,
+  } satisfies KnownNotification;
+  const unseen = {
+    ...base,
+    notificationId: 'SomethingNew:5001:Badge',
+    notificationEventType: 'SomethingNew',
+    notificationArea: 'Elsewhere',
+    someNewField: 'kept',
+  } satisfies AulaNotification;
+
+  async function fetchAll(): Promise<{ out: AulaNotification[]; url: string }> {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({ profiles: [] }) }); // version probe
+    http.enqueue({ status: 200, body: envelope({}) }); // profile-context bootstrap
+    http.enqueue({ status: 200, body: envelope([postShared, newMedia, unseen]) });
+    const out = await makeClient(http).getNotifications();
+    return { out, url: http.requested.at(-1)?.url ?? '' };
+  }
+
+  test('returns the bare array Aula answers with', async () => {
+    const { out, url } = await fetchAll();
+    expect(url).toContain('method=notifications.getNotificationsForActiveProfile');
+    expect(out).toHaveLength(3);
+  });
+
+  test('isKnownNotification narrows to the typed shapes and rejects unseen types', async () => {
+    const { out } = await fetchAll();
+    const [a, b, c] = out as [AulaNotification, AulaNotification, AulaNotification];
+    expect([a, b, c].map(isKnownNotification)).toEqual([true, true, false]);
+
+    // After the guard the discriminant is exhaustive; `never` makes a new
+    // union member without a branch here a compile error.
+    const describeKnown = (n: KnownNotification): number => {
+      switch (n.notificationEventType) {
+        case 'PostSharedWithMe':
+          return n.postId;
+        case 'NewMedia':
+          return n.mediaId;
+        default: {
+          const unreachable: never = n;
+          return unreachable;
+        }
+      }
+    };
+    expect([a, b].map((n) => (isKnownNotification(n) ? describeKnown(n) : -1))).toEqual([
+      2001, 3001,
+    ]);
+  });
+
+  test('an unseen event type keeps its extra fields', async () => {
+    const { out } = await fetchAll();
+    const last = out[2];
+    expect(last && !isKnownNotification(last) ? last.someNewField : undefined).toBe('kept');
+  });
+
+  test('KNOWN_NOTIFICATION_EVENT_TYPES lists every KnownNotification member', () => {
+    // The Record forces a key per union member at compile time; comparing it
+    // to the runtime tuple catches the guard's list falling behind.
+    const covered: Record<KnownNotification['notificationEventType'], true> = {
+      PostSharedWithMe: true,
+      NewMedia: true,
+    };
+    const listed: string[] = [...KNOWN_NOTIFICATION_EVENT_TYPES];
+    expect(listed.sort()).toEqual(Object.keys(covered).sort());
+  });
+});
+
+describe('AulaClient web links', () => {
+  test('threads carry a webUrl built from their id', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) }, // version probe
+      { status: 200, body: envelope({}) }, // profile-context bootstrap
+      {
+        status: 200,
+        body: envelope({
+          threads: [
+            { id: 1001, read: false },
+            { id: 1002, read: true },
+          ],
+        }),
+      },
+    );
+    const { threads } = await makeClient(http).getThreadsPage();
+    expect(threads.map((t) => t.webUrl)).toEqual([
+      'https://www.aula.dk/portal/#/beskeder/1001',
+      'https://www.aula.dk/portal/#/beskeder/1002',
+    ]);
+  });
+
+  test('posts carry a webUrl, and a post without an id is left alone', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) },
+      { status: 200, body: envelope({ posts: [{ id: 2001, title: 'a' }, { title: 'no id' }] }) },
+    );
+    const data = await makeClient(http).getPosts({ institutionProfileIds: [1] });
+    expect(data?.posts?.[0]?.webUrl).toBe('https://www.aula.dk/portal/#/overblik/2001');
+    expect(data?.posts?.[1]).toEqual({ title: 'no id' });
+  });
+
+  test('only shared-post notifications get a webUrl', async () => {
+    const base = {
+      institutionProfileId: 1001,
+      institutionCode: '000000',
+      notificationType: 'Badge',
+      expires: '2030-01-03T08:00:00+00:00',
+      triggered: '2030-01-01T08:00:00+00:00',
+      relatedChildInstitutionProfileId: null,
+    };
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) },
+      {
+        status: 200,
+        body: envelope([
+          {
+            ...base,
+            notificationId: 'PostSharedWithMe:2001:Badge',
+            notificationEventType: 'PostSharedWithMe',
+            notificationArea: 'Posts',
+            postId: 2001,
+            postTitle: 'Example post',
+            groupId: null,
+            groupName: null,
+          },
+          {
+            ...base,
+            notificationId: 'NewMedia:3001:Badge',
+            notificationEventType: 'NewMedia',
+            notificationArea: 'Album',
+            mediaId: 3001,
+            albumId: 3002,
+            relatedChildName: null,
+          },
+        ]),
+      },
+    );
+    const [shared, media] = await makeClient(http).getNotifications();
+    expect(shared && 'webUrl' in shared ? shared.webUrl : undefined).toBe(
+      'https://www.aula.dk/portal/#/overblik/2001',
+    );
+    expect(media && 'webUrl' in media).toBe(false);
+  });
+
+  test('a notifications payload that is not an array is handed back untouched', async () => {
+    const http = new FakeHttp();
+    http.enqueue(
+      { status: 200, body: envelope({ profiles: [] }) },
+      { status: 200, body: envelope({}) },
+      { status: 200, body: envelope({ notifications: [] }) },
+    );
+    // Typed as an array, but the CLI tolerates other nestings, so compare loosely.
+    const out: unknown = await makeClient(http).getNotifications();
+    expect(out).toEqual({ notifications: [] });
+  });
+});
+
+describe('AulaClient gallery', () => {
+  test('getAlbums sends the family filter, paging and sort', async () => {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({ profiles: [] }) }); // version probe
+    http.enqueue({ status: 200, body: envelope({}) }); // profile-context bootstrap
+    http.enqueue({ status: 200, body: envelope([{ id: 7, title: 'Skovtur' }]) });
+    const c = makeClient(http);
+
+    expect(await c.getAlbums({ institutionProfileIds: [11, 12], index: 100 })).toEqual([
+      { id: 7, title: 'Skovtur' },
+    ]);
+    const url = new URL(http.requested.at(-1)?.url ?? '');
+    expect(url.searchParams.get('method')).toBe('gallery.getAlbums');
+    expect(url.searchParams.get('filterInstProfileIds[0]')).toBe('11');
+    expect(url.searchParams.get('filterInstProfileIds[1]')).toBe('12');
+    expect(url.searchParams.get('filterBy')).toBe('all');
+    expect(url.searchParams.get('sortOn')).toBe('createdAt');
+    expect(url.searchParams.get('index')).toBe('100');
+    expect(url.searchParams.get('limit')).toBe('100');
+  });
+
+  test('getAlbumMedia scopes to one album', async () => {
+    const http = new FakeHttp();
+    http.enqueue({ status: 200, body: envelope({ profiles: [] }) });
+    http.enqueue({ status: 200, body: envelope({}) });
+    http.enqueue({
+      status: 200,
+      body: envelope({ mediaCount: 1, totalSize: 1, results: [{ id: 3, mediaType: 'image' }] }),
+    });
+    const c = makeClient(http);
+
+    const page = await c.getAlbumMedia({ institutionProfileIds: [11], albumId: 7, limit: 50 });
+    expect(page.results?.[0]?.id).toBe(3);
+    const url = new URL(http.requested.at(-1)?.url ?? '');
+    expect(url.searchParams.get('method')).toBe('gallery.getMedia');
+    expect(url.searchParams.get('albumId')).toBe('7');
+    expect(url.searchParams.get('sortOn')).toBe('uploadedAt');
+    expect(url.searchParams.get('limit')).toBe('50');
   });
 });

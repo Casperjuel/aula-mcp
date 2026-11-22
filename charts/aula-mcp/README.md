@@ -1,0 +1,300 @@
+# aula-mcp Helm chart
+
+Runs aula-mcp on Kubernetes, alone or as a tool server for
+[kagent](https://kagent.dev).
+
+| `mode` | Who can use it | Use for |
+| --- | --- | --- |
+| `single-parent` (default) | Anyone who reaches `/mcp` acts as the one logged-in parent. | One family, reached only from inside the cluster. |
+| `multi-parent` | Every request needs a token from `oidc.issuer`. Each parent uses only their own Aula login. | Several parents behind an IdP, e.g. kagent with Keycloak. |
+
+The chart refuses setups that would expose a parent's Aula session:
+
+- `httpRoute.mcp` without `multi-parent` mode;
+- `setupUi` in `single-parent` mode without `setupUi.iUnderstandItHasNoAuth`;
+- `setupUi` in `multi-parent` mode without `setupUi.login` (its sign-in);
+- `oidc.acceptIdToken` without `multi-parent` mode;
+- `api` without `multi-parent` mode, and `ui` without `api`.
+
+## Image
+
+No image is published yet. Build one from the repository root:
+
+```sh
+podman build --platform linux/amd64 -t registry.example.com/aula-mcp:dev .
+podman push registry.example.com/aula-mcp:dev
+```
+
+## Install
+
+```sh
+helm upgrade --install aula-mcp charts/aula-mcp -n aula-mcp --create-namespace \
+  --set image.repository=registry.example.com/aula-mcp --set image.tag=dev
+```
+
+Then log the parent in (the MitID QR code prints in the terminal):
+
+```sh
+kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
+```
+
+## Values
+
+| Value | Default | What |
+| --- | --- | --- |
+| `mode` | `single-parent` | `single-parent` or `multi-parent`. |
+| `oidc.issuer` / `oidc.audience` | `""` / `aula-mcp` | Token issuer and required `aud`, multi-parent only. |
+| `oidc.acceptIdToken` | `false` | Also accept Keycloak ID tokens (needed with kagent). |
+| `writeTools` | `false` | Enable write tools (`AULA_MCP_WRITE=1`). |
+| `markReadTools` | `true` | Mark threads read or unread in Aula. `false` sets `AULA_MCP_MARK_READ=0`. |
+| `toolNames` | `""` | `dotted` or `underscore` (`AULA_MCP_TOOL_NAMES`). Empty: `underscore` with `kagent.enabled`, since the Anthropic API refuses tool names with dots. |
+| `tokenKeepAlive` | `true` | Renew each parent's Aula access token in the background (`AULA_MCP_KEEPALIVE`). With `false`, tokens are only renewed when a tool is called. |
+| `encryptionKey.existingSecret` | `""` | Secret with `AULA_MCP_KEY` for the token store. |
+| `persistence.*` | 1Gi PVC | Token store. Kept on uninstall. |
+| `gallery.persistence.*` | 50Gi PVC at `/gallery` | Downloaded Aula photos and videos. Kept on uninstall. Disabled: files go under `/data/gallery`. |
+| `storage.type` | `sqlite` | Local database of Aula data: `sqlite` (on the data volume), `postgres` or `none`. |
+| `storage.postgres.existingSecret` / `urlKey` | – / `uri` | Secret with the PostgreSQL URL, e.g. CloudNativePG's `<cluster>-app`. Required with `postgres`. |
+| `storage.key.existingSecret` / `secretKey` | – / `AULA_MCP_STORAGE_KEY` | Encryption key of the stored data (`openssl rand -base64 32`). Without it a key is generated on the data volume; keep it in a secret with `postgres`. |
+| `storage.key.previousKeysKey` | – | Key in the same secret with earlier storage keys (comma separated), read after a rotation; rows are re-encrypted with the current key at start-up. Optional in the secret. |
+| `sync.enabled` | `true` | Background sync into storage. `false`: only `aula.sync.run`. |
+| `gallery.downloads` | `true` | `false` lists albums without downloading files. |
+| `gallery.stopAt` | `0.9` | Disk use of the gallery volume at which downloads pause. |
+| `gallery.s3.*` | off | Store gallery files in an S3 bucket instead (`bucket`, `endpoint` for MinIO/Ceph RGW/Garage, `region`, `prefix`, keys from `existingSecret`). No gallery volume is made. |
+| `setupUi.enabled` | `false` | Browser login UI on port 8099. **No authentication** in single-parent mode. |
+| `setupUi.login.url` / `.clientId` / `.clientSecret` | `""` / `aula-mcp-setup` / none | Multi-parent: the UI's public origin and its OIDC client. |
+| `api.enabled` | `false` | JSON API under `/api/v1` on `api.port` (8080) of the MCP pod. Multi-parent only. See below. |
+| `api.audience` / `api.writeScope` | `oidc.audience` / `aula:write` | `aud` an API token must carry, and the scope it needs for changes (empty: none). |
+| `ui.enabled` | `false` | The dashboard as its own Deployment in front of the API. Needs `api.enabled`; use it instead of `setupUi`. |
+| `ui.url` / `.clientId` / `.clientSecret` / `.scopes` | `""` / `aula-mcp-ui` / none / `[aula:write]` | Its public origin, its OIDC client, and the scopes it asks for. |
+| `httpRoute.mcp` / `.setupUi` / `.api` / `.ui` | off | Gateway API routes; need `parentRefs`. |
+| `networkPolicy.enabled` / `.from` | on / `[]` | Allowed peers. kagent's namespace is added when `kagent.enabled`. |
+| `kagent.enabled` | `false` | Create a `RemoteMCPServer` in `kagent.namespace`. |
+| `kagent.remoteMCPServer.discovery` | `true` | Multi-parent: answer `tools/list` without a token so kagent shows the tools. Tool calls still need one. |
+| `kagent.agent.enabled` | `false` | Also create an example `Agent` that uses it. |
+| `telemetry.enabled` / `.endpoint` | off / `""` | OpenTelemetry over OTLP/HTTP to a collector (`AULA_MCP_OTEL=1`). See below. |
+| `telemetry.signals.traces` / `.metrics` / `.logs` | all `true` | Which signals to send once telemetry is on. |
+| `telemetry.serviceName` / `.traceSampleRatio` / `.metricIntervalSeconds` / `.resourceAttributes` | release name / `1` / `30` / `{}` | `service.name`, share of traces kept, metric export interval, extra resource attributes. |
+| `perses.enabled` | `false` | A Perses dashboard as a ConfigMap for the Perses provisioning sidecar. Needs telemetry with metrics. |
+| `perses.project.name` / `.create` | `aula-mcp` / `true` | The Perses project to put it in; `create: false` to use an existing one. |
+| `perses.datasources.prometheus` / `.tempo` / `.loki` | `""` | Perses datasource names; empty uses the default of that kind. |
+| `perses.metricSelector` / `.logSelector` | `job="<service>"` / `{service_name="<service>"}` | How the dashboard finds this service's metrics and logs. |
+
+With `networkPolicy` on, add your Gateway's namespace to `networkPolicy.from`
+when you enable an HTTPRoute.
+
+## Telemetry and Perses
+
+```yaml
+telemetry:
+  enabled: true
+  endpoint: http://otel-collector.observability.svc.cluster.local:4318
+  serviceName: aula-mcp
+perses:
+  enabled: true
+  project: { name: apps, create: false }
+  datasources: { tempo: tempo, loki: loki }
+  # Behind a collector that Prometheus scrapes, the service is in exported_job.
+  metricSelector: exported_job="aula-mcp"
+```
+
+Sent: route templates (never paths with ids), Aula method names, sync jobs,
+tool names, status codes, counts and durations, as spans, metrics and log
+lines. Never sent: Aula content, message text, URLs with access tokens.
+Parent ids are not metric labels. Log lines are info and up (debug too with
+`debugLogs`), with usernames, session ids, cookies and tokens masked.
+
+The dashboard has tiles for traffic, server errors, failing Aula calls, sync
+failures, open MCP sessions and writes to Aula, then rows for HTTP, the Aula
+API, sync, MCP tools, the audit log, traces and logs.
+
+## kagent with Keycloak (multi-parent)
+
+```
+browser ── oauth2-proxy ── kagent UI ── agent ──(parent's ID token)──▶ aula-mcp
+             │                                                        │
+             └──────────── Keycloak realm ◀── verifies signature ─────┘
+                                               aud must include aula-mcp
+```
+
+1. **Keycloak**, in your realm:
+   - **Clients → Import client** with `examples/keycloak-kagent-client.json`.
+     Set the redirect URI to your kagent host and copy the client secret.
+   - Add one user per parent, with an email and **Email verified** ticked
+     (oauth2-proxy refuses unverified emails).
+   - Note each parent's **ID**, which is the `sub` in their token.
+
+   The client's audience mapper adds `aula-mcp` to the **ID token**.
+   oauth2-proxy forwards the ID token, so aula-mcp needs
+   `oidc.acceptIdToken: true`, and it still requires `aud` to contain
+   `aula-mcp`. Tokens from other clients in the realm are refused.
+
+2. **kagent sign-in.** kagent needs a signed-in user before it has a token
+   to pass on. **This changes the kagent login for everyone**: the UI then
+   requires a Keycloak sign-in.
+
+   ```sh
+   kubectl -n kagent create secret generic kagent-oidc \
+     --from-literal=client-id=kagent \
+     --from-literal=client-secret='<client secret>' \
+     --from-literal=cookie-secret="$(openssl rand -base64 32 | tr -- '+/' '-_')"
+   ```
+
+   Merge `examples/kagent-sso-values.yaml` into the kagent Helm release. Point
+   kagent's public route at `kagent-oauth2-proxy:4180` instead of the UI.
+
+3. **aula-mcp**:
+
+   ```yaml
+   mode: multi-parent
+   oidc:
+     issuer: https://keycloak.example.com/realms/kagent
+     acceptIdToken: true
+   kagent:
+     enabled: true
+     agent:
+       enabled: true
+   ```
+
+4. **Log each parent into Aula**, once, with their Keycloak `sub`:
+
+   ```sh
+   kubectl -n aula-mcp exec -it deploy/aula-mcp -- aula-parent-login <sub>
+   ```
+
+   Or let parents do it themselves in the browser, see below.
+
+   The login is stored under `/data/parents/<id>/`. The `<id>` comes from the
+   issuer and `sub`, the same way the server derives it. No restart needed.
+   A parent who hasn't logged in gets "No tokens on disk", never someone
+   else's data.
+
+### Setup UI per parent (optional)
+
+In multi-parent mode the setup UI signs each parent in with Keycloak first,
+then shows only that parent's status and MitID login, saved to their own
+directory. A parent can't see or change another parent's login.
+
+1. **Clients → Import client** with `examples/keycloak-setup-client.json`.
+   Set the redirect URI to `<setup url>/auth/callback` and copy the secret:
+
+   ```sh
+   kubectl -n aula-mcp create secret generic aula-mcp-setup \
+     --from-literal=client-secret='<client secret>'
+   ```
+
+2. Values:
+
+   ```yaml
+   setupUi:
+     enabled: true
+     login:
+       url: https://aula-setup.example.com
+       clientSecret:
+         existingSecret: aula-mcp-setup
+   httpRoute:
+     setupUi:
+       enabled: true
+       parentRefs: [{ name: gateway, namespace: gateway }]
+       hostnames: [aula-setup.example.com]
+   networkPolicy:
+     from:
+       - namespaceSelector:
+           matchLabels:
+             kubernetes.io/metadata.name: gateway
+   ```
+
+   `url` must be https (http only for localhost). Sessions live in memory, so
+   a restart asks parents to sign in again.
+
+kagent's controller lists the tools without a token. With
+`kagent.remoteMCPServer.discovery` (the default) aula-mcp answers `initialize`
+and `tools/list` without one (`AULA_MCP_ANONYMOUS_TOOL_LIST=1`), so the tools
+show in kagent and agents can pick them. Every other call still needs the
+parent's token: a tool call without one gets 401. Tool names and descriptions
+are the same for every parent, so the list tells nothing about anyone. With
+`discovery: false` the `RemoteMCPServer` gets the label
+`kagent.dev/discovery: disabled` and kagent shows no tools; agents still list
+them at run time with the parent's token.
+
+### API and dashboard (optional)
+
+```
+browser ──cookie──▶ ui (Deployment) ──parent's access token + UI key──▶ api (MCP pod, :8080)
+                     │                                                   │
+                     └──── Keycloak: sign-in, token renewal ◀── verifies ┘
+```
+
+`api.enabled` serves the dashboard's data and actions as JSON under
+`/api/v1` on its own port of the MCP pod. It stays in that pod because both
+share each parent's Aula session: a second process would race the first for
+Aula's rotating refresh token. The OpenAPI document is at
+`/api/v1/openapi.json`.
+
+- Every call needs an access token from `oidc.issuer` whose `aud` holds
+  `api.audience`. The token's `sub` is the parent: their own data, or with
+  `?owner=` what another parent shares with them, read-only.
+- Changes (POST) also need `api.writeScope` in the token's `scope`, and are
+  audited with the trigger `api`.
+- The calendar feed and sharing are not in the API. Parents set them up in
+  the dashboard; only the ui server, which proves itself with a generated key
+  (Secret `<release>-ui-key`), reaches them.
+
+`ui.enabled` runs the dashboard on its own. It signs each parent in, keeps
+their tokens in its memory (never in the browser, which only gets a session
+cookie), renews them, and forwards the page's calls to the API. It needs no
+volume and holds no Aula session.
+
+1. **Keycloak**: create a client scope `aula:write` (type *Optional*, *Include
+   in token scope* on). Then **Clients → Import client** with
+   `examples/keycloak-ui-client.json`, set its redirect URI to
+   `<ui url>/auth/callback`, and copy the secret into a Secret. Its audience
+   mapper adds `aula-mcp` to the access token. An existing setup UI client
+   works too, given the same scope and mapper.
+
+2. Values:
+
+   ```yaml
+   api:
+     enabled: true
+   ui:
+     enabled: true
+     url: https://aula.example.com
+     clientSecret:
+       existingSecret: aula-mcp-ui
+   httpRoute:
+     ui:
+       enabled: true
+       parentRefs: [{ name: gateway, namespace: gateway }]
+       hostnames: [aula.example.com]
+   ```
+
+   Add `httpRoute.api` only when clients outside the cluster call the API
+   themselves.
+
+## Local test with kind
+
+```sh
+scripts/kind-test.sh          # builds the image, installs both modes, runs helm test
+scripts/kind-test.sh delete   # removes the cluster
+```
+
+It checks:
+
+- `/healthz` answers;
+- multi-parent mode refuses `/mcp` without a token (401);
+- with kagent, `tools/list` answers without a token and `tools/call` does not
+  (401);
+- the `RemoteMCPServer` has token passthrough on and discovery on;
+- the NetworkPolicy blocks a pod that isn't allowed.
+
+It installs only the kagent CRDs, not kagent or Keycloak.
+
+## Notes
+
+- **One replica.** MCP sessions and the token store live in the pod;
+  `Recreate` keeps two pods off the same volume.
+- **Token lifetime.** Keycloak ID tokens last 5 minutes by default.
+  `cookie-refresh: 4m` in the kagent values renews them before they expire.
+- **The volume is secret.** It holds every parent's Aula refresh token, each
+  encrypted with a key stored beside it. Treat the volume and its backups as
+  secret, or set `encryptionKey.existingSecret` so the key lives elsewhere.

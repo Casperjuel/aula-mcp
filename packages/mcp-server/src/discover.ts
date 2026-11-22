@@ -186,6 +186,7 @@ function buildCapabilities(
   detectedWidgets: string[],
   writeEnabled: boolean,
 ): Record<string, DiscoveredCapability> {
+  const markRead = process.env.AULA_MCP_MARK_READ !== '0';
   const detectedByCapability = new Map<string, { provider: string; tool: string }[]>();
   for (const id of detectedWidgets) {
     const entry = WIDGET_PROVIDER_MAP[id];
@@ -222,29 +223,50 @@ function buildCapabilities(
     presence: {
       summary: writeEnabled
         ? 'Daily presence (arrived/sick/picked up), the recurring komme/gå schedule, ' +
-          'setting drop-off/pickup times, and reporting a child sick.'
-        : 'Daily presence (arrived/sick/picked up) and the recurring komme/gå ' +
-          '(drop-off/pickup) schedule.',
+          "the guardian's registered ferie/fri, the institution's ferie requests, setting " +
+          'drop-off/pickup times, reporting a child sick, registering and removing ' +
+          'ferie/fri and answering ferie requests.'
+        : 'Daily presence (arrived/sick/picked up), the recurring komme/gå ' +
+          "(drop-off/pickup) schedule, the guardian's registered ferie/fri and the " +
+          "institution's ferie requests.",
       tools: writeEnabled
         ? [
+            'aula.presence.children_today',
             'aula.presence.today',
             'aula.presence.templates',
+            'aula.presence.vacation_requests',
+            'aula.presence.vacations',
             'aula.presence.set_template',
             'aula.presence.report_sick',
+            'aula.presence.add_vacation',
+            'aula.presence.delete_vacation',
+            'aula.presence.answer_vacation_request',
           ]
-        : ['aula.presence.today', 'aula.presence.templates'],
+        : [
+            'aula.presence.children_today',
+            'aula.presence.today',
+            'aula.presence.templates',
+            'aula.presence.vacation_requests',
+            'aula.presence.vacations',
+          ],
       ...(writeEnabled
         ? {
             notes:
               'aula.presence.report_sick notifies the institution and applies to today. ' +
               'Confirm the child and the intent with the user before calling it — do not ' +
-              'infer a sick report from a passing mention that a child is unwell.',
+              'infer a sick report from a passing mention that a child is unwell. ' +
+              'For aula.presence.add_vacation and aula.presence.delete_vacation, confirm ' +
+              'the child and the dates first; for aula.presence.answer_vacation_request, ' +
+              'every day and the times.',
           }
         : {
             notes:
-              'aula.presence.set_template (writing komme/gå times) and ' +
-              'aula.presence.report_sick (reporting a child sick) are available only ' +
-              'when the server runs with AULA_MCP_WRITE=1.',
+              'aula.presence.set_template (writing komme/gå times), ' +
+              'aula.presence.report_sick (reporting a child sick), ' +
+              'aula.presence.add_vacation (registering ferie/fri), ' +
+              'aula.presence.delete_vacation (removing it) and ' +
+              'aula.presence.answer_vacation_request (answering a ferie request) are ' +
+              'available only when the server runs with AULA_MCP_WRITE=1.',
           }),
     },
     calendar: {
@@ -253,24 +275,28 @@ function buildCapabilities(
       tools: ['aula.calendar.events'],
     },
     messages: {
-      summary: writeEnabled
-        ? 'Aula messaging threads, and marking a thread read. Sensitive threads ' +
-          'require MitID step-up.'
-        : 'Aula messaging threads. Sensitive threads require MitID step-up.',
-      tools: writeEnabled
-        ? ['aula.messages.list_threads', 'aula.messages.get_thread', 'aula.messages.mark_read']
-        : ['aula.messages.list_threads', 'aula.messages.get_thread'],
-      ...(writeEnabled
-        ? {
-            notes:
-              'aula.messages.mark_read is irreversible — Aula offers no way to set a ' +
-              'thread back to unread. Only call it for threads the user has actually seen.',
-          }
-        : {
-            notes:
-              'aula.messages.mark_read (marking a thread read) is available only when ' +
-              'the server runs with AULA_MCP_WRITE=1.',
-          }),
+      summary:
+        `Aula messaging threads${markRead ? ', marking a thread read or unread' : ''}` +
+        `${writeEnabled ? ', and replying' : ''}. Sensitive threads require MitID step-up.`,
+      tools: [
+        'aula.messages.list_threads',
+        'aula.messages.get_thread',
+        ...(markRead ? ['aula.messages.mark_read', 'aula.messages.mark_unread'] : []),
+        ...(writeEnabled ? ['aula.messages.reply'] : []),
+      ],
+      notes: [
+        markRead
+          ? 'aula.messages.mark_read and aula.messages.mark_unread change the read state ' +
+            'in Aula itself, and each undoes the other. Only mark a thread read when the ' +
+            'user has actually seen it.'
+          : 'Marking threads read or unread is off (AULA_MCP_MARK_READ=0).',
+        writeEnabled
+          ? 'aula.messages.reply sends a real message that cannot be recalled: call it ' +
+            'without `send` to get a preview, show the user the exact text, and only ' +
+            'send with `send: true` after they approve.'
+          : 'aula.messages.reply (replying in a thread) is available only when the server ' +
+            'runs with AULA_MCP_WRITE=1.',
+      ].join(' '),
     },
     notifications: {
       summary: 'Unread items + activity badge counts for the active guardian.',

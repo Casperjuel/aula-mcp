@@ -13,18 +13,42 @@
  *   AULA_MCP_KEY     — encryption key for the token store
  *   AULA_MCP_RAW=1   — enable the aula.raw_request escape hatch
  *   AULA_MCP_WRITE=1 — enable write tools (aula.presence.set_template)
+ *   AULA_MCP_MARK_READ=0 — turn off aula.messages.mark_read/mark_unread (on by default)
  *   AULA_MCP_LOG=1   — verbose logs to stderr
  */
 
 import { silentLogger, stderrLogger } from '@aula-mcp/aula-auth';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { resolveServerMode, ServerModeError } from './server-mode.ts';
 import { createMcpApp } from './setup.ts';
+import { startTokenKeepAlive } from './token-keepalive.ts';
 
 const logger = process.env.AULA_MCP_LOG === '1' ? stderrLogger('aula-mcp') : silentLogger;
 
-const { mcp } = createMcpApp({ logger });
+// stdio has no request headers, so there is no token to tell parents apart.
+// Multi-parent mode (and a half-configured one) is a startup error here.
+try {
+  if (resolveServerMode(process.env).kind === 'multi-parent') {
+    process.stderr.write(
+      'Multi-parent mode needs the HTTP server; stdio cannot identify parents.\n',
+    );
+    process.exit(2);
+  }
+} catch (err) {
+  if (!(err instanceof ServerModeError)) throw err;
+  process.stderr.write(`${err.message}\n`);
+  process.exit(2);
+}
+
+const { mcp, context } = createMcpApp({ logger });
 
 await mcp.connect(new StdioServerTransport());
+
+// Keep the access token renewed while the client has us running. Opt out with
+// AULA_MCP_KEEPALIVE=0.
+if (process.env.AULA_MCP_KEEPALIVE !== '0') {
+  startTokenKeepAlive({ context, logger });
+}
 
 logger.info('aula-mcp.stdio_ready');
 

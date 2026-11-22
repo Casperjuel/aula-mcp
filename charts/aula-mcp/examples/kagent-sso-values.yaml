@@ -1,0 +1,22 @@
+# Helm values to merge into the kagent release: SSO through Keycloak, so the
+# kagent UI has a signed-in user whose token can reach aula-mcp.
+# Needs a Secret "kagent-oidc" in the kagent namespace with client-id,
+# client-secret and cookie-secret (see charts/aula-mcp/README.md).
+config:
+  server:
+    auth:
+      mode: trusted-proxy
+oauth2-proxy:
+  enabled: true
+  config:
+    existingSecret: kagent-oidc
+  extraArgs:
+    oidc-issuer-url: https://keycloak.example.com/realms/kagent
+    redirect-url: https://kagent.example.com/oauth2/callback
+    upstream: http://kagent-ui:8080
+    reverse-proxy: true
+    # The chart asks for a "groups" scope, which a fresh Keycloak realm
+    # doesn't have.
+    scope: "openid profile email"
+    # Renew the forwarded ID token before Keycloak's 5-minute expiry.
+    cookie-refresh: 4m

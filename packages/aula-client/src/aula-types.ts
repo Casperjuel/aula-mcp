@@ -313,6 +313,11 @@ export interface PostAttachment {
 
 export interface AulaPost {
   id?: number;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
   title?: string;
   publishAt?: string;
   timestamp?: string;
@@ -342,12 +347,221 @@ export interface GetPostsArgs {
 }
 
 // --------------------------------------------------------------------------
+// notifications.*
+// --------------------------------------------------------------------------
+
+/**
+ * Fields every notification carries, whatever its event type.
+ *
+ * Shapes below were observed on live responses, not taken from Aula docs —
+ * a field typed `| null` was only ever seen as null, so its non-null type is
+ * a best guess. Only event types seen with a complete payload are listed.
+ */
+interface NotificationBase {
+  /**
+   * `<eventType>:<entityId>:<notificationType>`. Aula can emit an `Alert` and a
+   * `Badge` variant for the same event; they differ only in the last segment.
+   * To treat them as one, drop just that segment — keying on `entityId` alone
+   * would also merge a later "changed"/"cancelled" notification for the same
+   * entity into the first.
+   */
+  notificationId: string;
+  institutionProfileId: number;
+  institutionCode: string;
+  /** Where in the app the notification lands, e.g. `Posts`, `Album`, `Calendar`. */
+  notificationArea: string;
+  /** Observed: `Badge`, `Alert`. */
+  notificationType: string;
+  /** ISO 8601. */
+  expires: string;
+  /** ISO 8601. */
+  triggered: string;
+  relatedChildInstitutionProfileId: number | null;
+}
+
+/** A post was shared with the guardian directly. */
+export interface PostSharedWithMeNotification extends NotificationBase {
+  notificationEventType: 'PostSharedWithMe';
+  postId: number;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient` from `postId`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
+  postTitle: string;
+  groupId: number | null;
+  groupName: string | null;
+}
+
+/** New photo/video in a gallery album. */
+export interface NewMediaNotification extends NotificationBase {
+  notificationEventType: 'NewMedia';
+  mediaId: number;
+  albumId: number;
+  relatedChildName: string | null;
+}
+
+export type KnownNotification = PostSharedWithMeNotification | NewMediaNotification;
+
+/**
+ * Any event type we haven't seen yet. Aula has more than the three above, so
+ * `getNotifications()` can't promise a `KnownNotification` — narrow with
+ * `isKnownNotification` first.
+ */
+export interface UnknownNotification extends NotificationBase {
+  notificationEventType: string;
+  [field: string]: unknown;
+}
+
+export type AulaNotification = KnownNotification | UnknownNotification;
+
+export const KNOWN_NOTIFICATION_EVENT_TYPES = [
+  'PostSharedWithMe',
+  'NewMedia',
+] as const satisfies readonly KnownNotification['notificationEventType'][];
+
+/**
+ * Narrows to the event types with a typed shape. On `UnknownNotification`
+ * `notificationEventType` is a plain `string`, so a bare
+ * `n.notificationEventType === 'NewMedia'` check can't exclude it — this guard
+ * is what makes a `switch` on the discriminant exhaustive.
+ */
+export function isKnownNotification(n: AulaNotification): n is KnownNotification {
+  return (KNOWN_NOTIFICATION_EVENT_TYPES as readonly string[]).includes(n.notificationEventType);
+}
+
+// --------------------------------------------------------------------------
+// gallery.*
+//
+// Shapes measured on a live guardian account (2026-11-21). Only images were
+// present there, so video fields (`duration`, `hasVideoThumbnail`) are typed
+// from the response keys but their video values are unverified.
+// --------------------------------------------------------------------------
+
+/** An institution profile as Aula embeds it in gallery responses (creator, tag). */
+export interface GalleryProfile {
+  id: number;
+  profileId?: number;
+  name?: string;
+  shortName?: string;
+  /** e.g. `employee`, `child`, `guardian`. */
+  role?: string;
+  institutionRole?: string;
+  institutionCode?: string;
+  institutionName?: string;
+}
+
+export interface GalleryGroup {
+  id: number;
+  name?: string;
+  shortName?: string;
+  institutionCode?: string;
+  institutionName?: string;
+  mainGroup?: boolean;
+  isDeactivated?: boolean;
+}
+
+export interface GalleryAlbum {
+  id: number;
+  title?: string;
+  description?: string;
+  creator?: GalleryProfile;
+  /** ISO 8601 with offset, e.g. `2026-11-18T09:12:00+01:00`. */
+  creationDate?: string;
+  sharedWithGroups?: GalleryGroup[];
+  /** Signed cover URLs; they expire like media URLs (see GalleryMedia). */
+  thumbnailsUrls?: string[];
+  regardingInstitutionProfileId?: number | null;
+}
+
+export interface GalleryMediaFile {
+  id: number;
+  /** Original file name, e.g. `IMG_1234.jpeg`. */
+  name?: string;
+  /**
+   * Signed CloudFront URL on media-prod.aula.dk (`Expires`, `Signature`,
+   * `Key-Pair-Id`), valid for about 30 minutes and fetchable without the
+   * Aula token. Served as `application/octet-stream` with
+   * `content-disposition: attachment`, so the type comes from `name`.
+   */
+  url?: string;
+  bucket?: string;
+  key?: string;
+  created?: string;
+  /** Seen: `bypassed`. */
+  scanningStatus?: string;
+}
+
+export interface GalleryMedia {
+  id: number;
+  /** Seen: `image`. Videos are expected as `video`. */
+  mediaType?: string;
+  title?: string | null;
+  description?: string | null;
+  /** Profiles tagged in the media; a child's tag carries their institution profile id. */
+  tags?: GalleryProfile[];
+  creator?: GalleryProfile;
+  file?: GalleryMediaFile;
+  /** Seconds, for video; null for images. */
+  duration?: number | null;
+  /** Seen: `completed`. Anything else is not ready to download yet. */
+  conversionStatus?: string;
+  hasVideoThumbnail?: boolean;
+  isDeleted?: boolean;
+  commentCount?: number;
+  /**
+   * Signed thumbnail URLs, same expiry as `file.url`. Measured sizes for one
+   * photo: extraSmall 19 KB, small 52 KB, medium = thumbnail 170 KB,
+   * large 351 KB, original 599 KB.
+   */
+  thumbnailUrl?: string;
+  extraSmallThumbnailUrl?: string;
+  smallThumbnailUrl?: string;
+  mediumThumbnailUrl?: string;
+  largeThumbnailUrl?: string;
+}
+
+export interface GalleryMediaPage {
+  album?: GalleryAlbum;
+  /** Media in the album; equals `totalSize` on every album measured. */
+  mediaCount?: number;
+  totalSize?: number;
+  startIndex?: number;
+  limit?: number;
+  results?: GalleryMedia[];
+}
+
+export interface GetAlbumsArgs {
+  /** Guardian + child institution-profile ids, as for posts. */
+  institutionProfileIds: readonly number[];
+  /** 0-based offset. Defaults to 0. */
+  index?: number;
+  /** Defaults to 100. */
+  limit?: number;
+}
+
+export interface GetAlbumMediaArgs extends GetAlbumsArgs {
+  /** Required: Aula answers 400 to gallery.getMedia without an album. */
+  albumId: number;
+}
+
+// --------------------------------------------------------------------------
 // messaging.*
 // --------------------------------------------------------------------------
 
 export interface MessageThread {
   id: number;
   read: boolean;
+  /** The guardian's subscription to the thread, distinct from `id`. Read and
+   *  unread are set per subscription (AulaClient.setThreadsRead). */
+  subscriptionId?: number;
+  /** Aula's per-guardian flag on a thread (AulaClient.setThreadsMarked). */
+  marked?: boolean;
+  /**
+   * In-app route on www.aula.dk, filled in by `AulaClient`. Opens in a browser
+   * with a logged-in Aula session — not in the Aula app.
+   */
+  webUrl?: string;
   subject?: string;
   /** Latest message's preview, when included. */
   lastMessage?: { sendDateTime?: string; sender?: { fullName?: string } };
@@ -356,6 +570,34 @@ export interface MessageThread {
    *  need to detect "is there a new message in this thread" without
    *  fetching the full thread content via `messaging.getMessagesForThread`. */
   latestMessage?: { id?: string; sendDateTime?: string };
+}
+
+/** A mailbox as Aula names one in a thread's `recipients[].mailBoxOwner`. */
+export interface MailBoxOwner {
+  id: number;
+  mailBoxOwnerType: string;
+  profileId?: number;
+  portalRole?: string;
+  isDeactivated?: boolean;
+}
+
+/** One hit from `search.findRecipients`. Profiles carry `id` (the
+ *  institution profile id) and `profileId`; groups have other fields. */
+export interface RecipientSearchItem {
+  docId?: string;
+  docType?: string;
+  id?: number;
+  profileId?: number;
+  name?: string;
+  portalRole?: string;
+  institutionCode?: string;
+  institutionName?: string;
+  description?: string;
+}
+
+export interface RecipientSearchData {
+  totalHits?: number;
+  results?: RecipientSearchItem[];
 }
 
 export interface ThreadsData {

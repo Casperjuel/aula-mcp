@@ -26,24 +26,43 @@ import {
 } from '@aula-mcp/aula-auth';
 import type {
   AulaEnvelope,
+  AulaNotification,
   CalendarEvent,
   DailyOverviewEntry,
+  GalleryAlbum,
+  GalleryMediaPage,
+  GetAlbumMediaArgs,
+  GetAlbumsArgs,
   GetCalendarEventsArgs,
   GetPostsArgs,
   GetPresenceTemplatesArgs,
+  MailBoxOwner,
   MessageThread,
   PostsData,
   PresenceTemplatesData,
   ProfileContextData,
   ProfilesByLoginData,
+  RecipientSearchData,
   ThreadMessage,
   ThreadMessagesData,
   ThreadsData,
   ThreadsPage,
   UpdatePresenceTemplateArgs,
 } from './aula-types.ts';
-import { PRESENCE_ACTIVITY_TYPE, type PresenceStatusCode } from './aula-types.ts';
-import { AulaApiError, AulaApiVersionError, AulaStepUpRequiredError } from './errors.ts';
+import {
+  isKnownNotification,
+  PRESENCE_ACTIVITY_TYPE,
+  type PresenceStatusCode,
+} from './aula-types.ts';
+import {
+  AulaApiError,
+  AulaApiVersionError,
+  AulaClientError,
+  AulaStepUpRequiredError,
+  aulaReason,
+} from './errors.ts';
+import { tracedAulaCall } from './telemetry.ts';
+import { postWebUrl, threadWebUrl } from './web-urls.ts';
 
 export interface AulaClientOptions {
   /** Tokens issued by AulaLoginClient. The access token is added as a query
@@ -63,10 +82,20 @@ export interface AulaClientOptions {
 
 const DEFAULT_API_BASE_HOST = 'https://www.aula.dk';
 
+/** One entry of `consents.getConsentResponses`; only the identity part is read. */
+interface ConsentEntry {
+  institutionProfile?: {
+    id?: number;
+    /** `guardian` | `child`. */
+    role?: string;
+  };
+}
+
 /** GET methods that Aula refuses (HTTP 403) until the profile context is set
  *  — see ensureProfileContext. Measured for messaging.*; posts.* and
- *  notifications.* as reported in upstream #109. */
-const NEEDS_PROFILE_CONTEXT = /^(messaging|posts|notifications)\./;
+ *  notifications.* as reported in upstream #109. gallery.* is included
+ *  defensively: it was only measured on a session that already had one. */
+const NEEDS_PROFILE_CONTEXT = /^(messaging|posts|notifications|gallery)\./;
 
 export class AulaClient {
   readonly http: AulaHttpClient;
@@ -245,6 +274,119 @@ export class AulaClient {
     );
   }
 
+  /**
+   * `presence.getVacationRegistrationsByChildren` — the institution's ferie
+   * requests ("Ferieregistrering": the school or SFO asks whether the child
+   * comes in a holiday period). Aula groups the answer by child:
+   * `[{ child, vacationRegistrations: [...] }]`. Method and `childIds[]` as
+   * in nickknissen/aula (MIT, with tests); takes institution-profile ids.
+   */
+  async getVacationRegistrations(childIds: readonly number[]): Promise<unknown[]> {
+    if (childIds.length === 0) return [];
+    const params = new URLSearchParams();
+    params.set('method', 'presence.getVacationRegistrationsByChildren');
+    for (const id of childIds) params.append('childIds[]', String(id));
+    const data = await this.getJsonRaw<unknown>(params);
+    return Array.isArray(data) ? data : [];
+  }
+
+  /**
+   * `calendar.respondToVacationRegistrationRequest` — answers one of the
+   * institution's ferie requests for one child: per day whether the child
+   * comes, and the times when it does.
+   *
+   * NOT verified against the live API. Method and payload come from the
+   * decompiled Aula app as documented by eisbaw/aulalibre (MIT,
+   * `RespondToVacationRegistrationRequestDto`): `{ childId,
+   * vacationRegistrationResponseId, days: [{ date, entryTime, exitTime,
+   * isComing }], comment }`. The response is undocumented.
+   *
+   * This is a write to the live Aula platform — the MCP server gates the
+   * tool that calls it behind `AULA_MCP_WRITE=1`.
+   */
+  async respondToVacationRequest(args: {
+    childId: number;
+    responseId: number;
+    days: { date: string; isComing: boolean; entryTime?: string; exitTime?: string }[];
+    comment?: string;
+  }): Promise<unknown> {
+    return this.postJson<unknown>(
+      'calendar.respondToVacationRegistrationRequest',
+      JSON.stringify({
+        childId: args.childId,
+        vacationRegistrationResponseId: args.responseId,
+        days: args.days.map((d) => ({
+          date: d.date,
+          entryTime: d.isComing ? (d.entryTime ?? null) : null,
+          exitTime: d.isComing ? (d.exitTime ?? null) : null,
+          isComing: d.isComing,
+        })),
+        comment: args.comment ?? '',
+      }),
+    );
+  }
+
+  /**
+   * `calendar.addVacation` — register a planned absence (ferie/fri) for one
+   * or more children over whole days.
+   *
+   * NOT verified against the live API. The payload is the one the guardian
+   * portal's `presence/ADD_ABSENCE` action passes to `calendar.addVacation`
+   * (read from the portal's JavaScript, as documented in nickknissen/aula
+   * PR #184, MIT): `{ childIds, intervals: [{ startDate, endDate }], comment }`
+   * with date-only `YYYY-MM-DD` dates. The success response is undocumented,
+   * so nothing is read from it. See deleteVacation for removing one.
+   *
+   * This is a write to the live Aula platform — the MCP server gates the
+   * tool that calls it behind `AULA_MCP_WRITE=1`.
+   */
+  async addVacation(args: {
+    childIds: number[];
+    startDate: string;
+    endDate: string;
+    comment?: string;
+  }): Promise<unknown> {
+    return this.postJson<unknown>(
+      'calendar.addVacation',
+      JSON.stringify({
+        childIds: args.childIds,
+        intervals: [{ startDate: args.startDate, endDate: args.endDate }],
+        comment: args.comment ?? '',
+      }),
+    );
+  }
+
+  /**
+   * `presence.getVacationAnnouncementsByChildren` — the ferie/fri the
+   * guardian announced (calendar.addVacation), grouped by child:
+   * `[{ child, vacationAnnouncements: [{ vacationId, startDate, endDate,
+   * description, isEditable }] }]`. Method and response shape are from the
+   * decompiled Aula app (eisbaw/aulalibre, MIT); `childIds[]` as in
+   * getVacationRegistrations, checked against the live API.
+   */
+  async getVacationAnnouncements(childIds: readonly number[]): Promise<unknown[]> {
+    if (childIds.length === 0) return [];
+    const params = new URLSearchParams();
+    params.set('method', 'presence.getVacationAnnouncementsByChildren');
+    for (const id of childIds) params.append('childIds[]', String(id));
+    const data = await this.getJsonRaw<unknown>(params);
+    return Array.isArray(data) ? data : [];
+  }
+
+  /**
+   * Remove an announced ferie/fri by the `vacationId` from
+   * getVacationAnnouncements. A ferie is a calendar event whose id is the
+   * vacationId, and the guardian portal removes it with `calendar.deleteEvent`
+   * and `{ id }` (read from the portal's JavaScript). The app's
+   * `calendar.deleteVacation` (eisbaw/aulalibre) answers 404 on the web API.
+   *
+   * This is a write to the live Aula platform — the MCP server gates the
+   * tool that calls it behind `AULA_MCP_WRITE=1`.
+   */
+  async deleteVacation(vacationId: number): Promise<unknown> {
+    return this.postJson<unknown>('calendar.deleteEvent', JSON.stringify({ id: vacationId }));
+  }
+
   async getCalendarEvents(args: GetCalendarEventsArgs): Promise<CalendarEvent[]> {
     const body = JSON.stringify({
       instProfileIds: args.profileIds,
@@ -277,7 +419,7 @@ export class AulaClient {
     if (opts.pageSize) params.pageSize = String(opts.pageSize);
     const data = await this.getJson<ThreadsData>('messaging.getThreads', params);
     return {
-      threads: data?.threads ?? [],
+      threads: (data?.threads ?? []).map((t) => ({ ...t, webUrl: threadWebUrl(t.id) })),
       page: data?.page ?? opts.page ?? 0,
       hasMorePages: data?.moreMessagesExist ?? false,
     };
@@ -347,10 +489,59 @@ export class AulaClient {
 
   /**
    * `notifications.getNotificationsForActiveProfile` — what's unread.
-   * Returns the raw `data` field; agents can format the shape they need.
+   *
+   * Aula has more event types than we've typed, so entries can be
+   * `UnknownNotification`; narrow with `isKnownNotification` before reading
+   * type-specific fields.
    */
-  async getNotifications(): Promise<unknown> {
-    return this.getJson<unknown>('notifications.getNotificationsForActiveProfile');
+  async getNotifications(): Promise<AulaNotification[]> {
+    const list = await this.getJson<AulaNotification[]>(
+      'notifications.getNotificationsForActiveProfile',
+    );
+    // Hand anything that isn't the array we've seen straight back, as before:
+    // the CLI's asArray tolerates other nestings and this shouldn't start throwing.
+    if (!Array.isArray(list)) return list;
+    return list.map((n) =>
+      isKnownNotification(n) && n.notificationEventType === 'PostSharedWithMe'
+        ? { ...n, webUrl: postWebUrl(n.postId) }
+        : n,
+    );
+  }
+
+  /**
+   * Every institution-profile id for the logged-in guardian — guardians first,
+   * then children, across all institutions — from `consents.getConsentResponses`.
+   *
+   * This is what `getPosts` needs as `institutionProfileIds`: unscoped, Aula
+   * answers 200 with an empty feed. `profiles.getProfilesByLogin` is no
+   * substitute, it omits club (Klub/SFO) children that only the consent list
+   * carries. Only the logged-in user's own profiles appear, so the other
+   * parent can never leak in.
+   */
+  async getFamilyInstitutionProfileIds(): Promise<number[]> {
+    // Like the messaging/posts/notifications reads, this 403s on a client that
+    // hasn't activated the guardian profile yet (checked on a live account).
+    await this.ensureProfileContext('consents.getConsentResponses');
+    // rawRequest unwraps the Aula envelope to `.data`, so this is normally the
+    // entry array itself; accept the wrapped shape too.
+    const raw = (await this.rawRequest('consents.getConsentResponses', {
+      returnOnlyPendingConsentResponses: 'false',
+    })) as ConsentEntry[] | { data?: ConsentEntry[] } | null;
+    const entries = Array.isArray(raw) ? raw : (raw?.data ?? []);
+
+    const guardianIds: number[] = [];
+    const childIds: number[] = [];
+    for (const { institutionProfile: ip } of entries) {
+      if (!ip?.id) continue;
+      (ip.role === 'guardian' ? guardianIds : childIds).push(ip.id);
+    }
+    if (guardianIds.length === 0) {
+      throw new AulaClientError(
+        'getFamilyInstitutionProfileIds: consents.getConsentResponses returned no guardian ' +
+          'profile to authorize the request.',
+      );
+    }
+    return [...new Set([...guardianIds, ...childIds])];
   }
 
   /**
@@ -404,7 +595,29 @@ export class AulaClient {
     for (const id of opts.institutionProfileIds ?? []) {
       params.append('institutionProfileIds[]', String(id));
     }
-    return this.getJsonRaw<PostsData>(params);
+    const data = await this.getJsonRaw<PostsData>(params);
+    if (!data?.posts) return data;
+    return {
+      ...data,
+      posts: data.posts.map((p) => (p.id == null ? p : { ...p, webUrl: postWebUrl(p.id) })),
+    };
+  }
+
+  /**
+   * `gallery.getAlbums` — albums shared with the family, newest first. Returns
+   * the array itself; page with `index` until a page comes back shorter than
+   * `limit`.
+   */
+  async getAlbums(args: GetAlbumsArgs): Promise<GalleryAlbum[]> {
+    const params = galleryParams('gallery.getAlbums', args, 'createdAt');
+    return (await this.getJsonRaw<GalleryAlbum[]>(params)) ?? [];
+  }
+
+  /** `gallery.getMedia` for one album, newest upload first. */
+  async getAlbumMedia(args: GetAlbumMediaArgs): Promise<GalleryMediaPage> {
+    const params = galleryParams('gallery.getMedia', args, 'uploadedAt');
+    params.set('albumId', String(args.albumId));
+    return (await this.getJsonRaw<GalleryMediaPage>(params)) ?? {};
   }
 
   /**
@@ -434,6 +647,94 @@ export class AulaClient {
     return this.postJson<unknown>(
       'messaging.setLastReadMessage',
       JSON.stringify({ threadId, messageId, commonInboxId: null, otpInboxId: null }),
+    );
+  }
+
+  /**
+   * `messaging.updateSubscriptionStatus` — set threads read or unread, the
+   * same as "Markér som ulæst" in Aula. Takes the guardian's subscription ids
+   * (`thread.subscriptionId` on getThreads), not thread ids. Unlike
+   * setLastReadMessage it can go both ways. Request shape from Aula's own
+   * web app (`status: 'Read' | 'Unread'`); the `isRead` boolean in the
+   * reverse-engineered mobile app's model answers 400 (Aula code 40).
+   */
+  async setThreadsRead(subscriptionIds: number[], isRead: boolean): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.updateSubscriptionStatus',
+      JSON.stringify({ subscriptionIds, status: isRead ? 'Read' : 'Unread' }),
+    );
+  }
+
+  /**
+   * `messaging.setThreadsMarked` — mark or unmark threads, Aula's own flag
+   * that the thread list carries as `marked`. Takes thread ids. Request shape
+   * from the reverse-engineered app (eisbaw/aulalibre, MarkThreadsRequest),
+   * not yet confirmed against a live mailbox.
+   */
+  async setThreadsMarked(threadIds: number[], marked: boolean): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.setThreadsMarked',
+      JSON.stringify({ threadIds, marked }),
+    );
+  }
+
+  /**
+   * `messaging.reply` — post a reply into an existing thread of the guardian's
+   * personal inbox. `html` is the message body as Aula stores it (HTML).
+   * Request shape from the reverse-engineered app (eisbaw/aulalibre); it has not
+   * been verified against a live account.
+   */
+  async replyToThread(threadId: number, html: string): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.reply',
+      JSON.stringify({
+        threadId,
+        message: { text: html, attachmentIds: [] },
+        commonInboxId: null,
+        bundleId: null,
+      }),
+    );
+  }
+
+  /**
+   * `search.findRecipients` — look up people who can get a message, the
+   * search behind "Til" in Aula's new-message form. Only `text`, `limit` and
+   * `instCode` are known query parameters. Endpoint and shape from the
+   * reverse-engineered app (eisbaw/aulalibre); not verified against a live
+   * account.
+   */
+  async findRecipients(text: string, limit = 20): Promise<RecipientSearchData> {
+    return this.getJson<RecipientSearchData>('search.findRecipients', {
+      text,
+      limit: String(limit),
+    });
+  }
+
+  /**
+   * `messaging.startNewThread` — start a new thread in the guardian's personal
+   * inbox. Recipients and `creator` are mailboxes in the shape a thread's
+   * `recipients[].mailBoxOwner` has; `creator` is the guardian's own mailbox
+   * at the recipients' institution. `html` is the body as Aula stores it.
+   * Request shape from the reverse-engineered app (eisbaw/aulalibre,
+   * StartNewThreadRequestArguments); not verified against a live account.
+   */
+  async startNewThread(args: {
+    subject: string;
+    html: string;
+    recipients: MailBoxOwner[];
+    creator: MailBoxOwner;
+    sensitive?: boolean;
+  }): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.startNewThread',
+      JSON.stringify({
+        message: { text: args.html, attachmentIds: [] },
+        subject: args.subject,
+        recipients: args.recipients,
+        bccRecipients: [],
+        sensitive: args.sensitive ?? false,
+        creator: args.creator,
+      }),
     );
   }
 
@@ -480,7 +781,10 @@ export class AulaClient {
         method: 'GET',
       });
     };
-    return this.parseEnvelope<T>(await send(await this.ensureApiVersion()), send);
+    const version = await this.ensureApiVersion();
+    return tracedAulaCall(method, 'GET', async () =>
+      this.parseEnvelope<T>(await send(version), send),
+    );
   }
 
   /** POST JSON body to an Aula API method. Sets CSRF header from cookie jar. */
@@ -495,7 +799,9 @@ export class AulaClient {
       if (csrf) headers['csrfp-token'] = csrf;
       return this.http.request(url, { method: 'POST', headers, body });
     };
-    return this.parseEnvelope<T>(await send(version), send);
+    return tracedAulaCall(method, 'POST', async () =>
+      this.parseEnvelope<T>(await send(version), send),
+    );
   }
 
   /**
@@ -553,7 +859,13 @@ export class AulaClient {
       return this.parseEnvelope<T>(await send(newVersion), send);
     }
     if (status !== 200) {
-      throw new AulaApiError(`API returned status ${status}`, status, url, body.slice(0, 300));
+      const reason = aulaReason(body);
+      throw new AulaApiError(
+        `API returned status ${status}${reason ? ` (Aula: ${reason})` : ''}`,
+        status,
+        url,
+        body.slice(0, 300),
+      );
     }
     const env = JSON.parse(body) as AulaEnvelope<T>;
     if (env.status?.code && env.status.code !== 0) {
@@ -621,3 +933,20 @@ function buildPresenceTemplateBody(args: UpdatePresenceTemplateArgs): Record<str
 
 // Avoid unused-import lint when using AulaCookieJar transitively.
 void AulaCookieJar;
+
+/** The query both gallery reads share; `filterBy=all` includes untagged media. */
+function galleryParams(method: string, args: GetAlbumsArgs, sortOn: string): URLSearchParams {
+  const params = new URLSearchParams({
+    method,
+    index: String(args.index ?? 0),
+    limit: String(args.limit ?? 100),
+    sortOn,
+    orderDirection: 'desc',
+    filterBy: 'all',
+  });
+  // Indexed keys (`filterInstProfileIds[0]`), as measured on a live account.
+  args.institutionProfileIds.forEach((id, i) => {
+    params.set(`filterInstProfileIds[${i}]`, String(id));
+  });
+  return params;
+}

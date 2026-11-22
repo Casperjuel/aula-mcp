@@ -24,10 +24,13 @@
     "test:watch": "bun test --watch",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "docs:tools": "bun scripts/docs-tools.ts",
+    "demo:web-ui": "bun scripts/web-ui-demo.ts",
+    "docs:web-ui": "bun scripts/web-ui-screenshots.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.6",
+    "@biomejs/biome": "^2.6.7",
     "@types/bun": "^1.4.4",
     "@types/node": "^26.6.6",
     "bun-types": "^1.4.4",

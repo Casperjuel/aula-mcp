@@ -40,6 +40,7 @@ TypeScript + Bun + Hono. Bygget på skuldrene af [`scaarup/aula`](https://github
 - [Kom i gang](#kom-i-gang)
 - [Forbind til Claude Code (eller claude.ai)](#forbind-til-claude-code-eller-claudeai)
 - [Home Assistant (Assist + Voice)](./docs/home-assistant.md)
+- [Web-UI med skærmbilleder](./docs/web-ui.md)
 - [Self-hosting](#self-hosting)
 - [Hvad er der i manifestet](#hvad-er-der-i-manifestet)
 - [CLI-kommandoer](#cli-kommandoer)
@@ -278,6 +279,33 @@ Korte stik:
 
 Hvis du allerede har en europæisk VPS (Hetzner, Scaleway, OVH) og en domæne — så er det bare en `git clone` + `bun install` + systemd-unit som mulighed 1.
 
+### Mulighed 5: Kubernetes med Helm (evt. sammen med kagent)
+
+Helm-chartet ligger i [`charts/aula-mcp`](./charts/aula-mcp/README.md). Det kører én pod (sessioner og token-store bor i poden) med en PVC til tokens og den lokale database, og en separat PVC (eller en S3-bucket) til galleriet.
+
+To modes:
+
+- **`single-parent`** (standard): én Aula-login, og alle der kan nå `/mcp`, er den forælder. Kun til brug inde i clusteret; NetworkPolicy'en lukker for alt andet.
+- **`multi-parent`**: hvert kald skal have et OIDC-token (fx Keycloak), og hver forælder bruger kun sin egen Aula-session. Setup-UI'et logger forælderen ind med OIDC først, så hver forælder kun ser og logger sig selv ind i Aula.
+
+Chartet nægter opsætninger, der ville eksponere en forælders Aula-session: en offentlig `/mcp`-route uden `multi-parent`, eller setup-UI'et uden login.
+
+```sh
+podman build --platform linux/amd64 -t registry.example.com/aula-mcp:dev .
+podman push registry.example.com/aula-mcp:dev
+helm upgrade --install aula-mcp charts/aula-mcp -n aula-mcp --create-namespace \
+  --set image.repository=registry.example.com/aula-mcp --set image.tag=dev
+```
+
+Med `kagent.enabled: true` laves en `RemoteMCPServer` (og evt. en eksempel-`Agent`) i kagent, med token passthrough, så agenten kalder aula-mcp med den indloggede forælders token. Hele opsætningen med Keycloak, oauth2-proxy og Gateway API-routes står i [chartets README](./charts/aula-mcp/README.md).
+
+Test chartet lokalt i [kind](https://kind.sigs.k8s.io/) (kræver kind, helm, kubectl og podman eller docker):
+
+```sh
+scripts/kind-test.sh          # bygger imaget, installerer begge modes og kører helm test
+scripts/kind-test.sh delete   # sletter clusteret igen
+```
+
 ### Backup & nøgle-håndtering
 
 - **Token-store**: gem en kryptert kopi af `~/.config/aula-mcp/tokens.json` + `.key` (eller Keychain-eksport på macOS). Mister du dem, skal du logge ind igen — ingen panik, men irriterende.
@@ -291,6 +319,8 @@ Hvis du allerede har en europæisk VPS (Hetzner, Scaleway, OVH) og en domæne �
 Agenter kalder `aula.discover` én gang og genbruger resultatet resten af sessionen. Manifestet fortæller agenten hvem brugeren er, hvilke børn man kan handle på vegne af, hvilke tredjeparts-widgets skolerne har konfigureret, og hvilke MCP-tools der skal kaldes:
 
 ![aula.discover-manifest pretty-printet](./docs/demos/discover.gif)
+
+Den fulde liste over værktøjer, med beskrivelse og parametre, står i [docs/tools.md](./docs/tools.md) (genereres med `bun run docs:tools`). Setup-UI'ets side **Mine data** (`/data`) viser den samme liste, hvad aula-mcp gemmer om dig, og hvad den kan læse live fra Aula. Skærmbilleder af alle siderne, med opdigtede eksempeldata, står i [docs/web-ui.md](./docs/web-ui.md).
 
 Form:
 
@@ -375,9 +405,29 @@ Komplet hjælp med eksempler: `pnpm aula --help`
 | `AULA_MCP_HOST` | `127.0.0.1` | Bind-interface. Nægter ikke-loopback medmindre `AULA_MCP_ALLOW_REMOTE=1`. |
 | `AULA_MCP_DIR` | `~/.config/aula-mcp` | Konfig-mappe (fil-backend + transcripts + login-log). |
 | `AULA_MCP_RAW=1` | off | Aktiverer `aula.raw_request` escape-hatch-toolet. |
-| `AULA_MCP_WRITE=1` | off | Aktiverer skrive-tools (`aula.presence.set_template` — sæt komme/gå-tider). Serveren er read-only uden den. |
+| `AULA_MCP_WRITE=1` | off | Aktiverer skrive-tools (`aula.presence.set_template` — sæt komme/gå-tider; `aula.messages.reply` — svar i en tråd, altid først som forhåndsvisning). Serveren er read-only uden den. |
+| `AULA_MCP_MARK_READ=0` | on | Slår `aula.messages.mark_read` og `aula.messages.mark_unread` fra, og dashboardets knapper til læst, ulæst og fastgør. De er slået til som standard: de ændrer kun din egen status i Aula, og de kan fortryde hinanden. Kan Aula ikke nås, gemmer dashboardet ændringen lokalt og sender den ved næste synkronisering af beskeder. |
+| `AULA_MCP_KEEPALIVE=0` | on | Slår baggrunds-fornyelsen af access token fra. Som standard tjekker serveren hvert 5. minut og fornyer tokenet når der er under 15 minutter tilbage, så refresh-kæden holdes varm selv uden tool-kald. Forlænger et MitID-login, men kan ikke gøre det permanent. |
+| `AULA_MCP_TOOL_NAMES` | `dotted` | `underscore` navngiver tools `aula_discover` osv. i stedet for `aula.discover`, også i instruktioner, beskrivelser og svar. Til klienter der sender MCP-toolnavne direkte videre til Anthropic API'et (fx kagent), som kun tager `^[a-zA-Z0-9_-]{1,128}$`. |
 | `AULA_MCP_LOG=1` | off | Verbose console-logs fra auth/client-lagene (samme redaktion som wire-transcripts). |
 | `AULA_MCP_ALLOW_REMOTE=1` | off | Tillader at binde til ikke-loopback adresser (fx bag en reverse proxy). |
+| `AULA_MCP_STORAGE` | `sqlite` | Lokal database til Aula-data: `sqlite`, `postgres` eller `none` (slået fra). Indholdet krypteres (AES-256-GCM) med en nøgle pr. forælder, og intet slettes automatisk. Værktøjerne `aula.local.*` (overview, search, get, calendar, message_roles) læser herfra uden at kalde Aula. |
+| `AULA_MCP_SYNC=0` | on | Slår baggrunds-synkroniseringen til den lokale database fra (`aula.sync.run` virker stadig). Som standard henter serveren hver forælders egne data med deres eget Aula-login: beskeder og notifikationer hvert 15. minut, opslag og fremmøde hvert 30., kalender hver time, grupper/kontakter dagligt og galleriet hver 6. time. Synkroniseringen læser kun og markerer aldrig selv noget som læst. Det eneste, den sender, er de læst-, ulæst- og fastgør-ændringer, forælderen selv lavede i dashboardet, mens Aula ikke kunne nås (fra med `AULA_MCP_MARK_READ=0`). Forældre uden Aula-login springes over. |
+| `AULA_MCP_GALLERY_DIR` | `<AULA_MCP_DIR>/gallery` | Hvor galleri-synkroniseringen gemmer billeder og videoer i original kvalitet med et miniaturebillede, pr. forælder: `<forælder>/<barn>/<år>/<dato albumtitel>/`. Album delt med flere børn ligger under `Fælles`. Samme fil i to album gemmes én gang. Filerne bliver, til forælderen sletter dem; et slettet album hentes ikke igen. |
+| `AULA_MCP_GALLERY=0` | on | Henter ingen filer; albummene listes stadig. |
+| `AULA_MCP_GALLERY_STOP_AT` | `0.9` | Hvor fuld disken må være (0–1), før download holder pause. |
+| `AULA_MCP_GALLERY_STORE` | `disk` | `s3` gemmer galleriet i en S3-bucket i stedet for på disken (AWS, MinIO, Ceph RGW, Garage, SeaweedFS). Samme mappestruktur under `<prefix><forælder>/`. S3 har ingen pladsgrænse, så `STOP_AT` gælder ikke. |
+| `AULA_MCP_GALLERY_S3_BUCKET` | — | Bucket, kræves med `s3`. |
+| `AULA_MCP_GALLERY_S3_ENDPOINT` | AWS | Fx `http://s3.example.lan` (path-style). |
+| `AULA_MCP_GALLERY_S3_REGION` | `us-east-1` | Region. |
+| `AULA_MCP_GALLERY_S3_PREFIX` | — | Fx `aula-mcp/`, skal slutte med `/`. |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | — | Nøgler til bucketten. |
+| `AULA_MCP_SQLITE_PATH` | `<AULA_MCP_DIR>/aula.db` | SQLite-filen. |
+| `AULA_MCP_DATABASE_URL` | – | PostgreSQL-URL (fx fra en CNPG-secret). Kræves med `AULA_MCP_STORAGE=postgres`. Findes `<AULA_MCP_DIR>/aula.db`, importeres den automatisk ved start og omdøbes til `aula.db.imported` (rækker, der allerede findes, beholdes). Manuelt: `bun packages/mcp-server/src/storage-copy.ts <aula.db>`. |
+| `AULA_MCP_STORAGE_IMPORT` | `1` | `0` slår den automatiske sqlite-import fra ved skift til postgres. |
+| `AULA_MCP_STORAGE_KEY` | `<AULA_MCP_DIR>/storage.key` | Nøglen (base64, 32 bytes) data krypteres med. Uden den genereres en nøglefil. Tag backup af nøglen sammen med databasen; uden den kan data ikke læses. |
+| `AULA_MCP_STORAGE_PREVIOUS_KEYS` | – | Tidligere nøgler (base64, kommasepareret), som stadig kan læses efter en nøgleskift. Ved start krypteres rækker med en gammel nøgle igen med den nuværende. Er `AULA_MCP_STORAGE_KEY` sat, regnes en eksisterende `storage.key` også som tidligere nøgle. Fjern dem, når loggen viser 0 tilbage. |
+| `AULA_MCP_AUDIT_DAYS` | `30` | Hvor mange dage loggen (Log i dashboardet, `aula.local.audit_log`) gemmes. |
 
 ### Wire-transcripts
 
@@ -437,6 +487,7 @@ Et par issues fra `scaarup/aula`s tracker som jeg har taget højde for:
 | ------- | ---------------------- |
 | `aula login` hænger efter username-prompt | MitID-appen er ikke åbnet endnu, eller QR-koderne er ikke renderet (terminal for smal). Sørg for at terminalen er ≥ 80 kolonner. |
 | `aula login` fejler med "Unilogin refused this MitID identity ... private organisation" | Dit MitID er knyttet til en privat organisation, og Unilogin vil have login via "Lokalt login" → "MitID for privat organisation". Kør `aula login --idp private-organisation`. |
+| `Aula is down for maintenance` (login eller token-refresh) | Aula er lukket for opdatering og viser "Aula bliver opdateret". Ikke en fejl i aula-mcp — se [aulainfo.dk/driftstatus](https://aulainfo.dk/driftstatus) og prøv igen bagefter. Gemte tokens slettes ikke. |
 | `Login failed: MitID initialize failed (status …)` | nemlog-in.mitid.dk er ikke tilgængelig eller returnerede en fejl. Kør igen med `--debug` og inspicér transcripten. |
 | `Login failed: APP poll error: …` | MitID-appen afviste eller annullerede. Tjek at MitID-appen er logget ind på din konto. |
 | `Login failed: appProve failed (status …)` | Sjælden — MitID afviste SRP-proof'et. Kør igen med `--debug` og inspicér `~/.config/aula-mcp/transcripts/login-<timestamp>.jsonl`. |

@@ -1,0 +1,32 @@
+{
+  "clientId": "aula-mcp-ui",
+  "name": "aula-mcp dashboard",
+  "description": "aula-mcp dashboard: each parent signs in; its server calls the API with their access token",
+  "protocol": "openid-connect",
+  "publicClient": false,
+  "clientAuthenticatorType": "client-secret",
+  "standardFlowEnabled": true,
+  "directAccessGrantsEnabled": false,
+  "implicitFlowEnabled": false,
+  "serviceAccountsEnabled": false,
+  "redirectUris": ["https://aula.example.com/auth/callback"],
+  "webOrigins": ["https://aula.example.com"],
+  "attributes": {
+    "pkce.code.challenge.method": "S256",
+    "post.logout.redirect.uris": "https://aula.example.com/*"
+  },
+  "optionalClientScopes": ["aula:write"],
+  "protocolMappers": [
+    {
+      "name": "aula-mcp audience",
+      "protocol": "openid-connect",
+      "protocolMapper": "oidc-audience-mapper",
+      "config": {
+        "included.custom.audience": "aula-mcp",
+        "access.token.claim": "true",
+        "id.token.claim": "false",
+        "introspection.token.claim": "true"
+      }
+    }
+  ]
+}

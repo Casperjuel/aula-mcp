@@ -63,3 +63,50 @@ jobs:
           path: coverage.txt
           if-no-files-found: warn
           retention-days: 14
+
+  # Lint the Helm chart and render it with every values file in charts/*/ci.
+  chart-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v5.1.0
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+
+      - uses: helm/chart-testing-action@v2.9.0
+
+      - name: helm lint
+        run: helm lint charts/aula-mcp
+
+      - name: Render every ci values file
+        run: |
+          for values in charts/aula-mcp/ci/*-values.yaml; do
+            echo "--- $values"
+            helm template aula-mcp charts/aula-mcp -f "$values" > /dev/null
+          done
+
+      - name: ct lint
+        run: ct lint --config ct.yaml --all
+
+  # Install the chart into kind in both modes and run its helm tests
+  # (scripts/kind-test.sh): health, 401 without a token, tool listing for
+  # kagent, and the NetworkPolicy.
+  chart-test:
+    runs-on: ubuntu-latest
+    needs: chart-lint
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5.1.0
+
+      - uses: helm/kind-action@v1.15.2
+        with:
+          install_only: true
+
+      - name: kind test
+        run: scripts/kind-test.sh

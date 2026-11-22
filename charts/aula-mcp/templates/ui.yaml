@@ -1,0 +1,143 @@
+{{- if .Values.ui.enabled }}
+{{- include "aula-mcp.validate" . }}
+{{- $keySecret := include "aula-mcp.uiKeySecret" . }}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $keySecret }}
+# The key the API knows the ui server by. Made once and kept across upgrades.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $keySecret }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+type: Opaque
+data:
+  key: {{ if $existing }}{{ index $existing.data "key" }}{{ else }}{{ randAlphaNum 48 | b64enc }}{{ end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aula-mcp.uiName" . }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "aula-mcp.uiSelectorLabels" . | nindent 4 }}
+  ports:
+    - name: ui
+      port: {{ .Values.ui.port }}
+      targetPort: ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aula-mcp.uiName" . }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+spec:
+  # Sign-ins live in the pod's memory.
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "aula-mcp.uiSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.ui.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "aula-mcp.uiSelectorLabels" . | nindent 8 }}
+        {{- with .Values.ui.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: ui
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["bun", "packages/mcp-server/src/ui-server.ts"]
+          env:
+            # The image's HOME is the MCP pod's data volume; this pod has none.
+            - name: HOME
+              value: /tmp
+            - name: AULA_MCP_UI_PORT
+              value: {{ .Values.ui.port | quote }}
+            - name: AULA_MCP_UI_URL
+              value: {{ .Values.ui.url | quote }}
+            - name: AULA_MCP_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            - name: AULA_MCP_UI_CLIENT_ID
+              value: {{ .Values.ui.clientId | quote }}
+            {{- with .Values.ui.clientSecret }}
+            {{- if .existingSecret }}
+            - name: AULA_MCP_UI_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            - name: AULA_MCP_UI_SCOPES
+              value: {{ join "," .Values.ui.scopes | quote }}
+            - name: AULA_MCP_API_URL
+              value: {{ printf "http://%s.%s.svc.cluster.local:%v" (include "aula-mcp.fullname" .) .Release.Namespace .Values.api.port | quote }}
+            - name: AULA_MCP_API_UI_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $keySecret }}
+                  key: key
+            {{- if .Values.debugLogs }}
+            - name: AULA_MCP_LOG
+              value: "1"
+            {{- end }}
+            {{- if .Values.telemetry.enabled }}
+            {{- include "aula-mcp.telemetryEnv" . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: ui
+              containerPort: {{ .Values.ui.port }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: ui
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: ui
+            periodSeconds: 30
+          {{- with .Values.ui.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

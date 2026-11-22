@@ -1,0 +1,60 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "timezone": "Europe/Copenhagen",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "semanticCommits": "enabled",
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "labels": ["dependencies"],
+  "rangeStrategy": "bump",
+  "packageRules": [
+    {
+      "description": "Workspace internals resolve locally; never update them from a registry.",
+      "matchPackageNames": ["@aula-mcp/**"],
+      "enabled": false
+    },
+    {
+      "groupName": "biome",
+      "matchPackageNames": ["@biomejs/**"]
+    },
+    {
+      "groupName": "mcp-sdk",
+      "matchPackageNames": ["@modelcontextprotocol/**"]
+    },
+    {
+      "description": "bun:test only (see CONTRIBUTING.md); group a stray transitive bump.",
+      "groupName": "vitest",
+      "matchPackageNames": ["vitest", "@vitest/**", "vite"]
+    },
+    {
+      "groupName": "github-actions",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "digest"]
+    },
+    {
+      "description": "Node major follows the LTS line on purpose; review by hand.",
+      "matchDepNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "kagent CRD version the kind test installs.",
+      "customType": "regex",
+      "managerFilePatterns": ["/^scripts/kind-test\\.sh$/"],
+      "matchStrings": ["KAGENT_VERSION=\\$\\{KAGENT_VERSION:-(?<currentValue>[^}]+)\\}"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "ghcr.io/kagent-dev/kagent/helm/kagent-crds"
+    },
+    {
+      "description": "Images given as one repository:tag string (helm test, kind test).",
+      "customType": "regex",
+      "managerFilePatterns": ["/^charts/aula-mcp/values\\.yaml$/", "/^scripts/kind-test\\.sh$/"],
+      "matchStrings": ["(?<depName>curlimages/curl):(?<currentValue>[0-9][^\\s\"']*)"],
+      "datasourceTemplate": "docker"
+    }
+  ]
+}

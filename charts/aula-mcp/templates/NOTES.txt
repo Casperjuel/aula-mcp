@@ -1,0 +1,37 @@
+aula-mcp ({{ .Values.mode }}) is running at {{ include "aula-mcp.mcpUrl" . }}
+{{- if include "aula-mcp.multiParent" . }}
+
+{{- if .Values.api.enabled }}
+API: http://{{ include "aula-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.api.port }}/api/v1 (OpenAPI at /api/v1/openapi.json)
+{{- end }}
+{{- if .Values.ui.enabled }}
+Each parent opens the dashboard at {{ .Values.ui.url }}, signs in with
+{{ .Values.oidc.issuer }} and logs in to Aula there.
+
+Or from a shell, with their IdP user id (the token's `sub`):
+{{- else if .Values.setupUi.enabled }}
+Each parent logs in to Aula at {{ .Values.setupUi.login.url }}, after signing in
+with {{ .Values.oidc.issuer }}.
+
+Or from a shell, with their IdP user id (the token's `sub`):
+{{- else }}
+Log each parent into Aula with their IdP user id (the token's `sub`):
+{{- end }}
+
+  kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "aula-mcp.fullname" . }} -- aula-parent-login <sub>
+{{- else }}
+
+Log the parent into Aula:
+
+  kubectl -n {{ .Release.Namespace }} exec -it deploy/{{ include "aula-mcp.fullname" . }} -- bun apps/cli/src/index.ts login
+
+Anyone who can reach /mcp acts as this parent. Keep it inside the cluster.
+{{- end }}
+{{- if .Values.kagent.enabled }}
+
+kagent: RemoteMCPServer {{ .Values.kagent.namespace }}/{{ .Values.kagent.remoteMCPServer.name }}
+{{- if include "aula-mcp.multiParent" . }} (token passthrough
+{{- if .Values.kagent.remoteMCPServer.discovery }}; kagent lists the tools without a token, tool calls need one)
+{{- else }}; discovery off, so no discovered tools in its status is expected){{ end }}
+{{- end }}
+{{- end }}

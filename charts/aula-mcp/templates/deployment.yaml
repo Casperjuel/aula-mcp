@@ -1,0 +1,267 @@
+{{- $galleryVolume := and .Values.gallery.persistence.enabled (not .Values.gallery.s3.enabled) }}
+{{- include "aula-mcp.validate" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aula-mcp.fullname" . }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+spec:
+  # One replica: sessions and the token store are local to the pod.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "aula-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "aula-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: aula-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: AULA_MCP_HOST
+              value: "0.0.0.0"
+            - name: AULA_MCP_PORT
+              value: "7878"
+            {{- if include "aula-mcp.multiParent" . }}
+            - name: AULA_MCP_MULTI_PARENT
+              value: "1"
+            - name: AULA_MCP_OIDC_ISSUER
+              value: {{ .Values.oidc.issuer | quote }}
+            - name: AULA_MCP_OIDC_AUDIENCE
+              value: {{ .Values.oidc.audience | quote }}
+            {{- if .Values.oidc.acceptIdToken }}
+            - name: AULA_MCP_OIDC_ACCEPT_ID_TOKEN
+              value: "1"
+            {{- end }}
+            {{- if and .Values.kagent.enabled .Values.kagent.remoteMCPServer.discovery }}
+            - name: AULA_MCP_ANONYMOUS_TOOL_LIST
+              value: "1"
+            {{- end }}
+            {{- else }}
+            # Single-parent mode refuses a non-loopback bind without this; the
+            # NetworkPolicy limits who can reach it.
+            - name: AULA_MCP_ALLOW_REMOTE
+              value: "1"
+            {{- end }}
+            {{- if .Values.setupUi.enabled }}
+            - name: AULA_MCP_INGRESS_PORT
+              value: {{ .Values.setupUi.port | quote }}
+            {{- if include "aula-mcp.multiParent" . }}
+            - name: AULA_MCP_SETUP_URL
+              value: {{ .Values.setupUi.login.url | quote }}
+            - name: AULA_MCP_SETUP_CLIENT_ID
+              value: {{ .Values.setupUi.login.clientId | quote }}
+            {{- with .Values.setupUi.login.clientSecret }}
+            {{- if .existingSecret }}
+            - name: AULA_MCP_SETUP_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .secretKey }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.api.enabled }}
+            - name: AULA_MCP_API_PORT
+              value: {{ .Values.api.port | quote }}
+            - name: AULA_MCP_API_AUDIENCE
+              value: {{ .Values.api.audience | default .Values.oidc.audience | quote }}
+            - name: AULA_MCP_API_WRITE_SCOPE
+              value: {{ .Values.api.writeScope | quote }}
+            {{- if .Values.ui.enabled }}
+            - name: AULA_MCP_API_UI_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aula-mcp.uiKeySecret" . }}
+                  key: key
+            - name: AULA_MCP_UI_URL
+              value: {{ .Values.ui.url | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.writeTools }}
+            - name: AULA_MCP_WRITE
+              value: "1"
+            {{- end }}
+            {{- if not .Values.markReadTools }}
+            - name: AULA_MCP_MARK_READ
+              value: "0"
+            {{- end }}
+            {{- if .Values.debugLogs }}
+            - name: AULA_MCP_LOG
+              value: "1"
+            {{- end }}
+            - name: AULA_MCP_TOOL_NAMES
+              value: {{ .Values.toolNames | default (ternary "underscore" "dotted" .Values.kagent.enabled) | quote }}
+            - name: AULA_MCP_KEEPALIVE
+              value: {{ ternary "1" "0" .Values.tokenKeepAlive | quote }}
+            {{- with .Values.encryptionKey.existingSecret }}
+            - name: AULA_MCP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . }}
+                  key: {{ $.Values.encryptionKey.secretKey }}
+            {{- end }}
+            {{- with .Values.storage }}
+            - name: AULA_MCP_STORAGE
+              value: {{ .type | quote }}
+            {{- if eq .type "postgres" }}
+            - name: AULA_MCP_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .postgres.existingSecret }}
+                  key: {{ .postgres.urlKey }}
+            {{- end }}
+            {{- if .key.existingSecret }}
+            - name: AULA_MCP_STORAGE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .key.existingSecret }}
+                  key: {{ .key.secretKey }}
+            {{- if .key.previousKeysKey }}
+            - name: AULA_MCP_STORAGE_PREVIOUS_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .key.existingSecret }}
+                  key: {{ .key.previousKeysKey }}
+                  optional: true
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if not .Values.sync.enabled }}
+            - name: AULA_MCP_SYNC
+              value: "0"
+            {{- end }}
+            {{- with .Values.gallery.s3 }}
+            {{- if .enabled }}
+            - name: AULA_MCP_GALLERY_STORE
+              value: s3
+            - name: AULA_MCP_GALLERY_S3_BUCKET
+              value: {{ required "gallery.s3.bucket is required with gallery.s3.enabled" .bucket | quote }}
+            {{- if .endpoint }}
+            - name: AULA_MCP_GALLERY_S3_ENDPOINT
+              value: {{ .endpoint | quote }}
+            {{- end }}
+            - name: AULA_MCP_GALLERY_S3_REGION
+              value: {{ .region | quote }}
+            {{- if .prefix }}
+            - name: AULA_MCP_GALLERY_S3_PREFIX
+              value: {{ .prefix | quote }}
+            {{- end }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "gallery.s3.existingSecret is required with gallery.s3.enabled" .existingSecret }}
+                  key: {{ .accessKeyIdKey }}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: {{ .secretAccessKeyKey }}
+            {{- end }}
+            {{- end }}
+            {{- if $galleryVolume }}
+            - name: AULA_MCP_GALLERY_DIR
+              value: /gallery
+            {{- end }}
+            {{- if not .Values.gallery.downloads }}
+            - name: AULA_MCP_GALLERY
+              value: "0"
+            {{- end }}
+            - name: AULA_MCP_GALLERY_STOP_AT
+              value: {{ .Values.gallery.stopAt | quote }}
+            {{- if .Values.telemetry.enabled }}
+            {{- include "aula-mcp.telemetryEnv" . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          ports:
+            - name: mcp
+              containerPort: 7878
+            {{- if .Values.setupUi.enabled }}
+            - name: setup-ui
+              containerPort: {{ .Values.setupUi.port }}
+            {{- end }}
+            {{- if .Values.api.enabled }}
+            - name: api
+              containerPort: {{ .Values.api.port }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: mcp
+            periodSeconds: 30
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            {{- if $galleryVolume }}
+            - name: gallery
+              mountPath: /gallery
+            {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.existingClaim | default (include "aula-mcp.fullname" .) }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+        {{- if $galleryVolume }}
+        - name: gallery
+          persistentVolumeClaim:
+            claimName: {{ .Values.gallery.persistence.existingClaim | default (printf "%s-gallery" (include "aula-mcp.fullname" .)) }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

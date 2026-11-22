@@ -8,6 +8,8 @@
 import { describe, expect, test } from 'bun:test';
 import type { StoredTokenRecord, TokenStore } from '@aula-mcp/aula-auth';
 import { createSetupApp } from './setup-ui.ts';
+import { createStorage } from './storage.ts';
+import { sqliteDriver } from './storage-sql.ts';
 
 class MemoryStore implements TokenStore {
   private record: StoredTokenRecord | null = null;
@@ -37,6 +39,96 @@ const SAMPLE_RECORD: StoredTokenRecord = {
 };
 
 describe('createSetupApp', () => {
+  test('GET /data serves the read-only My data page', async () => {
+    const app = createSetupApp({ store: new MemoryStore() });
+    const res = await app.fetch(new Request('http://test/data'));
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain('Mine data');
+    // Relative paths, so the page also works behind HA ingress.
+    expect(body).toContain("getJson('data/summary')");
+  });
+
+  test('GET /data/summary says what is stored and never returns the tokens', async () => {
+    const store = new MemoryStore();
+    await store.save(SAMPLE_RECORD);
+    const app = createSetupApp({ store, autoRenew: true });
+    const res = await app.fetch(new Request('http://test/data/summary'));
+    const text = await res.text();
+    expect(text).not.toContain('"AT"');
+    expect(text).not.toContain('"RT"');
+    const body = JSON.parse(text) as {
+      parent: unknown;
+      login: { logged_in: boolean; username: string; auto_renew: boolean };
+      stored: Array<{ what: string }>;
+      not_stored: string[];
+    };
+    expect(body.parent).toBeNull();
+    expect(body.login).toMatchObject({ logged_in: true, username: 'demo', auto_renew: true });
+    expect(body.stored.map((item) => item.what)).toContain('Dit Aula-login');
+    expect(body.not_stored.length).toBeGreaterThan(0);
+  });
+
+  test('GET /data/summary shows what is in the local database', async () => {
+    const storage = await createStorage(sqliteDriver(':memory:'), Buffer.alloc(32, 1), {
+      type: 'sqlite',
+      location: '/data/aula.db',
+    });
+    await storage
+      .forParent('default')
+      .put([{ kind: 'message', id: '1', occurredAt: 100, data: { text: 'hemmelig' } }]);
+    const app = createSetupApp({
+      store: new MemoryStore(),
+      myData: {
+        contextFor: () => {
+          throw new Error('unused');
+        },
+        storage: { info: storage.info, forParent: () => storage.forParent('default') },
+      },
+    });
+    const text = await (await app.fetch(new Request('http://test/data/summary'))).text();
+    // Counts only; the stored content itself is not part of the summary.
+    expect(text).not.toContain('hemmelig');
+    const body = JSON.parse(text) as {
+      database: { type: string; kinds: Array<{ kind: string; count: number }> };
+      stored: Array<{ what: string; where: string }>;
+    };
+    expect(body.database.type).toBe('sqlite');
+    expect(body.database.kinds).toMatchObject([{ kind: 'message', count: 1 }]);
+    expect(body.stored[0]).toMatchObject({ where: 'SQLite: /data/aula.db' });
+    await storage.close();
+  });
+
+  test('GET /data/summary without a login lists no Aula login', async () => {
+    const app = createSetupApp({ store: new MemoryStore() });
+    const body = (await (await app.fetch(new Request('http://test/data/summary'))).json()) as {
+      login: { logged_in: boolean };
+      stored: Array<{ what: string }>;
+    };
+    expect(body.login.logged_in).toBe(false);
+    expect(body.stored.map((item) => item.what)).not.toContain('Dit Aula-login');
+  });
+
+  test('GET /data/tools lists every tool, gated ones marked off', async () => {
+    const app = createSetupApp({ store: new MemoryStore() });
+    const { tools } = (await (await app.fetch(new Request('http://test/data/tools'))).json()) as {
+      tools: Array<{ name: string; enabled: boolean }>;
+    };
+    expect(tools.length).toBeGreaterThan(10);
+    expect(tools.every((tool) => typeof tool.enabled === 'boolean')).toBe(true);
+  });
+
+  test('GET /data/live needs a live context and an Aula login', async () => {
+    const without = createSetupApp({ store: new MemoryStore() });
+    expect((await without.fetch(new Request('http://test/data/live'))).status).toBe(404);
+
+    const contextFor = () => {
+      throw new Error('should not read Aula without a login');
+    };
+    const notLoggedIn = createSetupApp({ store: new MemoryStore(), myData: { contextFor } });
+    expect((await notLoggedIn.fetch(new Request('http://test/data/live'))).status).toBe(409);
+  });
+
   test('GET / serves the login HTML', async () => {
     const app = createSetupApp({ store: new MemoryStore() });
     const res = await app.fetch(new Request('http://test/'));
@@ -71,6 +163,22 @@ describe('createSetupApp', () => {
     expect(body.logged_in).toBe(true);
     expect(body.username).toBe('demo');
     expect(body.seconds_remaining).toBeGreaterThan(0);
+    expect(body).toMatchObject({ auto_renew: false, renews_at: null, seconds_until_renew: null });
+  });
+
+  test('GET /status says when the keep-alive renews next', async () => {
+    const store = new MemoryStore();
+    await store.save(SAMPLE_RECORD);
+    const app = createSetupApp({ store, autoRenew: true });
+    const body = (await (await app.fetch(new Request('http://test/status'))).json()) as {
+      auto_renew: boolean;
+      renews_at: number;
+      seconds_until_renew: number;
+    };
+    expect(body.auto_renew).toBe(true);
+    // Renewal starts 15 minutes before the access token expires.
+    expect(body.renews_at).toBe(SAMPLE_RECORD.tokens.expires_at - 15 * 60);
+    expect(body.seconds_until_renew).toBeGreaterThanOrEqual(0);
   });
 
   test('POST /login/start rejects missing username', async () => {

@@ -6,20 +6,41 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { AulaPost } from '@aula-mcp/aula-client';
+import { TokenStoreError } from '@aula-mcp/aula-auth';
+import type { AulaClient, AulaPost, ThreadMessage } from '@aula-mcp/aula-client';
 import {
+  AulaApiError,
   AulaStepUpRequiredError,
   htmlToText,
   isoDate,
   isoWeekString,
   isoWeekToMonday,
-  PRESENCE_STATUS_CODE,
 } from '@aula-mcp/aula-client';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
+import {
+  announcedVacations,
+  childrenToday,
+  ownChildren,
+  sendSickReport,
+  sickReportRefusal,
+  VACATION_COMMENT_MAX,
+  vacationAnswerProblems,
+  vacationDays,
+  vacationProblems,
+  vacationRequests,
+} from './child-actions.ts';
 import { buildDiscoverManifest } from './discover.ts';
+import type { GalleryView } from './gallery.ts';
+import { registerGalleryTools } from './gallery-tools.ts';
+import { registerLocalTools, type SharedAccess } from './local-tools.ts';
+import { withSent } from './queued-thread-changes.ts';
+import { registerSessionStatusTool } from './session-status.ts';
+import type { AuditDetails, FeedStatus, ParentStorage } from './storage.ts';
+import type { ParentSync } from './sync.ts';
+import { registerSyncTools } from './sync-tools.ts';
 
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
 
@@ -98,47 +119,151 @@ function currentWeekRange(): { from: string; to: string } {
   return { from: isoDate(monday), to: isoDate(sunday) };
 }
 
-type ConsentEntry = {
-  institutionProfile?: {
-    id?: number;
-    role?: string; // "guardian" | "child"
+export type ReadFailureReason = 'step_up_required' | 'session_expired' | 'network' | 'unreadable';
+
+/** Why a thread could not be read, in a shape the client can act on. */
+export interface ReadFailure {
+  readable: false;
+  /** Machine-readable reason (kept under `error` for existing consumers). */
+  error: ReadFailureReason;
+  message: string;
+  /** What to tell the user / do next. */
+  action: string;
+  retryable: boolean;
+}
+
+/** Map a thrown error to a ReadFailure. Never echoes raw error text except
+ *  Aula's own step-up message, so tokens/URLs can't leak into tool output. */
+export function describeReadFailure(err: unknown): ReadFailure {
+  if (err instanceof AulaStepUpRequiredError) {
+    return {
+      readable: false,
+      error: 'step_up_required',
+      message: err.message || 'This thread is sensitive and needs MitID step-up.',
+      action:
+        'Ask the user to run `aula login` and approve it in the MitID app, then retry. ' +
+        'Other threads are unaffected.',
+      retryable: true,
+    };
+  }
+  // Only 401 is a session problem. A 410 means Aula retired the API version;
+  // AulaClient already bumps it and retries, so one that surfaces here is a
+  // version-handling failure and falls through to `unreadable`.
+  if (err instanceof AulaApiError && err.status === 401) {
+    return {
+      readable: false,
+      error: 'session_expired',
+      message: `Aula rejected the session (status ${err.status}).`,
+      action: 'Ask the user to run `aula login` again, then retry.',
+      retryable: true,
+    };
+  }
+  if (err instanceof AulaApiError) {
+    return {
+      readable: false,
+      error: 'unreadable',
+      message: `Aula returned status ${err.status} for this thread.`,
+      action: 'Retry later; if it persists, run `aula doctor`.',
+      retryable: err.status >= 500,
+    };
+  }
+  // TokenStoreError has no typed "missing" variant, so match its message.
+  // Source: packages/aula-auth/src/token-store.ts ("No tokens on disk...").
+  if (err instanceof TokenStoreError && /No tokens/i.test(err.message)) {
+    return {
+      readable: false,
+      error: 'session_expired',
+      message: 'No saved Aula login.',
+      action: 'Ask the user to run `aula login`.',
+      retryable: true,
+    };
+  }
+  return {
+    readable: false,
+    error: err instanceof TypeError ? 'network' : 'unreadable',
+    message:
+      err instanceof TypeError
+        ? 'Could not reach Aula.'
+        : 'The thread could not be read for an unknown reason.',
+    action: 'Retry; if it persists, run `aula doctor`.',
+    retryable: true,
   };
-};
+}
+
+/** Messages up to this many characters are returned whole. */
+const SHORT_MESSAGE_CHARS = 600;
+/** Longer messages are cut to this many characters for `excerpt`. */
+const EXCERPT_CHARS = 300;
+
+export interface MessagePreview {
+  sender?: string;
+  sentAt?: string;
+  hasAttachments: boolean;
+  /** Plain-text length of the full message. */
+  length: number;
+  /** Short messages: the whole text. Long ones: omitted, see `excerpt`. */
+  text?: string;
+  /** Long messages: the opening, cut at a word boundary. */
+  excerpt?: string;
+  /** True when the message is long — summarise it for the user, don't paste it. */
+  needsSummary: boolean;
+}
+
+/** Whole text when short, an excerpt plus a flag to summarise when long. */
+export function previewMessage(msg: ThreadMessage): MessagePreview {
+  const text = htmlToText(msg.text?.html ?? msg.text?.plain ?? '').trim();
+  const base = {
+    ...(msg.sender?.fullName ? { sender: msg.sender.fullName } : {}),
+    ...(msg.sendDateTime ? { sentAt: msg.sendDateTime } : {}),
+    hasAttachments: msg.hasAttachments === true || (msg.attachments?.length ?? 0) > 0,
+    length: text.length,
+  };
+  if (text.length <= SHORT_MESSAGE_CHARS) return { ...base, text, needsSummary: false };
+  const cut = text.slice(0, EXCERPT_CHARS);
+  const lastSpace = cut.lastIndexOf(' ');
+  const excerpt = `${(lastSpace > EXCERPT_CHARS / 2 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
+  return { ...base, excerpt, needsSummary: true };
+}
+
+/** Newest message of a thread's messages, by send time (falls back to last). */
+function newestMessage(messages: ThreadMessage[]): ThreadMessage | undefined {
+  let best: ThreadMessage | undefined;
+  for (const m of messages) {
+    if (!best || (m.sendDateTime ?? '') >= (best.sendDateTime ?? '')) best = m;
+  }
+  return best;
+}
+
+/** Run `fn` over `items` with at most `limit` in flight, keeping order. */
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
 
 /**
- * Every institution profile (guardian + child, across all institutions) for
- * the authenticated guardian, read from consents.getConsentResponses — the
- * only endpoint that surfaces the club child identity that profiles.list and
- * discover both omit. Returns a guardian id first so the posts call is
- * authorized. Only the logged-in user's own profiles appear here, so the
- * other parent can never leak in.
+ * Aula stores message bodies as HTML. Escape the user's plain text and turn
+ * blank-line-separated blocks into paragraphs, single newlines into <br>.
  */
-async function resolveFamilyProfileIds(
-  client: Awaited<ReturnType<AulaContext['getClient']>>,
-): Promise<number[]> {
-  // rawRequest unwraps the Aula envelope to `.data`, so this is the
-  // consent-entry array directly. Guard against either shape regardless.
-  const raw = (await client.rawRequest('consents.getConsentResponses', {
-    returnOnlyPendingConsentResponses: 'false',
-  })) as { data?: ConsentEntry[] } | ConsentEntry[] | null;
-
-  const entries: ConsentEntry[] = Array.isArray(raw) ? raw : (raw?.data ?? []);
-
-  const guardianIds: number[] = [];
-  const childIds: number[] = [];
-  for (const { institutionProfile: ip } of entries) {
-    if (!ip?.id) continue;
-    (ip.role === 'guardian' ? guardianIds : childIds).push(ip.id);
-  }
-
-  if (guardianIds.length === 0) {
-    throw new Error(
-      'resolveFamilyProfileIds: consents.getConsentResponses returned no guardian ' +
-        'profile to authorize the request.',
-    );
-  }
-  // Guardian(s) first, then children; dedupe.
-  return [...new Set([...guardianIds, ...childIds])];
+export function plainTextToHtml(text: string): string {
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return escaped
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 0)
+    .map((p) => `<p>${p.replace(/\n/g, '<br>')}</p>`)
+    .join('');
 }
 
 interface PdfTextResult {
@@ -159,6 +284,7 @@ export function slimPost(post: AulaPost) {
 
   return {
     id: post.id, // needed for aula.posts.get_attachment's postId
+    ...(post.webUrl ? { webUrl: post.webUrl } : {}),
     title: post.title,
     date: post.publishAt ?? post.timestamp,
     author: post.ownerProfile?.fullName,
@@ -229,7 +355,69 @@ export function validateSetTemplateArgs(args: SetTemplateArgs): string[] {
   return problems;
 }
 
-export function registerTools(server: McpServer, context: AulaContext): void {
+/**
+ * Appended to the descriptions of tools whose results carry `webUrl`, so the
+ * agent knows what the link is good for — and what it isn't.
+ */
+const WEB_URL_NOTE =
+  ' Each item has a `webUrl`: an in-app route (`#/...` on www.aula.dk) that opens in a ' +
+  'browser with a logged-in Aula session, not in the Aula app.';
+
+export interface ToolExtras {
+  /** The caller's sync; the aula.sync.* tools are registered when set. */
+  sync?: ParentSync;
+  /** The caller's downloaded gallery; the aula.gallery.* tools are registered when set. */
+  gallery?: GalleryView;
+  /** The caller's stored data; the aula.local.* tools are registered when set. */
+  local?: ParentStorage;
+  /** What other parents share with the caller: the `owner` argument of the local and gallery tools. */
+  shared?: SharedAccess;
+  /** The caller's calendar feed link status; aula.local.calendar_feed_status is registered when set. */
+  feedStatus?: () => Promise<FeedStatus | null>;
+}
+
+/** `env` decides which gated tools are registered (tool-catalog.ts lists
+ *  them all, enabled or not). */
+export function registerTools(
+  server: McpServer,
+  context: AulaContext,
+  env: NodeJS.ProcessEnv = process.env,
+  extras: ToolExtras = {},
+): void {
+  /**
+   * Runs a write to Aula and records it in the caller's audit log: what was
+   * done and to which ids, never the text that was sent.
+   */
+  const audited = async <T>(action: string, details: AuditDetails, write: () => Promise<T>) => {
+    const started = Date.now();
+    const record = async (ok: boolean, error?: string) => {
+      try {
+        await extras.local?.audit({
+          category: 'aula',
+          action,
+          ok,
+          durationMs: Date.now() - started,
+          details: { trigger: 'tool', ...details, ...(error ? { error } : {}) },
+        });
+      } catch {}
+    };
+    try {
+      const result = await write();
+      await record(true);
+      return result;
+    } catch (err) {
+      await record(false, (err instanceof Error ? err.message : String(err)).slice(0, 300));
+      throw err;
+    }
+  };
+
+  registerSessionStatusTool(server, context);
+  if (extras.sync) registerSyncTools(server, extras.sync);
+  if (extras.gallery) registerGalleryTools(server, extras.gallery, extras.shared);
+  if (extras.local) {
+    registerLocalTools(server, extras.local, extras.shared, extras.feedStatus, extras.gallery);
+  }
+
   // --- aula.discover -------------------------------------------------------
 
   server.registerTool(
@@ -322,13 +510,259 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     },
   );
 
+  // --- aula.presence.children_today ----------------------------------------
+
+  server.registerTool(
+    'aula.presence.children_today',
+    {
+      title: "My children's status today",
+      description:
+        "Each of the logged-in guardian's own children with today's presence in plain " +
+        'words: id, name, status code and Danish label (Ikke kommet, Syg, Ferie/fri, ' +
+        'Kommet, På tur, Sover, Fritidsaktivitet, Fysisk placering, Gået), the planned ' +
+        'drop-off and pickup (entryTime, exitTime), the actual check-in and check-out, ' +
+        'the henteform (activityType) and who picks up (exitWith). Needs no ids, so it ' +
+        'is the quickest answer to "is my child at school?" and the step before ' +
+        'aula.presence.report_sick. Read-only.',
+      inputSchema: {},
+    },
+    async () => {
+      const client = await context.getClient();
+      return jsonContent({ children: await childrenToday(client) });
+    },
+  );
+
+  // --- aula.presence.vacation_requests -------------------------------------
+  //
+  // presence.getVacationRegistrationsByChildren, as nickknissen/aula reads it.
+
+  server.registerTool(
+    'aula.presence.vacation_requests',
+    {
+      title: 'Ferie requests from the institution',
+      description:
+        "The school's or SFO's ferie requests (ferieregistrering) for the logged-in " +
+        "guardian's own children: the institution asks, for a holiday period, on which " +
+        'days the child comes. Per request: child, registrationId, responseId, title, ' +
+        'the period (startDate–endDate), the answer deadline, the note to the guardian, ' +
+        'missingAnswer (Aula still waits for an answer), editable (an answer may still ' +
+        'be given or changed) and timesRequired (days the child comes need drop-off and ' +
+        'pickup times). Unanswered requests come first. Answer one with ' +
+        'aula.presence.answer_vacation_request. This lists requests the institution ' +
+        "made, not ferie the guardian registered (see aula.presence.templates' " +
+        'isOnVacation for that). Read-only.',
+      inputSchema: {},
+    },
+    async () => {
+      const client = await context.getClient();
+      return jsonContent({ requests: await vacationRequests(client) });
+    },
+  );
+
+  // --- aula.presence.vacations --------------------------------------------
+  //
+  // presence.getVacationAnnouncementsByChildren (see
+  // AulaClient.getVacationAnnouncements).
+
+  server.registerTool(
+    'aula.presence.vacations',
+    {
+      title: 'Ferie/fri the guardian registered',
+      description:
+        'The ferie/fri (planned absence) the logged-in guardian registered for their own ' +
+        'children, soonest first: child, vacationId, startDate, endDate, the comment to ' +
+        'the staff and editable (Aula lets the guardian remove it). Remove one with ' +
+        'aula.presence.delete_vacation. Not the holiday periods the institution set, and ' +
+        'not its ferie requests (aula.presence.vacation_requests). Uses ' +
+        "Aula's presence.getVacationAnnouncementsByChildren. Read-only.",
+      inputSchema: {},
+    },
+    async () => {
+      const client = await context.getClient();
+      return jsonContent({ vacations: await announcedVacations(client) });
+    },
+  );
+
+  // --- aula.messages.mark_read / mark_unread (write, on by default) -------
+  //
+  // Writes to Aula, but only the guardian's own read state, and each can undo
+  // the other, so they are on unless AULA_MCP_MARK_READ=0. The stored copy of
+  // the thread follows, so aula.local.* agrees with Aula without a sync.
+
+  if (env.AULA_MCP_MARK_READ !== '0') {
+    // Aula pages threads 20 at a time and ignores pageSize, so a single
+    // getThreads call only ever sees the newest 20 — walk pages until the
+    // thread turns up. Bounded: a caller that already has the thread in hand
+    // should pass its ids rather than make us search for it.
+    const MAX_PAGES = 10;
+    const findThread = async (client: AulaClient, threadId: number) => {
+      let pagesRead = 0;
+      for (let page = 0; page < MAX_PAGES; page++) {
+        const { threads, hasMorePages } = await client.getThreadsPage({ page });
+        pagesRead = page + 1;
+        const found = threads.find((t) => t.id === threadId);
+        if (found) return { thread: found, pagesRead };
+        if (!hasMorePages) break;
+      }
+      return { thread: undefined, pagesRead };
+    };
+    const notFound = (threadId: number, pagesRead: number, what: string, error: string) =>
+      jsonContent({
+        error,
+        message:
+          `Thread ${threadId} was not found in the first ${pagesRead} pages ` +
+          `(~${pagesRead * 20} threads), or carries no ${what}. Pass ${what} explicitly ` +
+          '— aula.messages.list_threads returns it on the thread.',
+      });
+    /** The thread as the last sync stored it, or null. */
+    const storedThread = async (threadId: number): Promise<Record<string, unknown> | null> => {
+      const stored = await extras.local?.get('message_thread', String(threadId));
+      return stored && typeof stored.data === 'object' && stored.data !== null
+        ? (stored.data as Record<string, unknown>)
+        : null;
+    };
+    // The stored thread follows Aula, and a change the dashboard queued for
+    // the same flag is done with, so aula.local.search shows it at once.
+    const storeRead = async (threadId: number, read: boolean) => {
+      const local = extras.local;
+      if (!local) return;
+      const stored = await local.get('message_thread', String(threadId));
+      if (!stored || typeof stored.data !== 'object' || stored.data === null) return;
+      await local.put([{ ...stored, data: withSent(stored.data, { read }) }]);
+    };
+
+    server.registerTool(
+      'aula.messages.mark_read',
+      {
+        title: 'Mark a message thread as read',
+        description:
+          'Move the read marker in a thread to its newest message, clearing the unread ' +
+          'badge in Aula. WRITES to Aula (only your own read state) — on by default, off ' +
+          'when AULA_MCP_MARK_READ=0. Pass `messageId` from `aula.messages.list_threads` ' +
+          '(thread.latestMessage.id); omit it to mark the thread read up to its newest ' +
+          'stored message (what aula.local.get shows), or, for a thread not stored, its ' +
+          'newest message in Aula right now. The stored thread is marked read too, so ' +
+          'aula.local.search agrees at once. Undo with `aula.messages.mark_unread`. Only ' +
+          'call this for threads the user has actually seen.',
+        inputSchema: {
+          threadId: z
+            .number()
+            .int()
+            .positive()
+            .describe('Thread id from aula.messages.list_threads.'),
+          messageId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe(
+              'Aula\'s opaque message id (e.g. "6a3d2467304484.24549709"), NOT a number. ' +
+                "Defaults to the thread's newest message.",
+            ),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        // Messaging endpoints 403 until the guardian profile is activated
+        // server-side — same priming as aula.messages.get_thread.
+        await context.getGuardianUserId();
+
+        let messageId = args.messageId;
+        const storedLatest = (await storedThread(args.threadId))?.latestMessage as
+          | { id?: unknown }
+          | undefined;
+        if (!messageId && storedLatest?.id != null) messageId = String(storedLatest.id);
+        if (!messageId) {
+          const { thread, pagesRead } = await findThread(client, args.threadId);
+          if (thread?.latestMessage?.id == null) {
+            return notFound(args.threadId, pagesRead, 'messageId', 'message_id_unresolved');
+          }
+          messageId = String(thread.latestMessage.id);
+        }
+
+        // Aula has no "mark as read" verb; see AulaClient.setLastReadMessage.
+        const result = await audited('mark_read', { threadId: args.threadId, messageId }, () =>
+          client.setLastReadMessage(args.threadId, messageId),
+        );
+        await storeRead(args.threadId, true);
+        return jsonContent({ ok: true, threadId: args.threadId, messageId, read: true, result });
+      },
+    );
+
+    server.registerTool(
+      'aula.messages.mark_unread',
+      {
+        title: 'Mark a message thread as unread',
+        description:
+          'Set a thread back to unread in Aula, the same as "Markér som ulæst" there, so ' +
+          'its unread badge returns. WRITES to Aula (only your own read state) — on by ' +
+          'default, off when AULA_MCP_MARK_READ=0. Undo with `aula.messages.mark_read`. ' +
+          'Pass `subscriptionId` from `aula.messages.list_threads` ' +
+          '(thread.subscriptionId — not the thread id); omit it to take it from the stored ' +
+          'thread, or to look it up among the newest threads in Aula when not stored. The ' +
+          'stored thread is marked unread too, so aula.local.search agrees at once.',
+        inputSchema: {
+          threadId: z
+            .number()
+            .int()
+            .positive()
+            .describe('Thread id from aula.messages.list_threads.'),
+          subscriptionId: z
+            .number()
+            .int()
+            .positive()
+            .optional()
+            .describe(
+              "The thread's subscriptionId from aula.messages.list_threads. Looked up " +
+                'when left out.',
+            ),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        await context.getGuardianUserId();
+
+        let subscriptionId = args.subscriptionId;
+        const storedSubscription = (await storedThread(args.threadId))?.subscriptionId;
+        if (subscriptionId === undefined && typeof storedSubscription === 'number') {
+          subscriptionId = storedSubscription;
+        }
+        if (subscriptionId === undefined) {
+          const { thread, pagesRead } = await findThread(client, args.threadId);
+          if (thread?.subscriptionId == null) {
+            return notFound(
+              args.threadId,
+              pagesRead,
+              'subscriptionId',
+              'subscription_id_unresolved',
+            );
+          }
+          subscriptionId = thread.subscriptionId;
+        }
+
+        const result = await audited(
+          'mark_unread',
+          { threadId: args.threadId, subscriptionId },
+          () => client.setThreadsRead([subscriptionId], false),
+        );
+        await storeRead(args.threadId, false);
+        return jsonContent({
+          ok: true,
+          threadId: args.threadId,
+          subscriptionId,
+          read: false,
+          result,
+        });
+      },
+    );
+  }
+
   // --- aula.presence.set_template (gated, write) ---------------------------
   //
   // The first and only tool that *writes* to Aula. Gated behind
   // AULA_MCP_WRITE=1 so a server stays read-only by default — rescheduling a
   // child's pickup is not something an agent should be able to do unasked.
 
-  if (process.env.AULA_MCP_WRITE === '1') {
+  if (env.AULA_MCP_WRITE === '1') {
     server.registerTool(
       'aula.presence.set_template',
       {
@@ -399,19 +833,31 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         const repeat = args.repeat ?? 'never';
 
         const client = await context.getClient();
-        const result = await client.updatePresenceTemplate({
-          institutionProfileId: args.institutionProfileId,
-          date: args.date,
-          activityType: args.activityType,
-          repeatPattern: repeat,
-          ...(args.entryTime ? { entryTime: args.entryTime } : {}),
-          ...(args.exitTime ? { exitTime: args.exitTime } : {}),
-          ...(args.pickedUpBy ? { pickedUpBy: args.pickedUpBy } : {}),
-          ...(args.selfDeciderStartTime ? { selfDeciderStartTime: args.selfDeciderStartTime } : {}),
-          ...(args.selfDeciderEndTime ? { selfDeciderEndTime: args.selfDeciderEndTime } : {}),
-          ...(args.comment !== undefined ? { comment: args.comment } : {}),
-          ...(args.repeatUntil ? { repeatUntil: args.repeatUntil } : {}),
-        });
+        const result = await audited(
+          'presence_set_template',
+          {
+            institutionProfileId: args.institutionProfileId,
+            date: args.date,
+            activityType: args.activityType,
+            repeat,
+          },
+          () =>
+            client.updatePresenceTemplate({
+              institutionProfileId: args.institutionProfileId,
+              date: args.date,
+              activityType: args.activityType,
+              repeatPattern: repeat,
+              ...(args.entryTime ? { entryTime: args.entryTime } : {}),
+              ...(args.exitTime ? { exitTime: args.exitTime } : {}),
+              ...(args.pickedUpBy ? { pickedUpBy: args.pickedUpBy } : {}),
+              ...(args.selfDeciderStartTime
+                ? { selfDeciderStartTime: args.selfDeciderStartTime }
+                : {}),
+              ...(args.selfDeciderEndTime ? { selfDeciderEndTime: args.selfDeciderEndTime } : {}),
+              ...(args.comment !== undefined ? { comment: args.comment } : {}),
+              ...(args.repeatUntil ? { repeatUntil: args.repeatUntil } : {}),
+            }),
+        );
         return jsonContent({ ok: true, result });
       },
     );
@@ -456,23 +902,67 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       },
       async (args) => {
         const client = await context.getClient();
+        // Only the guardian's own children, and no undo for a child that is
+        // not reported sick. See sickReportRefusal.
+        const refusal = await sickReportRefusal(client, args.institutionProfileIds, args.sick);
+        if (refusal) return jsonContent(refusal);
 
-        // Scope the write to this login's own children.
-        //
-        // Aula happily accepts any institution-profile id the caller has rights
-        // to, and the schema takes an array, so a single hallucinated number is
-        // enough to tell the wrong institution that someone else's child is
-        // ill. Resolve the guardian's actual children first and refuse anything
-        // that isn't one of them — a local error beats a phone call from a
-        // daycare.
-        const profilesData = await client.getProfilesByLogin();
-        const ownChildren = new Map<number, string>();
-        for (const profile of profilesData.profiles ?? []) {
-          for (const child of profile.children ?? []) {
-            ownChildren.set(child.id, child.name);
-          }
-        }
-        const unknownIds = args.institutionProfileIds.filter((id) => !ownChildren.has(id));
+        const result = await audited(
+          args.sick ? 'presence_report_sick' : 'presence_undo_sick',
+          { children: args.institutionProfileIds.length },
+          () => sendSickReport(client, args.institutionProfileIds, args.sick),
+        );
+        return jsonContent({ ok: true, result });
+      },
+    );
+
+    // --- aula.presence.add_vacation (gated, write) --------------------------
+    //
+    // Aula's calendar.addVacation, not verified against the live API (see
+    // AulaClient.addVacation). aula.presence.delete_vacation removes one.
+
+    server.registerTool(
+      'aula.presence.add_vacation',
+      {
+        title: 'Register ferie/fri for a child',
+        description:
+          'Register a planned absence (ferie/fri) for whole days, from startDate to ' +
+          'endDate. WRITES to Aula — enabled when AULA_MCP_WRITE=1. The institution sees ' +
+          'it in its presence overview, so confirm the child and the dates with the user ' +
+          'before calling. A mistake can be removed with aula.presence.delete_vacation, ' +
+          'or in the Aula app. ' +
+          "Uses Aula's calendar.addVacation call as the guardian " +
+          'portal sends it; it is not yet verified against the live API, so check the ' +
+          'result with aula.presence.templates (isOnVacation) afterwards. To answer an ' +
+          "institution's ferie request (ferieregistrering), use " +
+          'aula.presence.answer_vacation_request instead.',
+        inputSchema: {
+          institutionProfileIds: z
+            .array(z.number().int().positive())
+            .min(1)
+            .describe(
+              'Child institution-profile ids (aula.discover children[].id). Must belong to ' +
+                'the logged-in guardian; anything else is rejected.',
+            ),
+          startDate: z
+            .string()
+            .describe('First day of the absence, YYYY-MM-DD, today or later (Danish time).'),
+          endDate: z
+            .string()
+            .describe('Last day of the absence, YYYY-MM-DD, within a year of startDate.'),
+          comment: z
+            .string()
+            .max(VACATION_COMMENT_MAX)
+            .optional()
+            .describe(`Optional note to the staff, at most ${VACATION_COMMENT_MAX} characters.`),
+        },
+      },
+      async (args) => {
+        const problems = vacationProblems(args);
+        if (problems.length > 0) return jsonContent({ error: 'invalid', problems });
+        const client = await context.getClient();
+        const children = await ownChildren(client);
+        const unknownIds = args.institutionProfileIds.filter((id) => !children.has(id));
         if (unknownIds.length > 0) {
           return jsonContent({
             error: 'unknown_child',
@@ -480,124 +970,222 @@ export function registerTools(server: McpServer, context: AulaContext): void {
               'Refusing to write: these institution-profile ids are not children of the ' +
               'logged-in guardian. Call aula.discover and use children[].id.',
             unknownIds,
-            knownChildren: [...ownChildren].map(([id, name]) => ({ id, name })),
           });
         }
-
-        // Un-reporting is not a free action.
-        //
-        // Aula's own UI only offers "take the sick report back" from a sick
-        // state, so status 0 is safe there. Here nothing constrains it: calling
-        // sick:false on a child who is currently checked in would silently flip
-        // them to "ikke kommet" and still report ok. Only allow it for a child
-        // Aula currently reports as sick.
-        if (!args.sick) {
-          const overview = await client.getDailyOverview(args.institutionProfileIds);
-          const statusById = new Map<number, number>();
-          for (const entry of overview) {
-            const id = entry.institutionProfile?.id;
-            if (id !== undefined) statusById.set(id, entry.status);
-          }
-          const notSick = args.institutionProfileIds.filter(
-            (id) => statusById.get(id) !== PRESENCE_STATUS_CODE.SICK,
-          );
-          if (notSick.length > 0) {
-            return jsonContent({
-              error: 'not_reported_sick',
-              message:
-                'Refusing to write: taking a sick report back sets the child to ' +
-                '"ikke kommet" (0), so it is only safe for a child Aula currently reports ' +
-                'as sick. These are not. Use aula.presence.today to see the current status.',
-              children: notSick.map((id) => ({
-                id,
-                name: ownChildren.get(id),
-                currentStatus: statusById.get(id) ?? null,
-              })),
-            });
-          }
-        }
-
-        const result = await client.updatePresenceStatus({
-          institutionProfileIds: args.institutionProfileIds,
-          status: args.sick ? PRESENCE_STATUS_CODE.SICK : PRESENCE_STATUS_CODE.NOT_PRESENT,
-        });
+        const result = await audited(
+          'presence_add_vacation',
+          {
+            children: args.institutionProfileIds.length,
+            days: vacationDays(args.startDate, args.endDate),
+          },
+          () =>
+            client.addVacation({
+              childIds: args.institutionProfileIds,
+              startDate: args.startDate,
+              endDate: args.endDate,
+              ...(args.comment ? { comment: args.comment } : {}),
+            }),
+        );
         return jsonContent({ ok: true, result });
       },
     );
 
-    // --- aula.messages.mark_read (gated, write) ----------------------------
+    // --- aula.presence.delete_vacation (gated, write) -----------------------
     //
-    // Lives here rather than next to the other aula.messages.* tools so every
-    // write stays behind the one AULA_MCP_WRITE gate. Aula has no "mark as
-    // read" verb; see AulaClient.setLastReadMessage for what actually happens.
+    // calendar.deleteEvent on the ferie's event id (see
+    // AulaClient.deleteVacation). Only ids from the guardian's own list.
 
     server.registerTool(
-      'aula.messages.mark_read',
+      'aula.presence.delete_vacation',
       {
-        title: 'Mark a message thread as read',
+        title: 'Remove a registered ferie/fri',
         description:
-          'Move the read marker in a thread to its newest message, clearing the unread ' +
-          'badge. WRITES to Aula — enabled when AULA_MCP_WRITE=1. Pass `messageId` from ' +
-          '`aula.messages.list_threads` (thread.latestMessage.id); omit it to mark the ' +
-          'thread read up to whatever its newest message is right now. Marking read is ' +
-          'not reversible through this API — Aula offers no way to set a thread back to ' +
-          'unread, so only call this for threads the user has actually seen.',
+          'Remove a ferie/fri the logged-in guardian registered, by its vacationId from ' +
+          'aula.presence.vacations. WRITES to Aula — enabled when AULA_MCP_WRITE=1. The ' +
+          'child is expected again on those days and the institution sees the change, so ' +
+          'confirm the child and the dates with the user before calling. Only ferie Aula ' +
+          "marks as editable can be removed. Uses Aula's calendar.deleteEvent as the Aula " +
+          'web portal sends it for a ferie; read aula.presence.vacations again afterwards ' +
+          'and check that it is gone.',
+        inputSchema: {
+          vacationId: z
+            .number()
+            .int()
+            .positive()
+            .describe('The vacationId from aula.presence.vacations.'),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        const vacation = (await announcedVacations(client)).find(
+          (v) => v.vacationId === args.vacationId,
+        );
+        if (!vacation) {
+          return jsonContent({
+            error: 'unknown_vacation',
+            message:
+              'Refusing to write: no ferie/fri with this vacationId for the logged-in ' +
+              "guardian's children. Call aula.presence.vacations.",
+          });
+        }
+        if (!vacation.editable) {
+          return jsonContent({
+            error: 'not_editable',
+            message: 'Aula does not allow removing this ferie/fri; it can only be changed in Aula.',
+          });
+        }
+        const result = await audited(
+          'presence_delete_vacation',
+          {
+            children: 1,
+            days:
+              vacation.startDate && vacation.endDate
+                ? vacationDays(vacation.startDate, vacation.endDate)
+                : 0,
+          },
+          () => client.deleteVacation(vacation.vacationId),
+        );
+        return jsonContent({ ok: true, result });
+      },
+    );
+
+    // --- aula.presence.answer_vacation_request (gated, write) ---------------
+    //
+    // calendar.respondToVacationRegistrationRequest, not verified against the
+    // live API (see AulaClient.respondToVacationRequest).
+
+    server.registerTool(
+      'aula.presence.answer_vacation_request',
+      {
+        title: 'Answer a ferie request',
+        description:
+          "Answer one of the institution's ferie requests (ferieregistrering) for one " +
+          'child: for each day of the period whether the child comes, and when the ' +
+          'institution asks for it the drop-off and pickup times. WRITES to Aula — ' +
+          'enabled when AULA_MCP_WRITE=1. The staff plan from the answer, so confirm the ' +
+          'child, every day and the times with the user before calling. Take childId and ' +
+          'responseId from aula.presence.vacation_requests; only requests Aula marks as ' +
+          'editable can be answered, and while they stay editable a new call replaces the ' +
+          "answer. Uses Aula's calendar.respondToVacationRegistrationRequest as the Aula " +
+          'app sends it; it is not yet verified against the live API, so read ' +
+          'aula.presence.vacation_requests again afterwards and check that missingAnswer ' +
+          'is false.',
+        inputSchema: {
+          childId: z
+            .number()
+            .int()
+            .positive()
+            .describe("Child institution-profile id, the request's childId."),
+          responseId: z
+            .number()
+            .int()
+            .positive()
+            .describe('The responseId of the request from aula.presence.vacation_requests.'),
+          days: z
+            .array(
+              z.object({
+                date: z.string().describe('A day in the request period, YYYY-MM-DD.'),
+                isComing: z.boolean().describe('True when the child comes that day.'),
+                entryTime: z
+                  .string()
+                  .optional()
+                  .describe('Drop-off HH:MM, on days the child comes.'),
+                exitTime: z.string().optional().describe('Pickup HH:MM, on days the child comes.'),
+              }),
+            )
+            .min(1)
+            .max(366)
+            .describe('Each day of the period with the answer for it.'),
+          comment: z
+            .string()
+            .max(VACATION_COMMENT_MAX)
+            .optional()
+            .describe(`Optional note to the staff, at most ${VACATION_COMMENT_MAX} characters.`),
+        },
+      },
+      async (args) => {
+        const client = await context.getClient();
+        const request = (await vacationRequests(client)).find(
+          (r) => r.childId === args.childId && r.responseId === args.responseId,
+        );
+        if (!request) {
+          return jsonContent({
+            error: 'unknown_request',
+            message:
+              'Refusing to write: no ferie request with this childId and responseId for the ' +
+              "logged-in guardian's children. Call aula.presence.vacation_requests.",
+          });
+        }
+        const days = args.days.map((d) => ({
+          date: d.date,
+          isComing: d.isComing,
+          ...(d.entryTime ? { entryTime: d.entryTime } : {}),
+          ...(d.exitTime ? { exitTime: d.exitTime } : {}),
+        }));
+        const problems = vacationAnswerProblems(request, days, args.comment);
+        if (problems.length > 0) return jsonContent({ error: 'invalid', problems });
+        const result = await audited(
+          'presence_answer_vacation_request',
+          { days: days.length, coming: days.filter((d) => d.isComing).length },
+          () =>
+            client.respondToVacationRequest({
+              childId: args.childId,
+              responseId: args.responseId,
+              days,
+              ...(args.comment ? { comment: args.comment } : {}),
+            }),
+        );
+        return jsonContent({ ok: true, result });
+      },
+    );
+
+    // --- aula.messages.reply (gated, write) --------------------------------
+    //
+    // Two-step: without `send: true` nothing is posted and the tool returns the
+    // exact text for the user to approve. A sent message cannot be recalled.
+
+    server.registerTool(
+      'aula.messages.reply',
+      {
+        title: 'Reply in a message thread',
+        description:
+          'Reply to an existing Aula thread. WRITES to Aula — enabled when ' +
+          'AULA_MCP_WRITE=1. Two steps: call WITHOUT `send` first to get a preview, show ' +
+          'the user the exact text, and only call again with `send: true` after they ' +
+          'explicitly approve it. A sent message cannot be recalled and goes to the ' +
+          "thread's other participants (e.g. the child's teacher). Replies only; it " +
+          'cannot start a new thread.',
         inputSchema: {
           threadId: z
             .number()
             .int()
             .positive()
             .describe('Thread id from aula.messages.list_threads.'),
-          messageId: z
-            .string()
-            .min(1)
+          text: z.string().min(1).max(5000).describe('Plain-text reply body.'),
+          send: z
+            .boolean()
             .optional()
-            .describe(
-              'Aula\'s opaque message id (e.g. "6a3d2467304484.24549709"), NOT a number. ' +
-                "Defaults to the thread's newest message.",
-            ),
+            .describe('Must be true to actually send. Omit to get a preview only.'),
         },
       },
       async (args) => {
-        const client = await context.getClient();
-        // Messaging endpoints 403 until the guardian profile is activated
-        // server-side — same priming as aula.messages.get_thread.
-        await context.getGuardianUserId();
-
-        let messageId = args.messageId;
-        if (!messageId) {
-          // Aula pages threads 20 at a time and ignores pageSize, so a single
-          // getThreads call only ever sees the newest 20 — walk pages until the
-          // thread turns up. Bounded: a caller that already has the thread in
-          // hand should pass messageId rather than make us search for it.
-          const MAX_PAGES = 10;
-          let latest: string | undefined;
-          let pagesRead = 0;
-          for (let page = 0; page < MAX_PAGES; page++) {
-            const { threads, hasMorePages } = await client.getThreadsPage({ page });
-            pagesRead = page + 1;
-            const found = threads.find((t) => t.id === args.threadId);
-            if (found?.latestMessage?.id != null) {
-              latest = String(found.latestMessage.id);
-              break;
-            }
-            if (!hasMorePages) break;
-          }
-          if (latest === undefined) {
-            return jsonContent({
-              error: 'message_id_unresolved',
-              message:
-                `Thread ${args.threadId} was not found in the first ${pagesRead} pages ` +
-                `(~${pagesRead * 20} threads), or carries no latestMessage.id. Pass ` +
-                'messageId explicitly — aula.messages.list_threads returns it as ' +
-                'thread.latestMessage.id.',
-            });
-          }
-          messageId = latest;
+        if (args.send !== true) {
+          return jsonContent({
+            ok: true,
+            sent: false,
+            preview: { threadId: args.threadId, text: args.text },
+            message: 'Not sent. Show this text to the user and call again with send: true to send.',
+          });
         }
-
-        const result = await client.setLastReadMessage(args.threadId, messageId);
-        return jsonContent({ ok: true, threadId: args.threadId, messageId, result });
+        const client = await context.getClient();
+        // Same guardian-profile priming as the other messaging tools.
+        await context.getGuardianUserId();
+        const result = await audited(
+          'reply',
+          { threadId: args.threadId, characters: args.text.length },
+          () => client.replyToThread(args.threadId, plainTextToHtml(args.text)),
+        );
+        return jsonContent({ ok: true, sent: true, threadId: args.threadId, result });
       },
     );
   }
@@ -658,7 +1246,10 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     'aula.notifications.list',
     {
       title: 'Aula notifications',
-      description: 'Unread items + activity for the active guardian profile.',
+      description:
+        'Unread items + activity for the active guardian profile. `webUrl` is set on ' +
+        'shared-post notifications only; it is an in-app route (`#/...` on www.aula.dk) that opens ' +
+        'in a browser with a logged-in Aula session, not in the Aula app.',
       inputSchema: {},
     },
     async () => {
@@ -690,7 +1281,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
     async (args) => {
       const client = await context.getClient();
       await context.getGuardianUserId();
-      const ids = args.childInstitutionProfileIds ?? (await resolveFamilyProfileIds(client));
+      const ids =
+        args.childInstitutionProfileIds ?? (await client.getFamilyInstitutionProfileIds());
       return jsonContent(await client.getGroups(ids));
     },
   );
@@ -734,7 +1326,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       title: 'Aula posts (class news feed)',
       description:
         'Teacher posts and class-level updates, across every institution the ' +
-        'family belongs to (school and club).',
+        'family belongs to (school and club).' +
+        WEB_URL_NOTE,
       inputSchema: {
         limit: z.number().int().min(1).max(50).optional(),
         index: z.number().int().min(0).optional(),
@@ -758,7 +1351,8 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       // Profile-scoped feed needs the guardian profile activated, or Aula 403s.
       await context.getGuardianUserId();
 
-      const institutionProfileIds = args.profileIds ?? (await resolveFamilyProfileIds(client));
+      const institutionProfileIds =
+        args.profileIds ?? (await client.getFamilyInstitutionProfileIds());
 
       const result = await client.getPosts({
         ...(args.limit !== undefined ? { limit: args.limit } : {}),
@@ -780,7 +1374,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
 
   // --- aula.raw_request (gated) --------------------------------------------
 
-  if (process.env.AULA_MCP_RAW === '1') {
+  if (env.AULA_MCP_RAW === '1') {
     server.registerTool(
       'aula.raw_request',
       {
@@ -814,9 +1408,27 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         'hasMorePages }`: when `hasMorePages` is true there are older threads you have ' +
         'not seen, so keep calling with `page` + 1 before concluding anything about the ' +
         'mailbox as a whole (e.g. "no unread messages"). A single call answers "what ' +
-        'arrived recently", never "what does the mailbox contain".',
+        'arrived recently", never "what does the mailbox contain". By default each ' +
+        'unread thread also carries `latest`: sender, time, attachment flag and the newest ' +
+        'message — whole in `text` when short, otherwise an `excerpt` with ' +
+        '`needsSummary: true`. For those, fetch aula.messages.get_thread if you need ' +
+        'more and summarise it for the user rather than pasting it. A thread whose ' +
+        'content cannot be read gets `latest: { readable: false, error, message, action, ' +
+        'retryable }` and, for sensitive threads, `sensitive: true`; its subject and ' +
+        'sender are still listed. Show those rows as "needs MitID approval" and relay ' +
+        '`action` once, not per thread.' +
+        WEB_URL_NOTE,
       inputSchema: {
         page: z.number().int().min(0).default(0).optional(),
+        includeContent: z
+          .enum(['unread', 'all', 'none'])
+          .optional()
+          .describe(
+            'Which threads get `latest` (one extra Aula call per thread). Default "unread". ' +
+              'Use "all" only when you need to summarise read threads too; use "none" ' +
+              'for a cheap "anything new?" check, since each thread already has ' +
+              '`lastMessage` sender and time.',
+          ),
         pageSize: z
           .number()
           .int()
@@ -835,7 +1447,33 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         ...(args.page !== undefined ? { page: args.page } : {}),
         ...(args.pageSize !== undefined ? { pageSize: args.pageSize } : {}),
       });
-      return jsonContent(page);
+      const includeContent = args.includeContent ?? 'unread';
+      if (includeContent === 'none') return jsonContent(page);
+      const threads = await mapLimit(page.threads, 5, async (thread) => {
+        // Read threads are skipped by default: each fetch is one more Aula
+        // request, and the agent usually only summarises what's new.
+        if (includeContent === 'unread' && thread.read) return thread;
+        try {
+          const { messages } = await client.getMessagesForThread(thread.id);
+          const newest = newestMessage(messages);
+          return {
+            ...thread,
+            latest: newest
+              ? { readable: true, ...previewMessage(newest) }
+              : { readable: false, error: 'no_messages', retryable: false },
+          };
+        } catch (err) {
+          const failure = describeReadFailure(err);
+          // Thread metadata (subject, sender, unread) is kept; only the body is
+          // withheld. `sensitive` lets the client render a clear row for it.
+          return {
+            ...thread,
+            ...(failure.error === 'step_up_required' ? { sensitive: true } : {}),
+            latest: failure,
+          };
+        }
+      });
+      return jsonContent({ ...page, threads });
     },
   );
 
@@ -1022,8 +1660,9 @@ export function registerTools(server: McpServer, context: AulaContext): void {
       title: 'Read a single thread',
       description:
         'Returns subject + every message in the thread. If the thread is sensitive, ' +
-        'this tool returns an error code that means the user must MitID step-up to read it ' +
-        '(currently a fresh `aula login` from the CLI).',
+        'this tool does not throw: it returns `{ readable: false, error, message, action, ' +
+        'retryable }`. `error: "step_up_required"` means the user must approve a MitID ' +
+        'step-up (`aula login`); relay `action` to them.',
       inputSchema: {
         threadId: z.number().int().positive(),
         page: z.number().int().min(0).default(0).optional(),
@@ -1047,14 +1686,7 @@ export function registerTools(server: McpServer, context: AulaContext): void {
           }),
         );
       } catch (e) {
-        if (e instanceof AulaStepUpRequiredError) {
-          return jsonContent({
-            error: 'step_up_required',
-            message: e.message,
-            hint: 'Run `aula login` again to refresh your session, then retry.',
-          });
-        }
-        throw e;
+        return jsonContent({ threadId: args.threadId, ...describeReadFailure(e) });
       }
     },
   );

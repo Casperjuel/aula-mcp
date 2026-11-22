@@ -12,6 +12,7 @@
 
 import { AulaHttpClient, withFreshTokens } from '@aula-mcp/aula-auth';
 import { AulaClient } from '@aula-mcp/aula-client';
+import { collectChildSightings } from '../child-sources.ts';
 import { fail, fmt, info, ok, printJson } from '../io.ts';
 import { defaultStore } from '../store.ts';
 
@@ -36,17 +37,28 @@ export async function runWhoami(args: WhoamiCommandArgs = {}): Promise<void> {
 
   const client = new AulaClient({ tokens: record.tokens, http });
   try {
-    const [profilesData, contextData] = await Promise.all([
+    const [profilesData, contextData, consents] = await Promise.all([
       client.getProfilesByLogin(),
       client.getProfileContext('guardian').catch((e: unknown) => {
         return { _error: (e as Error).message } as const;
       }),
+      // Only for the per-source child check below (#150); never fatal.
+      client
+        .rawRequest('consents.getConsentResponses', { returnOnlyPendingConsentResponses: 'false' })
+        .catch(() => undefined),
     ]);
     const guardianUserIdRaw =
       typeof contextData === 'object' && contextData !== null && '_error' in contextData
         ? null
         : (contextData.userId ?? null);
     const guardianUserId = guardianUserIdRaw == null ? null : String(guardianUserIdRaw);
+    const sightings = collectChildSightings(
+      profilesData,
+      '_error' in contextData ? undefined : contextData,
+      consents,
+    );
+    // Only worth showing when the endpoints disagree about who the children are.
+    const sourcesDisagree = sightings.some((c) => !c.sources.includes('profilesByLogin'));
 
     if (args.json) {
       printJson({
@@ -60,6 +72,7 @@ export async function runWhoami(args: WhoamiCommandArgs = {}): Promise<void> {
           typeof contextData === 'object' && contextData !== null && '_error' in contextData
             ? contextData._error
             : null,
+        childSightings: sightings,
       });
       return;
     }
@@ -75,6 +88,18 @@ export async function runWhoami(args: WhoamiCommandArgs = {}): Promise<void> {
         const inst = child.institutionProfile?.institutionName ?? '?';
         const code = child.institutionProfile?.institutionCode ?? '?';
         info(`  Child: ${child.name} (id ${child.id}) at ${inst} [${code}]`);
+      }
+    }
+    if (sourcesDisagree) {
+      info('');
+      info(
+        fmt.bold('Some children are listed by other Aula endpoints but not by getProfilesByLogin'),
+      );
+      info('(aula.discover only uses getProfilesByLogin, see issue #150):');
+      for (const c of sightings) {
+        info(
+          `  ${c.name ?? '?'} (id ${c.id})${c.institution ? ` at ${c.institution}` : ''}: ${c.sources.join(', ')}`,
+        );
       }
     }
   } catch (e) {

@@ -1,0 +1,335 @@
+# Build the image from the repository root (see Dockerfile) and push it, or
+# load it into kind with `kind load docker-image`.
+image:
+  repository: aula-mcp
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# single-parent: one Aula login, and anyone who reaches /mcp acts as that
+#   parent. Keep it inside the cluster (networkPolicy) and never expose it
+#   publicly.
+# multi-parent: every request needs a token from oidc.issuer, and each parent
+#   gets their own Aula login (see README, "Log each parent into Aula").
+mode: single-parent
+
+oidc:
+  # e.g. https://keycloak.example.com/realms/kagent
+  issuer: ""
+  # Tokens must list this in `aud`.
+  audience: aula-mcp
+  # Accept Keycloak ID tokens as well as access tokens. kagent's oauth2-proxy
+  # forwards ID tokens, so turn this on with kagent.
+  acceptIdToken: false
+
+# AULA_MCP_WRITE=1: enable write tools. The server is read-only without it.
+writeTools: false
+# aula.messages.mark_read/mark_unread: on unless false (AULA_MCP_MARK_READ=0).
+# They only change the parent's own read state in Aula, and undo each other.
+markReadTools: true
+# AULA_MCP_LOG=1: verbose logs.
+debugLogs: false
+# AULA_MCP_TOOL_NAMES: `dotted` (aula.discover) or `underscore`
+# (aula_discover). The Anthropic API refuses tool names with dots, and kagent
+# passes MCP tool names straight through. Empty: `underscore` when
+# kagent.enabled, else `dotted`.
+toolNames: ""
+
+# Renew each parent's Aula access token in the background before it expires
+# (AULA_MCP_KEEPALIVE), so a parent stays logged in between chats. With
+# false, tokens are only renewed when a tool is called, and a login that sits
+# unused past the refresh token's lifetime has to be redone.
+tokenKeepAlive: true
+
+# Optional key for the token store (AULA_MCP_KEY, hex or passphrase). Without
+# it, each token file is encrypted with a random key stored beside it.
+encryptionKey:
+  existingSecret: ""
+  secretKey: AULA_MCP_KEY
+
+# Local database of each parent's Aula data, filled by the sync jobs and read
+# by the dashboard and the aula.local.* tools (see README, AULA_MCP_STORAGE).
+storage:
+  # sqlite (a file on the data volume), postgres, or none (turned off).
+  type: sqlite
+  postgres:
+    # Secret holding the connection URL. For CloudNativePG this is the
+    # <cluster>-app secret, whose `uri` key has the URL.
+    existingSecret: ""
+    urlKey: uri
+  # Key the stored data is encrypted with (base64, 32 bytes:
+  # `openssl rand -base64 32`). Without it, one is generated on the data
+  # volume; with postgres, keep it in a secret so the database stays readable
+  # if the volume is lost.
+  key:
+    existingSecret: ""
+    secretKey: AULA_MCP_STORAGE_KEY
+    # Earlier keys, still read after a rotation (AULA_MCP_STORAGE_PREVIOUS_KEYS,
+    # comma separated). Rows sealed with them are re-encrypted with the current
+    # key at start-up; drop them once the log shows nothing left. The key in the
+    # same secret is optional, so the secret works before the first rotation.
+    previousKeysKey: ""
+
+# Background sync of each parent's own Aula data into storage. false: only
+# aula.sync.run fetches.
+sync:
+  enabled: true
+
+extraEnv: []
+
+# OpenTelemetry over OTLP/HTTP (AULA_MCP_OTEL=1). Off by default. Traces,
+# metrics and logs can be switched on separately. What is sent: route
+# templates, Aula method names, sync jobs, tool names, status codes, counts
+# and durations. Never Aula content, URLs with tokens, or the text of a
+# message; parent ids are not metric labels. Log lines (info and up, debug
+# when debugLogs is on) have usernames, session ids and tokens masked.
+telemetry:
+  enabled: false
+  # OTLP/HTTP base URL of a collector, e.g.
+  # http://otel-collector.observability.svc.cluster.local:4318
+  # (/v1/traces, /v1/metrics and /v1/logs are added).
+  endpoint: ""
+  # service.name; empty means the release's full name.
+  serviceName: ""
+  signals:
+    traces: true
+    metrics: true
+    logs: true
+  # Share of new traces kept, 0..1. A caller's sampled traceparent is kept.
+  traceSampleRatio: 1
+  metricIntervalSeconds: 30
+  # Extra resource attributes (OTEL_RESOURCE_ATTRIBUTES), e.g.
+  # deployment.environment.name: homelab
+  resourceAttributes: {}
+
+# A Perses dashboard for the telemetry above, as a ConfigMap for the Perses
+# provisioning sidecar (it picks up ConfigMaps carrying `labels`). Off by
+# default. Needs telemetry.signals.metrics; the trace and log rows need
+# traces and logs too, and a Tempo and a Loki datasource in Perses.
+perses:
+  enabled: false
+  # Namespace for the ConfigMap; empty means the release namespace. Set it
+  # when the sidecar watches one namespace only.
+  namespace: ""
+  labels:
+    perses.dev/resource: "true"
+  annotations: {}
+  project:
+    # The Perses project the dashboard goes in.
+    name: aula-mcp
+    # Also create that project. false when it exists already (shared with
+    # other apps) or is made elsewhere.
+    create: true
+    displayName: aula-mcp
+    description: Aula MCP server
+  dashboard:
+    name: aula-mcp
+    displayName: aula-mcp
+    duration: 6h
+    refreshInterval: 1m
+  # Perses datasource names; empty uses the project's or global default of
+  # that kind.
+  datasources:
+    prometheus: ""
+    tempo: ""
+    loki: ""
+  # Label matchers that pick this service's metrics, without braces. Empty
+  # means job="<serviceName>", what the collector's Prometheus exporter sets.
+  # Behind a scraped collector it is often exported_job="<serviceName>".
+  metricSelector: ""
+  # Loki stream selector for the logs. Empty means {service_name="<serviceName>"}.
+  logSelector: ""
+  # Toolbar links: [{name, url, tooltip}].
+  links: []
+
+persistence:
+  enabled: true
+  # Use an existing PVC instead of creating one.
+  existingClaim: ""
+  storageClass: ""
+  size: 1Gi
+  accessModes: ["ReadWriteOnce"]
+
+# Photos and videos from the parents' Aula albums, downloaded by the gallery
+# sync job in original quality with a thumbnail (see README, AULA_MCP_GALLERY_*).
+gallery:
+  # false: albums are still listed, no files are downloaded.
+  downloads: true
+  # Disk use (0-1) of the gallery volume at which downloads pause.
+  stopAt: 0.9
+  # Its own volume, mounted at /gallery. Disabled: files go to /data/gallery.
+  persistence:
+    enabled: true
+    existingClaim: ""
+    storageClass: ""
+    size: 50Gi
+    accessModes: ["ReadWriteOnce"]
+  # Store the files in an S3 bucket instead of the volume (no volume is made).
+  # The layout is the same under <prefix><parent>/. S3 has no disk limit, so
+  # stopAt does not apply.
+  s3:
+    enabled: false
+    bucket: ""
+    # e.g. http://s3.example.lan for MinIO, Ceph RGW, Garage or SeaweedFS
+    # (path-style). Empty: AWS.
+    endpoint: ""
+    region: us-east-1
+    # Must end with "/" when set, e.g. "aula-mcp/".
+    prefix: ""
+    # Secret with the access keys.
+    existingSecret: ""
+    accessKeyIdKey: AWS_ACCESS_KEY_ID
+    secretAccessKeyKey: AWS_SECRET_ACCESS_KEY
+
+service:
+  type: ClusterIP
+  port: 7878
+
+# Browser login UI from the Home Assistant add-on.
+# single-parent: it has no login of its own; whoever reaches it can log their
+#   MitID in as *the* parent of this server.
+# multi-parent: each parent first signs in with oidc.issuer (setupUi.login)
+#   and logs in to Aula for themselves only.
+setupUi:
+  enabled: false
+  port: 8099
+  # single-parent only: must be true to enable setupUi; acknowledges the above.
+  iUnderstandItHasNoAuth: false
+  # multi-parent only, and required there.
+  login:
+    # Origin browsers open the UI on, e.g. https://aula-setup.example.com.
+    # The IdP client's redirect URI is <url>/auth/callback.
+    url: ""
+    clientId: aula-mcp-setup
+    # Secret holding the client secret of a confidential client. Leave empty
+    # for a public client (PKCE only).
+    clientSecret:
+      existingSecret: ""
+      secretKey: client-secret
+
+# JSON API under /api/v1 on its own port of the MCP pod (multi-parent only).
+# It serves the dashboard's data and actions to tokens from oidc.issuer for
+# api.audience, each parent's own data only (and what others share with
+# them, read-only). Changes need api.writeScope and are audited. The calendar
+# feed and sharing are left out: only the ui server reaches them. The
+# OpenAPI document is at /api/v1/openapi.json.
+api:
+  enabled: false
+  port: 8080
+  # Empty: oidc.audience.
+  audience: ""
+  # Scope a token needs for changes. Empty: any valid token may change.
+  writeScope: aula:write
+
+# The dashboard as its own Deployment in front of the API (needs
+# api.enabled). It signs each parent in with oidc.issuer, keeps their tokens
+# on the server (in memory; a restart asks parents to sign in again) and
+# forwards the page's calls to the API. Stateless, so it may run more than
+# one replica only with sticky sessions; keep 1 otherwise.
+# Use it instead of setupUi in multi-parent mode.
+ui:
+  enabled: false
+  port: 8099
+  # Origin browsers open the dashboard on, e.g. https://aula.example.com.
+  # The IdP client's redirect URI is <url>/auth/callback.
+  url: ""
+  clientId: aula-mcp-ui
+  # Secret holding the client secret of a confidential client. Leave empty
+  # for a public client (PKCE only).
+  clientSecret:
+    existingSecret: ""
+    secretKey: client-secret
+  # Asked for on top of openid profile email. The API wants api.writeScope
+  # for changes.
+  scopes: [aula:write]
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# Gateway API routes. Each needs at least one parentRef.
+httpRoute:
+  mcp:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    #  - name: gateway
+    #    namespace: gateway
+    #    sectionName: https
+    hostnames: []
+  setupUi:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    hostnames: []
+  api:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    hostnames: []
+  ui:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    hostnames: []
+
+# Only listed peers (and kagent, when enabled) may reach the pod. Add your
+# Gateway's namespace here when you use httpRoute.
+networkPolicy:
+  enabled: true
+  from: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: gateway
+# kagent integration (needs the kagent CRDs, api.kagent.dev/v1alpha3).
+kagent:
+  enabled: false
+  namespace: kagent
+  remoteMCPServer:
+    name: aula-mcp
+    description: Aula (Danish school platform) for the signed-in parent only
+    timeout: 60s
+    # Multi-parent: let kagent's controller list the tools without a token
+    # (AULA_MCP_ANONYMOUS_TOOL_LIST=1), so they show in kagent and agents can
+    # pick them. Only initialize and tools/list answer without a token; tool
+    # calls still need the parent's. With false, kagent discovery is off and
+    # kagent shows no tools.
+    discovery: true
+  agent:
+    enabled: false
+    name: aula-assistant
+    harness: kagent-default
+    modelConfig: default-model-config
+    description: Answers questions about the signed-in parent's Aula messages, posts and calendar.
+    systemPrompt: |
+      You help a parent with Aula, the Danish school platform. You only see
+      the Aula data of the parent who is signed in. Answer in the language
+      the parent writes in. Never send a message unless the parent has seen
+      the exact text and asked you to send it. Anything that changes Aula
+      (a sick report, a komme/gå change, registering or removing ferie/fri,
+      answering a ferie request, marking messages read) needs the parent's
+      yes first: say which child, which days and what will change, and
+      wait. Start with aula_discover to see the children and which tools
+      there are. If Aula says the parent is not logged in, reply only with
+      the login link it gives and stop; do not call other tools.
+
+# One replica only: MCP sessions and the token store live in the pod.
+podAnnotations: {}
+podLabels: {}
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+tests:
+  image: curlimages/curl:8.17.0

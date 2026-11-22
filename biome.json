@@ -8,6 +8,8 @@
       "!**/build",
       "!**/coverage",
       "!aula-python-reference",
+      "!charts/*/templates",
+      "!charts/*/files",
       "!**/*.md"
     ]
   },
