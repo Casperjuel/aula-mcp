@@ -252,7 +252,10 @@ main {
 .pill.err { background: var(--err-soft); color: var(--err); }
 .pill.neutral { background: var(--surface-2); color: var(--muted); }
 .pill.run { background: var(--accent-soft); color: var(--accent); }
-.li-title .pill.important { padding: 0 8px; margin-right: 6px; font-size: .72rem; vertical-align: 1px; }
+.li-title .pill.important, .li-title .pill.flag { padding: 0 8px; margin-right: 6px; font-size: .72rem; vertical-align: 1px; }
+.pill.flag svg { width: 12px; height: 12px; }
+.pill.pinned::before { display: none; }
+.thread-acts { display: flex; flex-wrap: wrap; gap: 8px; margin: -4px 0 14px; }
 .pill.run::before { animation: pulse 1s infinite; }
 @keyframes pulse { 50% { opacity: .25; } }
 .tag.files { display: inline-flex; align-items: center; gap: 4px; }
@@ -665,6 +668,7 @@ const I = {
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   key: '<circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 7l3 3"/>',
   play: '<path d="M8 5.5v13l10.5-6.5z"/>',
+  pin: '<path d="M9 3.5h6l-1 5.5 3.5 3.5v1.5h-11v-1.5L10 9z"/><path d="M12 14v6.5"/>',
   download: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/>',
   external: '<path d="M14 4.5h5.5V10M19.5 4.5 11 13M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10"/>',
 };
@@ -1411,6 +1415,10 @@ function syncPill() {
 }
 /** Aula's "Vigtig" mark on a post. */
 const importantPill = (it) => (it.important ? el('span', { class: 'pill err important' }, 'Vigtig') : null);
+/** Unread and pinned (Aula's "marked") on a thread, as of the last sync or the last change here. */
+const threadPills = (it) => [
+  it.unread ? el('span', { class: 'pill run flag' }, 'Ulæst') : null,
+  it.marked ? el('span', { class: 'pill warn flag pinned', title: 'Fastgjort i Aula' }, icon('pin'), 'Fastgjort') : null];
 function itemRow(item, onclick) {
   const k = kindOf(item.kind);
   return el('button', { class: 'li', onclick },
@@ -1511,6 +1519,7 @@ function browseQuery(offset) {
   if (b.kind) p.set('kind', b.kind);
   if (b.q.trim()) p.set('q', b.q.trim());
   if (b.role && isMsgKind(b.kind)) p.set('role', b.role);
+  if (b.flag && b.kind === 'message_thread') p.set('flag', b.flag);
   const now = Math.floor(Date.now() / 1000);
   if (b.range === '7') { p.set('since', String(now - 7 * 86400)); p.set('until', String(now)); }
   if (b.range === '30') { p.set('since', String(now - 30 * 86400)); p.set('until', String(now)); }
@@ -1557,6 +1566,29 @@ async function loadDetail() {
     if (b.sel === sel) b.detail = { error: err.message };
   }
   renderDetail();
+  // Reading a thread, or one of its messages, here marks it read in Aula too.
+  const d = b.sel === sel && b.detail;
+  if (!d || !d.canChange || state.owner) return;
+  if (kind === 'message_thread' && d.item.unread) changeThread(d.item.id, 'read', { auto: true });
+  if (kind === 'message' && d.thread && d.thread.unread) changeThread(d.thread.id, 'read', { auto: true });
+}
+/** Changes a thread's read state or pin in Aula, then here: the list, the open thread and the counts. */
+async function changeThread(id, what, opts) {
+  const b = state.browse;
+  const patch = what === 'read' ? { unread: false } : what === 'unread' ? { unread: true } : { marked: what === 'pin' };
+  try {
+    const res = what === 'pin' || what === 'unpin'
+      ? await postJson('data/messages/' + encodeURIComponent(id) + '/marked', { marked: what === 'pin' })
+      : await postJson('data/messages/' + encodeURIComponent(id) + '/' + what, {});
+    for (const it of b.items) if (it.kind === 'message_thread' && it.id === id) Object.assign(it, patch);
+    if (b.detail && b.detail.item && b.detail.item.kind === 'message_thread' && b.detail.item.id === id) Object.assign(b.detail.item, patch);
+    if (b.detail && b.detail.thread && b.detail.thread.id === id && 'unread' in patch) b.detail.thread.unread = patch.unread;
+    rolesAt = 0;
+    renderResults(); renderDetail();
+    if (!res.unchanged) toast(({ read: 'Markeret som læst i Aula', unread: 'Markeret som ulæst i Aula', pin: 'Fastgjort i Aula', unpin: 'Ikke længere fastgjort i Aula' })[what]);
+  } catch (err) {
+    if (!(opts && opts.auto && err.status === 403)) toast('Kunne ikke ændre tråden i Aula: ' + err.message);
+  }
 }
 R.gennemse = () => {
   if (state.summary && !database()) return [head('Gennemse'), storageOff()];
@@ -1600,7 +1632,7 @@ function renderResults() {
     return el('button', { class: 'result', 'aria-current': String(b.sel === key), onclick: () => selectItem(key) },
       typeDot(it.kind),
       el('span', { style: 'min-width:0;display:block' },
-        el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, it.unread ? el('span', { class: 'unread-dot' }, '● ') : null, importantPill(it), it.title), el('span', { class: 'result-date' }, rel(it.occurredAt || it.updatedAt))),
+        el('span', { class: 'result-top' }, el('span', { class: 'li-title' }, threadPills(it), importantPill(it), it.title), el('span', { class: 'result-date' }, rel(it.occurredAt || it.updatedAt))),
         it.subtitle ? el('span', { class: 'li-sub', style: 'display:block' }, it.subtitle) : null,
         el('span', { class: 'result-foot' }, el('span', { class: 'tag' }, kindOf(it.kind).one), roleBadge(it.senderRole), fileTags(it.files))));
   });
@@ -1700,7 +1732,10 @@ function renderDetail() {
     back,
     el('p', { class: 'eyebrow' }, k.one),
     el('h2', { style: 'font-size:1.35rem;margin-top:4px;overflow-wrap:anywhere' }, it.title),
-    el('div', { class: 'detail-meta' }, importantPill(it), it.subtitle ? el('span', {}, it.subtitle) : null, roleBadge(it.senderRole), el('span', {}, longDate(it.occurredAt || it.updatedAt))),
+    el('div', { class: 'detail-meta' }, threadPills(it), importantPill(it), it.subtitle ? el('span', {}, it.subtitle) : null, roleBadge(it.senderRole), el('span', {}, longDate(it.occurredAt || it.updatedAt))),
+    b.detail.canChange && it.kind === 'message_thread' ? el('div', { class: 'thread-acts', role: 'group', 'aria-label': 'Tråden i Aula' },
+      el('button', { class: 'btn btn-sm', onclick: () => changeThread(it.id, it.unread ? 'read' : 'unread') }, icon('mail'), it.unread ? 'Markér som læst' : 'Markér som ulæst'),
+      el('button', { class: 'btn btn-sm', 'aria-pressed': String(Boolean(it.marked)), onclick: () => changeThread(it.id, it.marked ? 'unpin' : 'pin') }, icon('pin'), it.marked ? 'Fjern fastgørelse' : 'Fastgør')) : null,
     it.fields.length ? el('dl', { class: 'kv' }, it.fields.map(([key, value]) => [el('dt', {}, key), el('dd', {}, value)])) : null,
     it.body ? el('p', { class: 'pre', style: 'max-width:65ch' }, it.body) : null,
     attachMedia(it.kind, it.id, it.attachments),
@@ -1714,7 +1749,7 @@ function renderDetail() {
             attachMedia('message', m.id, m.attachments),
             attachTable('message', m.id, m.attachments)))))
       : el('p', { class: 'muted small' }, 'Beskederne i tråden er ikke hentet endnu. De kommer med næste synkronisering.')) : null,
-    it.unread ? el('p', { class: 'muted small', style: 'margin-top:6px' }, 'Tråden står stadig som ulæst i Aula. aula-mcp ændrer det ikke.') : null,
+    it.kind === 'message_thread' && b.detail.canChange ? el('p', { class: 'muted small', style: 'margin-top:6px' }, 'Når du åbner en ulæst tråd her, markeres den også som læst i Aula.') : null,
     el('p', { class: 'muted small mono', style: 'margin-top:16px;overflow-wrap:anywhere' }, 'Opdateret ' + rel(it.updatedAt) + ' · id ' + it.kind + ':' + it.id));
 }
 
@@ -2320,9 +2355,14 @@ function renderRoleChips() {
   ensureRoles(renderRoleChips);
   const n = state.roles && (b.kind === 'message' ? state.roles.messages : state.roles.threads);
   const cur = b.role || '';
+  const f = state.roles && state.roles.flags;
+  const flag = b.flag || '';
   fill(box, el('span', { class: 'muted small', style: 'align-self:center;margin-right:2px' }, 'Afsender'),
     [['', 'Alle']].concat(ROLES).map(([r, many]) => el('button', { class: 'chip', 'aria-pressed': String(cur === r),
-      onclick: () => { b.role = r; loadResults(false); } }, many, n && r ? el('span', { class: 'c' }, fmt(n[r])) : null)));
+      onclick: () => { b.role = r; loadResults(false); } }, many, n && r ? el('span', { class: 'c' }, fmt(n[r])) : null)),
+    b.kind === 'message_thread' ? [el('span', { class: 'muted small', style: 'align-self:center;margin:0 2px 0 10px' }, 'Vis'),
+      [['', 'Alle'], ['unread', 'Ulæste'], ['marked', 'Fastgjorte']].map(([v, label]) => el('button', { class: 'chip', 'aria-pressed': String(flag === v),
+        onclick: () => { b.flag = v; loadResults(false); } }, label, f && v ? el('span', { class: 'c' }, fmt(f[v])) : null))] : null);
 }
 
 /* ---------- sync ---------- */

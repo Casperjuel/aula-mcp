@@ -661,6 +661,19 @@ export class AulaClient {
   }
 
   /**
+   * `messaging.setThreadsMarked` — mark or unmark threads, Aula's own flag
+   * that the thread list carries as `marked`. Takes thread ids. Request shape
+   * from the reverse-engineered app (eisbaw/aulalibre, MarkThreadsRequest),
+   * not yet confirmed against a live mailbox.
+   */
+  async setThreadsMarked(threadIds: number[], marked: boolean): Promise<unknown> {
+    return this.postJson<unknown>(
+      'messaging.setThreadsMarked',
+      JSON.stringify({ threadIds, marked }),
+    );
+  }
+
+  /**
    * `messaging.reply` — post a reply into an existing thread of the guardian's
    * personal inbox. `html` is the message body as Aula stores it (HTML).
    * Request shape from the reverse-engineered app (eisbaw/aulalibre); it has not

@@ -18,6 +18,8 @@ export interface ItemSummary {
   updatedAt: number;
   title: string;
   subtitle: string;
+  /** A message thread marked in Aula. */
+  marked?: boolean;
   /** A message thread not read in Aula. */
   unread?: boolean;
   /** A post Aula marks as important ("Vigtig" in Aula's overview). */
@@ -122,6 +124,7 @@ export function summarize(item: StoredItem): ItemSummary {
         title: str(d.subject) || 'Uden emne',
         subtitle: str(asData(last.sender).fullName),
         ...(d.read === false ? { unread: true } : {}),
+        ...(d.marked === true ? { marked: true } : {}),
         senderRole: threadRole(d),
       };
     }

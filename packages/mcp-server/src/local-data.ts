@@ -22,8 +22,22 @@ export interface ItemSearch {
   q?: string;
   /** Only messages or threads from this kind of sender. */
   role?: SenderRole;
+  /** Only threads that are unread, or marked, in Aula (as of the last sync). */
+  flag?: ThreadFlag;
   offset: number;
   limit: number;
+}
+
+export const THREAD_FLAGS = ['unread', 'marked'] as const;
+export type ThreadFlag = (typeof THREAD_FLAGS)[number];
+
+/** Whether a stored thread carries the flag; never true for other kinds. */
+export function hasFlag(item: StoredItem, flag: ThreadFlag): boolean {
+  if (item.kind !== 'message_thread' || typeof item.data !== 'object' || item.data === null) {
+    return false;
+  }
+  const d = item.data as { read?: unknown; marked?: unknown };
+  return flag === 'unread' ? d.read === false : d.marked === true;
 }
 
 export interface ItemPage {
@@ -35,13 +49,13 @@ export interface ItemPage {
 
 /** Newest first, a page at a time. */
 export async function searchItems(store: ParentStorage, search: ItemSearch): Promise<ItemPage> {
-  const { q, role, offset, limit } = search;
+  const { q, role, flag, offset, limit } = search;
   const query = {
     ...(search.kind ? { kind: search.kind } : {}),
     ...(search.since !== undefined ? { since: search.since } : {}),
     ...(search.until !== undefined ? { until: search.until } : {}),
   };
-  if (!q && !role) {
+  if (!q && !role && !flag) {
     const rows = await store.list({ ...query, offset, limit: limit + 1 });
     return { items: rows.slice(0, limit), more: rows.length > limit, truncated: false };
   }
@@ -53,6 +67,7 @@ export async function searchItems(store: ParentStorage, search: ItemSearch): Pro
     scanned += rows.length;
     for (const row of rows) {
       if (role && senderRole(row) !== role) continue;
+      if (flag && !hasFlag(row, flag)) continue;
       if (q && !searchText(row).includes(q)) continue;
       if (skip > 0) skip--;
       else matches.push(row);
@@ -71,6 +86,8 @@ export async function searchItems(store: ParentStorage, search: ItemSearch): Pro
 export interface RoleCounts {
   threads: Record<SenderRole, number>;
   messages: Record<SenderRole, number>;
+  /** Threads unread or marked in Aula. */
+  flags: Record<ThreadFlag, number>;
   truncated: boolean;
 }
 
@@ -78,6 +95,7 @@ export interface RoleCounts {
 export async function roleCounts(store: ParentStorage): Promise<RoleCounts> {
   const count = async (kind: 'message' | 'message_thread') => {
     const counts: Record<SenderRole, number> = { guardian: 0, employee: 0, child: 0, other: 0 };
+    const flags: Record<ThreadFlag, number> = { unread: 0, marked: 0 };
     let scanned = 0;
     for (;;) {
       const rows = await store.list({ kind, offset: scanned, limit: SCAN_PAGE });
@@ -85,15 +103,17 @@ export async function roleCounts(store: ParentStorage): Promise<RoleCounts> {
       for (const row of rows) {
         const role = senderRole(row);
         if (role) counts[role]++;
+        for (const f of THREAD_FLAGS) if (hasFlag(row, f)) flags[f]++;
       }
-      if (rows.length < SCAN_PAGE) return { counts, truncated: false };
-      if (scanned >= SEARCH_SCAN_LIMIT) return { counts, truncated: true };
+      if (rows.length < SCAN_PAGE) return { counts, flags, truncated: false };
+      if (scanned >= SEARCH_SCAN_LIMIT) return { counts, flags, truncated: true };
     }
   };
   const [threads, messages] = await Promise.all([count('message_thread'), count('message')]);
   return {
     threads: threads.counts,
     messages: messages.counts,
+    flags: threads.flags,
     truncated: threads.truncated || messages.truncated,
   };
 }

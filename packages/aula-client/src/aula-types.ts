@@ -555,6 +555,8 @@ export interface MessageThread {
   /** The guardian's subscription to the thread, distinct from `id`. Read and
    *  unread are set per subscription (AulaClient.setThreadsRead). */
   subscriptionId?: number;
+  /** Aula's per-guardian flag on a thread (AulaClient.setThreadsMarked). */
+  marked?: boolean;
   /**
    * In-app route on www.aula.dk, filled in by `AulaClient`. Opens in a browser
    * with a logged-in Aula session — not in the Aula app.

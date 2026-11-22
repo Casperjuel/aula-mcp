@@ -78,8 +78,11 @@ import { detail, SENDER_ROLES, type SenderRole, summarize } from './item-view.ts
 import {
   ACTIVITY_MAX_DAYS,
   activityByDay,
+  hasFlag,
   roleCounts,
   searchItems,
+  THREAD_FLAGS,
+  type ThreadFlag,
   threadMessages,
 } from './local-data.ts';
 import type { SharedView } from './local-tools.ts';
@@ -824,10 +827,19 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
         return c.json({ error: 'role needs kind=message or kind=message_thread' }, 400);
       }
     }
+    const flag = c.req.query('flag') || undefined;
+    if (flag) {
+      if (!(THREAD_FLAGS as readonly string[]).includes(flag)) {
+        return c.json({ error: 'flag must be unread or marked' }, 400);
+      }
+      if (kind !== 'message_thread')
+        return c.json({ error: 'flag needs kind=message_thread' }, 400);
+    }
     const found = await searchItems(store, {
       ...query,
       ...(q ? { q } : {}),
       ...(role ? { role: role as SenderRole } : {}),
+      ...(flag ? { flag: flag as ThreadFlag } : {}),
       ...page,
     });
     return c.json({
@@ -857,8 +869,101 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
   app.get('/data/messages/roles', async (c) => {
     const store = storageOf(c);
     if (!store) return c.json({ error: 'local storage is off' }, 404);
-    const { threads, messages, truncated } = await roleCounts(store);
-    return c.json({ threads, messages, ...(truncated ? { truncated: true } : {}) });
+    const { threads, messages, flags, truncated } = await roleCounts(store);
+    return c.json({ threads, messages, flags, ...(truncated ? { truncated: true } : {}) });
+  });
+
+  // A thread's read state and mark, changed in Aula by the parent in the
+  // page: opening an unread thread marks it read, and the parent can set it
+  // unread or (un)mark it. Only the parent's own state on their own threads
+  // (shared views refuse every POST), off with AULA_MCP_MARK_READ=0 like the
+  // MCP tools, audited with ids only. The stored copy follows so the page
+  // agrees with Aula before the next sync.
+  const threadChange = async (
+    c: Context,
+    action: 'mark_read' | 'mark_unread' | 'mark_thread' | 'unmark_thread',
+    patch: Record<string, unknown>,
+    /** The write, or what the stored thread lacks for it. */
+    plan: (
+      thread: Record<string, unknown>,
+      id: number,
+    ) => ((client: AulaClient) => Promise<unknown>) | string,
+  ) => {
+    if (process.env.AULA_MCP_MARK_READ === '0') {
+      return c.json({ error: 'changing read state is off (AULA_MCP_MARK_READ=0)' }, 403);
+    }
+    const id = Number(c.req.param('id'));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: 'thread must be an id' }, 400);
+    const store = options.myData?.storage?.forParent(parentOf(c)?.caller ?? null);
+    if (!store) return c.json({ error: 'local storage is off' }, 404);
+    const stored = await store.get('message_thread', String(id));
+    if (!stored || typeof stored.data !== 'object' || stored.data === null) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    const data = stored.data as Record<string, unknown>;
+    if (Object.entries(patch).every(([k, v]) => data[k] === v)) {
+      return c.json({ ok: true, unchanged: true });
+    }
+    const write = plan(data, id);
+    if (typeof write === 'string') {
+      return c.json({ error: `the stored thread has no ${write}; sync messages first` }, 409);
+    }
+    const client = await clientOf(c);
+    if (!client) return c.json({ error: 'not logged in to Aula' }, 409);
+    const started = Date.now();
+    try {
+      // Messaging answers 403 until the guardian profile is activated.
+      await options.myData?.contextFor(parentOf(c)?.caller ?? null).getGuardianUserId();
+      await write(client);
+    } catch (err) {
+      await auditOf(c)?.({
+        category: 'aula',
+        action,
+        ok: false,
+        durationMs: Date.now() - started,
+        details: { threadId: id, error: (err as Error).message.slice(0, 300) },
+      });
+      return aulaFailed(c, action, err);
+    }
+    await store.put([{ ...stored, data: { ...data, ...patch } }]);
+    await auditOf(c)?.({
+      category: 'aula',
+      action,
+      ok: true,
+      durationMs: Date.now() - started,
+      details: { threadId: id },
+    });
+    return c.json({ ok: true });
+  };
+
+  app.post('/data/messages/:id/read', async (c) => {
+    if (!(await changeBody(c))) return c.json({ error: 'expected a JSON body' }, 415);
+    return threadChange(c, 'mark_read', { read: true }, (d, id) => {
+      const messageId = (d.latestMessage as { id?: unknown } | null | undefined)?.id;
+      if (messageId == null) return 'latest message id';
+      // Aula has no "mark as read" verb; see AulaClient.setLastReadMessage.
+      return (client) => client.setLastReadMessage(id, String(messageId));
+    });
+  });
+  app.post('/data/messages/:id/unread', async (c) => {
+    if (!(await changeBody(c))) return c.json({ error: 'expected a JSON body' }, 415);
+    return threadChange(c, 'mark_unread', { read: false }, (d) => {
+      const subscriptionId = d.subscriptionId;
+      if (typeof subscriptionId !== 'number') return 'subscription id';
+      return (client) => client.setThreadsRead([subscriptionId], false);
+    });
+  });
+  app.post('/data/messages/:id/marked', async (c) => {
+    const body = await changeBody(c);
+    if (!body) return c.json({ error: 'expected a JSON body' }, 415);
+    const marked = body.marked;
+    if (typeof marked !== 'boolean') return c.json({ error: 'marked must be true or false' }, 400);
+    return threadChange(
+      c,
+      marked ? 'mark_thread' : 'unmark_thread',
+      { marked },
+      (_d, id) => (client) => client.setThreadsMarked([id], marked),
+    );
   });
 
   app.get('/data/items/:kind/:id', async (c) => {
@@ -880,7 +985,21 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
         if (m.attachments.length) m.attachments = await gallery.attachments('message', m.id);
       }
     }
-    return c.json({ item: view, ...(messages ? { messages } : {}) });
+    // A message's thread, so opening the message can mark the thread read.
+    const threadId = kind === 'message' ? item.id.split(':')[0] : undefined;
+    const parent = threadId ? await store.get('message_thread', threadId) : null;
+    const thread = parent ? { id: parent.id, unread: hasFlag(parent, 'unread') } : undefined;
+    // Whether the page may change the thread's read state and mark in Aula.
+    const canChange =
+      (kind === 'message_thread' || thread !== undefined) &&
+      !sharedViews.has(c.req.raw) &&
+      process.env.AULA_MCP_MARK_READ !== '0';
+    return c.json({
+      item: view,
+      ...(messages ? { messages } : {}),
+      ...(thread ? { thread } : {}),
+      ...(canChange ? { canChange: true } : {}),
+    });
   });
 
   app.get('/data/sync', async (c) => {

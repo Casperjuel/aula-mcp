@@ -346,6 +346,9 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
         id: t.id,
         subject: t.subject,
         read: t.read,
+        marked: t.id === 303,
+        subscriptionId: t.id + 9000,
+        latestMessage: { id: `${t.id * 10 + t.messages.length - 1}` },
         lastMessage: { sender: people[last[0]] },
       },
     });
@@ -645,6 +648,10 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
   ];
   const fakeClient = {
     currentApiVersion: 23,
+    // The thread's read state and pin change only in the demo's own copy.
+    setLastReadMessage: async () => ({}),
+    setThreadsRead: async () => ({}),
+    setThreadsMarked: async () => ({}),
     getProfilesByLogin: async () => ({
       profiles: [
         {
@@ -736,7 +743,7 @@ export async function startDemo(port = 8765): Promise<{ url: string; stop: () =>
     },
     saved_at: Math.floor(now / 1000) - 2 * 86400,
   };
-  const context = { record, getClient: async () => client };
+  const context = { record, getClient: async () => client, getGuardianUserId: async () => 'demo' };
   const app = createSetupApp({
     store: { load: async () => record, save: async () => {}, clear: async () => {} },
     myData: {

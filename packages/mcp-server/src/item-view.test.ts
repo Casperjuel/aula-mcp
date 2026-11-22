@@ -262,6 +262,7 @@ describe('GET /data/messages/roles', () => {
     expect(body).toEqual({
       threads: { guardian: 1, employee: 0, child: 0, other: 1 },
       messages: { guardian: 2, employee: 3, child: 1, other: 1 },
+      flags: { unread: 0, marked: 0 },
     });
   });
 });
