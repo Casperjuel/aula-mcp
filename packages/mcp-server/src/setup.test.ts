@@ -32,6 +32,18 @@ class CountingStore implements TokenStore {
   async clear(): Promise<void> {}
 }
 
+class EmptyStore implements TokenStore {
+  async load(): Promise<StoredTokenRecord | null> {
+    return null;
+  }
+  async save(): Promise<void> {}
+  async clear(): Promise<void> {}
+}
+
+function textOf(result: unknown): string {
+  return (result as { content: Array<{ text: string }> }).content[0]?.text ?? '';
+}
+
 describe('createMcpApp', () => {
   test('apps given the same context share it, and with it one client and one token load', async () => {
     const store = new CountingStore();
@@ -46,6 +58,23 @@ describe('createMcpApp', () => {
     context.dispose();
   });
 
+  test('aula.session.status reports the saved login without calling Aula', async () => {
+    const store = new CountingStore();
+    const context = new AulaContext({ store, logger: silentLogger });
+    const app = createMcpApp({ logger: silentLogger, context, toolNames: 'dotted' });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await app.mcp.connect(serverSide);
+    const client = new Client({ name: 'test', version: '0.0.0' });
+    await client.connect(clientSide);
+    const result = await client.callTool({ name: 'aula.session.status', arguments: {} });
+    const status = JSON.parse(textOf(result));
+    expect(status.loggedIn).toBe(true);
+    expect(status.secondsRemaining).toBeGreaterThan(3500);
+    expect(Date.parse(status.expiresAt)).toBeGreaterThan(Date.now());
+    await client.close();
+    context.dispose();
+  });
+
   test('without a context each app builds its own', () => {
     const a = createMcpApp({ logger: silentLogger });
     const b = createMcpApp({ logger: silentLogger });
@@ -56,8 +85,12 @@ describe('createMcpApp', () => {
 });
 
 describe('createMcpApp with loginRequired', () => {
-  async function open(loginRequired: LoginRequired, toolNames: 'dotted' | 'underscore') {
-    const context = new AulaContext({ store: new CountingStore(), logger: silentLogger });
+  async function open(
+    loginRequired: LoginRequired,
+    toolNames: 'dotted' | 'underscore',
+    store: TokenStore = new CountingStore(),
+  ) {
+    const context = new AulaContext({ store, logger: silentLogger });
     const app = createMcpApp({ logger: silentLogger, context, toolNames, loginRequired });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await app.mcp.connect(serverSide);
@@ -77,25 +110,25 @@ describe('createMcpApp with loginRequired', () => {
     };
   }
 
-  test('offers only the login tool, with the setup link in its description', async () => {
+  test('offers only the login and status tools, with the setup link in the description', async () => {
     const url = 'https://aula-setup.example.com';
     const session = await open({ setupUrl: url, loggedIn: async () => false }, 'underscore');
     const { tools } = await session.client.listTools();
-    expect(tools.map((t) => t.name)).toEqual(['aula_login_required']);
-    expect(tools[0]?.description).toContain(url);
+    expect(tools.map((t) => t.name)).toEqual(['aula_session_status', 'aula_login_required']);
+    expect(tools.find((t) => t.name === 'aula_login_required')?.description).toContain(url);
     expect(session.client.getInstructions()).toContain(url);
 
     const result = await session.client.callTool({ name: 'aula_login_required', arguments: {} });
     expect(JSON.stringify(result.content)).toContain(url);
-    expect((await session.client.listTools()).tools).toHaveLength(1);
+    expect((await session.client.listTools()).tools).toHaveLength(2);
     await session.close();
   });
 
   test('without a setup UI it says who to ask', async () => {
     const session = await open({ setupUrl: null, loggedIn: async () => false }, 'dotted');
     const { tools } = await session.client.listTools();
-    expect(tools.map((t) => t.name)).toEqual(['aula.login_required']);
-    expect(tools[0]?.description).toContain('whoever runs aula-mcp');
+    expect(tools.map((t) => t.name)).toEqual(['aula.session.status', 'aula.login_required']);
+    expect(tools[1]?.description).toContain('whoever runs aula-mcp');
     await session.close();
   });
 
@@ -111,7 +144,19 @@ describe('createMcpApp with loginRequired', () => {
     const names = (await session.client.listTools()).tools.map((t) => t.name);
     expect(names).toContain('aula_discover');
     expect(names).not.toContain('aula_login_required');
+    expect(names.filter((n) => n === 'aula_session_status')).toHaveLength(1);
     expect(session.listChanged()).toBeGreaterThan(0);
+    await session.close();
+  });
+
+  test('the status tool says not logged in before login', async () => {
+    const session = await open(
+      { setupUrl: null, loggedIn: async () => false },
+      'dotted',
+      new EmptyStore(),
+    );
+    const result = await session.client.callTool({ name: 'aula.session.status', arguments: {} });
+    expect(JSON.parse(textOf(result))).toEqual({ loggedIn: false });
     await session.close();
   });
 });

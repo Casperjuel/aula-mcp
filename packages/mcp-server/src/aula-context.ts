@@ -161,6 +161,12 @@ export class AulaContext {
     return (await this.store.load().catch(() => null)) !== null;
   }
 
+  /** The saved Aula tokens, or null with no login. A store that can't be
+   *  read throws, unlike hasLogin(). */
+  async storedTokens(): Promise<StoredTokenRecord['tokens'] | null> {
+    return (await this.store.load())?.tokens ?? null;
+  }
+
   async refreshIfExpiringWithin(seconds: number): Promise<boolean> {
     if (!this.clientPromise && !this.cachedRecord && !(await this.store.load())) return false;
     // Wait for (or start) the shared build so a refresh already in flight is

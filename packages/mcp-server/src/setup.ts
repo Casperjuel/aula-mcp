@@ -12,6 +12,7 @@ import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { AulaContext } from './aula-context.ts';
 import type { GalleryView } from './gallery.ts';
 import type { SharedAccess } from './local-tools.ts';
+import { registerSessionStatusTool } from './session-status.ts';
 import type { FeedStatus, ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
 import { instrumentTool } from './telemetry.ts';
@@ -129,8 +130,19 @@ export function createMcpApp({
       instructions,
     },
   );
-  if (loginRequired) registerLoginTool(mcp, loginRequired, toolNames, registerAulaTools);
-  else registerAulaTools(mcp);
+  if (loginRequired) {
+    // The status tool answers before login too; registerTools adds it again
+    // with the rest once the parent has logged in.
+    const status = registerSessionStatusTool(
+      mcp,
+      context,
+      toolName('aula.session.status', toolNames),
+    );
+    registerLoginTool(mcp, loginRequired, toolNames, (server) => {
+      status.remove();
+      registerAulaTools(server);
+    });
+  } else registerAulaTools(mcp);
   return { mcp, context };
 }
 

@@ -9,6 +9,7 @@ threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With
 
 | Tool | Access | What it does |
 | --- | --- | --- |
+| [`aula.session.status`](#aulasessionstatus) | read | Aula login status |
 | [`aula.sync.status`](#aulasyncstatus) | read | Sync status |
 | [`aula.sync.run`](#aulasyncrun) | read | Run sync now |
 | [`aula.gallery.status`](#aulagallerystatus) | read | Gallery download status |
@@ -58,6 +59,14 @@ threads read or unread is on unless `AULA_MCP_MARK_READ=0`. With
 | [`aula.presence.answer_vacation_request`](#aulapresenceanswer_vacation_request) | write (`AULA_MCP_WRITE=1`) | Answer a ferie request |
 | [`aula.messages.reply`](#aulamessagesreply) | write (`AULA_MCP_WRITE=1`) | Reply in a message thread |
 | [`aula.raw_request`](#aularaw_request) | raw (`AULA_MCP_RAW=1`) | Raw Aula API call (escape hatch) |
+
+## `aula.session.status`
+
+**Aula login status** · read
+
+Whether the parent is logged in to Aula here, and when the current access token runs out (it is renewed before then). Reads only the saved login and never calls Aula. Use it when asked whether Aula is connected; for Aula data, call the other tools.
+
+No parameters.
 
 ## `aula.sync.status`
 

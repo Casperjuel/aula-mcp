@@ -36,6 +36,7 @@ import { buildDiscoverManifest } from './discover.ts';
 import type { GalleryView } from './gallery.ts';
 import { registerGalleryTools } from './gallery-tools.ts';
 import { registerLocalTools, type SharedAccess } from './local-tools.ts';
+import { registerSessionStatusTool } from './session-status.ts';
 import type { AuditDetails, FeedStatus, ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
 import { registerSyncTools } from './sync-tools.ts';
@@ -409,6 +410,7 @@ export function registerTools(
     }
   };
 
+  registerSessionStatusTool(server, context);
   if (extras.sync) registerSyncTools(server, extras.sync);
   if (extras.gallery) registerGalleryTools(server, extras.gallery, extras.shared);
   if (extras.local) registerLocalTools(server, extras.local, extras.shared, extras.feedStatus);
