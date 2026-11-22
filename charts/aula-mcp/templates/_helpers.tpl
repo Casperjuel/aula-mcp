@@ -31,6 +31,21 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if eq .Values.mode "multi-parent" }}true{{ end }}
 {{- end }}
 
+{{/* The ui Deployment's own name label, so the MCP Service never selects it. */}}
+{{- define "aula-mcp.uiSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "aula-mcp.name" . }}-ui
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{- define "aula-mcp.uiName" -}}
+{{- printf "%s-ui" (include "aula-mcp.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/* Secret with the key the API knows the ui server by. */}}
+{{- define "aula-mcp.uiKeySecret" -}}
+{{- printf "%s-ui-key" (include "aula-mcp.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 {{- define "aula-mcp.mcpUrl" -}}
 {{- printf "http://%s.%s.svc.cluster.local:%v/mcp" (include "aula-mcp.fullname" .) .Release.Namespace .Values.service.port }}
 {{- end }}
@@ -70,6 +85,16 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if and .Values.httpRoute.setupUi.enabled (not .Values.setupUi.enabled) }}
 {{- fail "httpRoute.setupUi needs setupUi.enabled" }}
 {{- end }}
+{{- if and .Values.api.enabled (not (include "aula-mcp.multiParent" .)) }}{{ fail "api needs mode: multi-parent; every call is checked against oidc.issuer" }}{{ end }}
+{{- if and .Values.ui.enabled (not .Values.api.enabled) }}{{ fail "ui needs api.enabled: the dashboard reads and changes everything through the API" }}{{ end }}
+{{- if .Values.ui.enabled }}
+{{- if not .Values.ui.url }}{{ fail "ui needs ui.url: the origin browsers open it on" }}{{ end }}
+{{- if not .Values.ui.clientId }}{{ fail "ui needs ui.clientId" }}{{ end }}
+{{- if .Values.setupUi.enabled }}{{ fail "ui and setupUi are two dashboards for the same parents; enable one" }}{{ end }}
+{{- end }}
+{{- if and .Values.api.enabled (eq (int .Values.api.port) 7878) }}{{ fail "api.port must differ from the MCP port 7878" }}{{ end }}
+{{- if and .Values.httpRoute.api.enabled (not .Values.api.enabled) }}{{ fail "httpRoute.api needs api.enabled" }}{{ end }}
+{{- if and .Values.httpRoute.ui.enabled (not .Values.ui.enabled) }}{{ fail "httpRoute.ui needs ui.enabled" }}{{ end }}
 {{- end }}
 
 {{/* service.name for telemetry and the dashboard. */}}
@@ -91,4 +116,26 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- $pairs = append $pairs (printf "%s=%v" $k $v) }}
 {{- end }}
 {{- join "," $pairs }}
+{{- end }}
+
+{{/* OpenTelemetry env, the same for the MCP pod and the ui server. */}}
+{{- define "aula-mcp.telemetryEnv" -}}
+{{- if .Values.telemetry.enabled -}}
+- name: AULA_MCP_OTEL
+  value: "1"
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ .Values.telemetry.endpoint | quote }}
+- name: OTEL_SERVICE_NAME
+  value: {{ include "aula-mcp.serviceName" . | quote }}
+- name: AULA_MCP_OTEL_SIGNALS
+  value: {{ include "aula-mcp.telemetrySignals" . | quote }}
+- name: AULA_MCP_OTEL_SAMPLE_RATIO
+  value: {{ .Values.telemetry.traceSampleRatio | quote }}
+- name: OTEL_METRIC_EXPORT_INTERVAL
+  value: {{ mul .Values.telemetry.metricIntervalSeconds 1000 | quote }}
+{{- with .Values.telemetry.resourceAttributes }}
+- name: OTEL_RESOURCE_ATTRIBUTES
+  value: {{ include "aula-mcp.resourceAttributes" $ | quote }}
+{{- end }}
+{{- end }}
 {{- end }}

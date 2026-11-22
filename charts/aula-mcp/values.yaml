@@ -208,6 +208,50 @@ setupUi:
       existingSecret: ""
       secretKey: client-secret
 
+# JSON API under /api/v1 on its own port of the MCP pod (multi-parent only).
+# It serves the dashboard's data and actions to tokens from oidc.issuer for
+# api.audience, each parent's own data only (and what others share with
+# them, read-only). Changes need api.writeScope and are audited. The calendar
+# feed and sharing are left out: only the ui server reaches them. The
+# OpenAPI document is at /api/v1/openapi.json.
+api:
+  enabled: false
+  port: 8080
+  # Empty: oidc.audience.
+  audience: ""
+  # Scope a token needs for changes. Empty: any valid token may change.
+  writeScope: aula:write
+
+# The dashboard as its own Deployment in front of the API (needs
+# api.enabled). It signs each parent in with oidc.issuer, keeps their tokens
+# on the server (in memory; a restart asks parents to sign in again) and
+# forwards the page's calls to the API. Stateless, so it may run more than
+# one replica only with sticky sessions; keep 1 otherwise.
+# Use it instead of setupUi in multi-parent mode.
+ui:
+  enabled: false
+  port: 8099
+  # Origin browsers open the dashboard on, e.g. https://aula.example.com.
+  # The IdP client's redirect URI is <url>/auth/callback.
+  url: ""
+  clientId: aula-mcp-ui
+  # Secret holding the client secret of a confidential client. Leave empty
+  # for a public client (PKCE only).
+  clientSecret:
+    existingSecret: ""
+    secretKey: client-secret
+  # Asked for on top of openid profile email. The API wants api.writeScope
+  # for changes.
+  scopes: [aula:write]
+  podAnnotations: {}
+  podLabels: {}
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
 # Gateway API routes. Each needs at least one parentRef.
 httpRoute:
   mcp:
@@ -219,6 +263,16 @@ httpRoute:
     #    sectionName: https
     hostnames: []
   setupUi:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    hostnames: []
+  api:
+    enabled: false
+    annotations: {}
+    parentRefs: []
+    hostnames: []
+  ui:
     enabled: false
     annotations: {}
     parentRefs: []

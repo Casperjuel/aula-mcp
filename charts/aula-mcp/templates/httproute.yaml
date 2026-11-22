@@ -22,7 +22,7 @@ spec:
   {{- end }}
   rules:
     - backendRefs:
-        - name: {{ include "aula-mcp.fullname" $ }}
-          port: {{ if eq $name "setupUi" }}{{ $.Values.setupUi.port }}{{ else }}{{ $.Values.service.port }}{{ end }}
+        - name: {{ if eq $name "ui" }}{{ include "aula-mcp.uiName" $ }}{{ else }}{{ include "aula-mcp.fullname" $ }}{{ end }}
+          port: {{ index (dict "setupUi" $.Values.setupUi.port "api" $.Values.api.port "ui" $.Values.ui.port) $name | default $.Values.service.port }}
 {{- end }}
 {{- end }}

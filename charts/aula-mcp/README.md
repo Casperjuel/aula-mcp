@@ -13,7 +13,8 @@ The chart refuses setups that would expose a parent's Aula session:
 - `httpRoute.mcp` without `multi-parent` mode;
 - `setupUi` in `single-parent` mode without `setupUi.iUnderstandItHasNoAuth`;
 - `setupUi` in `multi-parent` mode without `setupUi.login` (its sign-in);
-- `oidc.acceptIdToken` without `multi-parent` mode.
+- `oidc.acceptIdToken` without `multi-parent` mode;
+- `api` without `multi-parent` mode, and `ui` without `api`.
 
 ## Image
 
@@ -61,7 +62,11 @@ kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
 | `gallery.s3.*` | off | Store gallery files in an S3 bucket instead (`bucket`, `endpoint` for MinIO/Ceph RGW/Garage, `region`, `prefix`, keys from `existingSecret`). No gallery volume is made. |
 | `setupUi.enabled` | `false` | Browser login UI on port 8099. **No authentication** in single-parent mode. |
 | `setupUi.login.url` / `.clientId` / `.clientSecret` | `""` / `aula-mcp-setup` / none | Multi-parent: the UI's public origin and its OIDC client. |
-| `httpRoute.mcp` / `httpRoute.setupUi` | off | Gateway API routes; need `parentRefs`. |
+| `api.enabled` | `false` | JSON API under `/api/v1` on `api.port` (8080) of the MCP pod. Multi-parent only. See below. |
+| `api.audience` / `api.writeScope` | `oidc.audience` / `aula:write` | `aud` an API token must carry, and the scope it needs for changes (empty: none). |
+| `ui.enabled` | `false` | The dashboard as its own Deployment in front of the API. Needs `api.enabled`; use it instead of `setupUi`. |
+| `ui.url` / `.clientId` / `.clientSecret` / `.scopes` | `""` / `aula-mcp-ui` / none / `[aula:write]` | Its public origin, its OIDC client, and the scopes it asks for. |
+| `httpRoute.mcp` / `.setupUi` / `.api` / `.ui` | off | Gateway API routes; need `parentRefs`. |
 | `networkPolicy.enabled` / `.from` | on / `[]` | Allowed peers. kagent's namespace is added when `kagent.enabled`. |
 | `kagent.enabled` | `false` | Create a `RemoteMCPServer` in `kagent.namespace`. |
 | `kagent.agent.enabled` | `false` | Also create an example `Agent` that uses it. |
@@ -204,6 +209,61 @@ The `RemoteMCPServer` gets the label `kagent.dev/discovery: disabled`, because
 aula-mcp refuses the controller's tool listing, which carries no token. Agents
 list the tools at run time with the parent's token instead. So its status
 shows no discovered tools; that is expected.
+
+### API and dashboard (optional)
+
+```
+browser ──cookie──▶ ui (Deployment) ──parent's access token + UI key──▶ api (MCP pod, :8080)
+                     │                                                   │
+                     └──── Keycloak: sign-in, token renewal ◀── verifies ┘
+```
+
+`api.enabled` serves the dashboard's data and actions as JSON under
+`/api/v1` on its own port of the MCP pod. It stays in that pod because both
+share each parent's Aula session: a second process would race the first for
+Aula's rotating refresh token. The OpenAPI document is at
+`/api/v1/openapi.json`.
+
+- Every call needs an access token from `oidc.issuer` whose `aud` holds
+  `api.audience`. The token's `sub` is the parent: their own data, or with
+  `?owner=` what another parent shares with them, read-only.
+- Changes (POST) also need `api.writeScope` in the token's `scope`, and are
+  audited with the trigger `api`.
+- The calendar feed and sharing are not in the API. Parents set them up in
+  the dashboard; only the ui server, which proves itself with a generated key
+  (Secret `<release>-ui-key`), reaches them.
+
+`ui.enabled` runs the dashboard on its own. It signs each parent in, keeps
+their tokens in its memory (never in the browser, which only gets a session
+cookie), renews them, and forwards the page's calls to the API. It needs no
+volume and holds no Aula session.
+
+1. **Keycloak**: create a client scope `aula:write` (type *Optional*, *Include
+   in token scope* on). Then **Clients → Import client** with
+   `examples/keycloak-ui-client.json`, set its redirect URI to
+   `<ui url>/auth/callback`, and copy the secret into a Secret. Its audience
+   mapper adds `aula-mcp` to the access token. An existing setup UI client
+   works too, given the same scope and mapper.
+
+2. Values:
+
+   ```yaml
+   api:
+     enabled: true
+   ui:
+     enabled: true
+     url: https://aula.example.com
+     clientSecret:
+       existingSecret: aula-mcp-ui
+   httpRoute:
+     ui:
+       enabled: true
+       parentRefs: [{ name: gateway, namespace: gateway }]
+       hostnames: [aula.example.com]
+   ```
+
+   Add `httpRoute.api` only when clients outside the cluster call the API
+   themselves.
 
 ## Local test with kind
 

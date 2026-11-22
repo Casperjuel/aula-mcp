@@ -17,3 +17,8 @@ spec:
       port: {{ .Values.setupUi.port }}
       targetPort: setup-ui
     {{- end }}
+    {{- if .Values.api.enabled }}
+    - name: api
+      port: {{ .Values.api.port }}
+      targetPort: api
+    {{- end }}

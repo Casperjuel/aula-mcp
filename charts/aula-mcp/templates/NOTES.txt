@@ -1,7 +1,15 @@
 aula-mcp ({{ .Values.mode }}) is running at {{ include "aula-mcp.mcpUrl" . }}
 {{- if include "aula-mcp.multiParent" . }}
 
-{{- if .Values.setupUi.enabled }}
+{{- if .Values.api.enabled }}
+API: http://{{ include "aula-mcp.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.api.port }}/api/v1 (OpenAPI at /api/v1/openapi.json)
+{{- end }}
+{{- if .Values.ui.enabled }}
+Each parent opens the dashboard at {{ .Values.ui.url }}, signs in with
+{{ .Values.oidc.issuer }} and logs in to Aula there.
+
+Or from a shell, with their IdP user id (the token's `sub`):
+{{- else if .Values.setupUi.enabled }}
 Each parent logs in to Aula at {{ .Values.setupUi.login.url }}, after signing in
 with {{ .Values.oidc.issuer }}.
 
