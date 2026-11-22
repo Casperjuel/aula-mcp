@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { resolveServerMode, ServerModeError } from './server-mode.ts';
+import { resolveApi, resolveServerMode, resolveUiServer, ServerModeError } from './server-mode.ts';
 
 const OIDC = {
   AULA_MCP_OIDC_ISSUER: 'https://id.example.com/realms/home',
@@ -143,5 +143,90 @@ describe('resolveServerMode', () => {
         kind: 'single-parent',
       });
     });
+  });
+});
+
+describe('resolveApi', () => {
+  const multi = resolveServerMode({ AULA_MCP_MULTI_PARENT: '1', ...OIDC });
+  const KEY = 'k'.repeat(32);
+
+  test('off unless a port is set, and then nothing else may be set', () => {
+    expect(resolveApi({}, multi)).toBeNull();
+    expect(() => resolveApi({ AULA_MCP_API_UI_KEY: KEY }, multi)).toThrow(ServerModeError);
+  });
+
+  test('defaults: the /mcp audience and the aula:write scope', () => {
+    expect(resolveApi({ AULA_MCP_API_PORT: '8080' }, multi)).toEqual({
+      port: 8080,
+      audience: 'aula-mcp',
+      writeScope: 'aula:write',
+      uiKey: null,
+      uiUrl: null,
+    });
+    const own = resolveApi(
+      {
+        AULA_MCP_API_PORT: '8080',
+        AULA_MCP_API_AUDIENCE: 'aula-mcp-api',
+        AULA_MCP_API_WRITE_SCOPE: '',
+        AULA_MCP_API_UI_KEY: KEY,
+        AULA_MCP_UI_URL: 'https://aula.example.com/',
+      },
+      multi,
+    );
+    expect(own).toMatchObject({
+      audience: 'aula-mcp-api',
+      writeScope: null,
+      uiKey: KEY,
+      uiUrl: 'https://aula.example.com',
+    });
+  });
+
+  test('needs multi-parent mode, a real port, a long UI key and its URL', () => {
+    expect(() => resolveApi({ AULA_MCP_API_PORT: '8080' }, { kind: 'single-parent' })).toThrow(
+      /multi-parent/,
+    );
+    expect(() => resolveApi({ AULA_MCP_API_PORT: 'x' }, multi)).toThrow(/valid port/);
+    expect(() =>
+      resolveApi(
+        { AULA_MCP_API_PORT: '8080', AULA_MCP_API_UI_KEY: 'short', AULA_MCP_UI_URL: 'https://a.b' },
+        multi,
+      ),
+    ).toThrow(/at least 32/);
+    expect(() =>
+      resolveApi({ AULA_MCP_API_PORT: '8080', AULA_MCP_API_UI_KEY: KEY }, multi),
+    ).toThrow(/AULA_MCP_UI_URL/);
+  });
+});
+
+describe('resolveUiServer', () => {
+  const env = {
+    AULA_MCP_OIDC_ISSUER: OIDC.AULA_MCP_OIDC_ISSUER,
+    AULA_MCP_UI_URL: 'https://aula.example.com',
+    AULA_MCP_UI_CLIENT_ID: 'aula-mcp-ui',
+    AULA_MCP_API_URL: 'http://aula-mcp-api:8080',
+    AULA_MCP_API_UI_KEY: 'k'.repeat(32),
+  };
+
+  test('reads its settings, with port 8099 and the aula:write scope by default', () => {
+    expect(resolveUiServer(env)).toEqual({
+      port: 8099,
+      issuer: OIDC.AULA_MCP_OIDC_ISSUER,
+      login: { publicUrl: 'https://aula.example.com', clientId: 'aula-mcp-ui' },
+      scopes: ['aula:write'],
+      apiUrl: 'http://aula-mcp-api:8080',
+      uiKey: 'k'.repeat(32),
+    });
+    expect(resolveUiServer({ ...env, AULA_MCP_UI_SCOPES: 'a, b' }).scopes).toEqual(['a', 'b']);
+  });
+
+  test('refuses a missing setting, plain http in the browser, or a short key', () => {
+    for (const name of Object.keys(env)) {
+      expect(() => resolveUiServer({ ...env, [name]: '' })).toThrow(name);
+    }
+    expect(() => resolveUiServer({ ...env, AULA_MCP_UI_URL: 'http://aula.example.com' })).toThrow(
+      /https/,
+    );
+    expect(() => resolveUiServer({ ...env, AULA_MCP_API_UI_KEY: 'short' })).toThrow(/32/);
+    expect(() => resolveUiServer({ ...env, AULA_MCP_API_URL: 'ftp://x' })).toThrow(/http/);
   });
 });

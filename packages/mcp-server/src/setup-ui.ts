@@ -162,6 +162,10 @@ export interface SetupAppOptions {
       open(viewer: Caller, ownerId: string): Promise<SharedView | null>;
     };
   };
+  /** Serve the dashboard pages too (default). Off when this app is the API. */
+  pages?: boolean;
+  /** What the audit log records as the source of a change (default 'dashboard'). */
+  triggerOf?(c: Context): string;
   /** Multi-parent mode: the sign-in, and each parent's own token store. */
   parents?: {
     login: SetupLogin;
@@ -367,8 +371,10 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
   }
 
   // One page for every view; the page's script picks the view from the path.
-  for (const route of DASHBOARD_ROUTES) {
-    app.get(route, (c) => c.html(renderDashboard(parentOf(c)?.name, c.req.path)));
+  if (options.pages !== false) {
+    for (const route of DASHBOARD_ROUTES) {
+      app.get(route, (c) => c.html(renderDashboard(parentOf(c)?.name, c.req.path)));
+    }
   }
 
   app.get('/status', async (c) => c.json(await loginStatus(storeOf(c))));
@@ -786,7 +792,8 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     if (!store) return undefined;
     return async (entry: AuditEntry) => {
       try {
-        await store.audit({ ...entry, details: { trigger: 'dashboard', ...entry.details } });
+        const trigger = options.triggerOf?.(c) ?? 'dashboard';
+        await store.audit({ ...entry, details: { trigger, ...entry.details } });
       } catch {}
     };
   };

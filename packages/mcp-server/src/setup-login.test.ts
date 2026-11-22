@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type StoredTokenRecord, silentLogger, type TokenStore } from '@aula-mcp/aula-auth';
+import { Hono } from 'hono';
 import { createLocalJWKSet, exportJWK, generateKeyPair, type JWK, SignJWT } from 'jose';
 import { GalleryFiles, GalleryView } from './gallery.ts';
 import { type Caller, callerId } from './oidc.ts';
@@ -38,6 +39,9 @@ let lastTokenRequest: { body: URLSearchParams; authorization: string | null } | 
 let idTokenClaims: (nonce: string) => Record<string, unknown>;
 /** Nonce from the most recent authorization redirect. */
 let nonce = '';
+/** The refresh token the fake provider accepts, and how often it was used. */
+let refreshToken = 'rt';
+let refreshes = 0;
 
 beforeAll(async () => {
   const pair = await generateKeyPair('RS256');
@@ -59,6 +63,12 @@ beforeAll(async () => {
       if (pathname === '/realms/home/token') {
         const body = new URLSearchParams(await req.text());
         lastTokenRequest = { body, authorization: req.headers.get('authorization') };
+        if (body.get('grant_type') === 'refresh_token') {
+          refreshes++;
+          return body.get('refresh_token') === refreshToken
+            ? Response.json({ access_token: `at${refreshes + 1}`, expires_in: 300 })
+            : Response.json({ error: 'invalid_grant' }, { status: 400 });
+        }
         if (body.get('code') !== 'good-code')
           return Response.json({ error: 'invalid_grant' }, { status: 400 });
         const idToken = await new SignJWT(idTokenClaims(nonce))
@@ -66,7 +76,13 @@ beforeAll(async () => {
           .setIssuedAt()
           .setExpirationTime('5m')
           .sign(signingKey);
-        return Response.json({ id_token: idToken, access_token: 'at' });
+        return Response.json({
+          id_token: idToken,
+          access_token: 'at1',
+          refresh_token: 'rt',
+          // Runs out at once, so the next use renews it.
+          expires_in: 1,
+        });
       }
       return new Response('not found', { status: 404 });
     },
@@ -645,5 +661,67 @@ describe('setup UI sign-in', () => {
     expect(location.href.startsWith(`${issuer}/logout?`)).toBe(true);
     expect(location.searchParams.get('post_logout_redirect_uri')).toBe(`${PUBLIC_URL}/`);
     expect((await app.request('/status', { headers: { cookie } })).status).toBe(401);
+  });
+});
+
+describe('setup UI sign-in that keeps tokens', () => {
+  const make = () => {
+    const login = createSetupLogin({
+      issuer,
+      publicUrl: PUBLIC_URL,
+      clientId: CLIENT_ID,
+      logger: silentLogger,
+      keys: createLocalJWKSet({ keys: [publicJwk] }),
+      forwardTokens: { scopes: ['aula:write'] },
+    });
+    const app = new Hono();
+    login.mount(app);
+    app.get('/token', async (c) => c.json({ token: (await login.accessToken?.(c)) ?? null }));
+    return app;
+  };
+  const tokenOf = async (app: Hono, cookie: string) =>
+    (
+      (await (await app.request('/token', { headers: { cookie } })).json()) as {
+        token: string | null;
+      }
+    ).token;
+
+  test('asks for the extra scopes', async () => {
+    const start = await make().request('/auth/login');
+    const scope = new URL(start.headers.get('location') ?? '').searchParams.get('scope');
+    expect(scope).toBe('openid profile email aula:write');
+  });
+
+  test('renews a run-out access token once for parallel calls, and signs out when refused', async () => {
+    refreshToken = 'rt';
+    refreshes = 0;
+    const app = make();
+    const { cookie } = await signInFrom(app as unknown as App, '/auth/login', 'parent-t');
+    const [a, b] = await Promise.all([tokenOf(app, cookie), tokenOf(app, cookie)]);
+    expect([a, b]).toEqual(['at2', 'at2']);
+    expect(refreshes).toBe(1);
+    expect(lastTokenRequest?.body.get('refresh_token')).toBe('rt');
+    // Still fresh: no new renewal.
+    expect(await tokenOf(app, cookie)).toBe('at2');
+    expect(refreshes).toBe(1);
+
+    // A second session whose renewal the provider refuses is signed out.
+    const second = await signInFrom(app as unknown as App, '/auth/login', 'parent-u');
+    refreshToken = 'other';
+    expect(await tokenOf(app, second.cookie)).toBeNull();
+    refreshToken = 'rt';
+    expect(await tokenOf(app, second.cookie)).toBeNull();
+    expect(await tokenOf(app, 'nope=1')).toBeNull();
+  });
+
+  test('without forwardTokens there is no token to hand out', async () => {
+    const login = createSetupLogin({
+      issuer,
+      publicUrl: PUBLIC_URL,
+      clientId: CLIENT_ID,
+      logger: silentLogger,
+      keys: createLocalJWKSet({ keys: [publicJwk] }),
+    });
+    expect(login.accessToken).toBeUndefined();
   });
 });

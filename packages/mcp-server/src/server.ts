@@ -52,6 +52,14 @@
  *   AULA_MCP_SETUP_CLIENT_ID  — the setup UI's OIDC client; it signs each
  *                               parent in before their Aula login. Required too.
  *   AULA_MCP_SETUP_CLIENT_SECRET — for a confidential client. Optional.
+ *   AULA_MCP_API_PORT         — multi-parent mode: also serve the API (/api/v1,
+ *                               see api.ts) on this port. With it:
+ *   AULA_MCP_API_AUDIENCE     — the API tokens' audience (default the /mcp one)
+ *   AULA_MCP_API_WRITE_SCOPE  — scope every change needs (default aula:write;
+ *                               empty for none)
+ *   AULA_MCP_API_UI_KEY       — the dashboard server's key (ui-server.ts), which
+ *                               alone reaches the calendar feed and sharing
+ *   AULA_MCP_UI_URL           — where browsers open that dashboard
  *   AULA_MCP_STORAGE          — local storage: sqlite (default), postgres or
  *                               none. See storage.ts for the rest.
  *   AULA_MCP_SYNC=0           — no background sync into local storage; see
@@ -67,6 +75,7 @@ import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
+import { createApiApp } from './api.ts';
 import { AulaContext } from './aula-context.ts';
 import { GalleryFiles, GalleryView, galleryConfig } from './gallery.ts';
 import type { SharedAccess } from './local-tools.ts';
@@ -75,11 +84,12 @@ import {
   type Caller,
   callerId,
   createOidcVerifier,
+  createTokenVerifier,
   protectedResourceMetadata,
   sameCaller,
 } from './oidc.ts';
 import { ParentContexts } from './parent-contexts.ts';
-import { resolveServerMode, ServerModeError } from './server-mode.ts';
+import { resolveApi, resolveServerMode, ServerModeError } from './server-mode.ts';
 import { createMcpApp, type LoginRequired, type McpApp } from './setup.ts';
 import { createSetupLogin } from './setup-login.ts';
 import { createSetupApp } from './setup-ui.ts';
@@ -720,22 +730,10 @@ const server = Bun.serve({
   fetch: app.fetch,
 });
 
-// Optional in-addon setup/login UI. The HA addon sets AULA_MCP_INGRESS_PORT
-// to 8099; HA Supervisor proxies its Ingress traffic to that port, giving
-// users a one-click login flow inside HA's sidebar. Skipped when unset so
-// non-addon deployments (CLI workstation, VPS) don't open an extra port.
-let setupServer: ReturnType<typeof Bun.serve> | null = null;
-const INGRESS_PORT_RAW = process.env.AULA_MCP_INGRESS_PORT;
-if (INGRESS_PORT_RAW) {
-  const ingressPort = Number(INGRESS_PORT_RAW);
-  if (!Number.isInteger(ingressPort) || ingressPort <= 0) {
-    process.stderr.write(`AULA_MCP_INGRESS_PORT="${INGRESS_PORT_RAW}" is not a valid port.\n`);
-    process.exit(2);
-  }
-  // Multi-parent: each parent signs in with the identity provider first and
-  // logs in to Aula for themselves only.
-  const setupLogin = multiParent?.setupLogin;
-  const myData = {
+/** What the dashboard's routes read and change, for the in-process UI and the API.
+ *  `publicUrl` is where browsers open the dashboard, for the calendar feed link. */
+function dashboardData(publicUrl: string | null) {
+  return {
     contextFor,
     ...(storage
       ? {
@@ -762,7 +760,7 @@ if (INGRESS_PORT_RAW) {
             tokens: storage.feeds,
             parentIdOf,
             storageFor: (parentId: string) => storage.forParent(parentId),
-            publicUrl: setupLogin?.publicUrl ?? null,
+            publicUrl,
           },
         }
       : {}),
@@ -776,6 +774,24 @@ if (INGRESS_PORT_RAW) {
         }
       : {}),
   };
+}
+
+// Optional in-addon setup/login UI. The HA addon sets AULA_MCP_INGRESS_PORT
+// to 8099; HA Supervisor proxies its Ingress traffic to that port, giving
+// users a one-click login flow inside HA's sidebar. Skipped when unset so
+// non-addon deployments (CLI workstation, VPS) don't open an extra port.
+let setupServer: ReturnType<typeof Bun.serve> | null = null;
+const INGRESS_PORT_RAW = process.env.AULA_MCP_INGRESS_PORT;
+if (INGRESS_PORT_RAW) {
+  const ingressPort = Number(INGRESS_PORT_RAW);
+  if (!Number.isInteger(ingressPort) || ingressPort <= 0) {
+    process.stderr.write(`AULA_MCP_INGRESS_PORT="${INGRESS_PORT_RAW}" is not a valid port.\n`);
+    process.exit(2);
+  }
+  // Multi-parent: each parent signs in with the identity provider first and
+  // logs in to Aula for themselves only.
+  const setupLogin = multiParent?.setupLogin;
+  const myData = dashboardData(setupLogin?.publicUrl ?? null);
   const setupApp = createSetupApp(
     multiParent && setupLogin
       ? {
@@ -814,6 +830,46 @@ if (INGRESS_PORT_RAW) {
   );
 }
 
+// Optional API on its own port (api.ts), multi-parent mode only. In this
+// process because it shares each parent's Aula session with /mcp.
+let apiServer: ReturnType<typeof Bun.serve> | null = null;
+const api = (() => {
+  try {
+    return resolveApi(process.env, mode);
+  } catch (err) {
+    if (!(err instanceof ServerModeError)) throw err;
+    process.stderr.write(`${err.message}\n`);
+    process.exit(2);
+  }
+})();
+if (api && multiParent) {
+  const apiApp = createApiApp({
+    logger,
+    verify: createTokenVerifier({ ...multiParent.oidc, audience: api.audience }),
+    writeScope: api.writeScope,
+    uiKey: api.uiKey,
+    version: VERSION,
+    ...(otel ? { middleware: httpTelemetry('api') } : {}),
+    setup: {
+      autoRenew: keepAliveEnabled,
+      myData: dashboardData(api.uiUrl),
+      parents: {
+        storeFor: (caller) => multiParent.contexts.store(caller),
+        changed: (caller) => multiParent.contexts.invalidate(caller),
+      },
+    },
+  });
+  apiServer = Bun.serve({
+    port: api.port,
+    hostname: HOST,
+    // Aula logins stream their progress over SSE, as on the setup UI.
+    idleTimeout: 240,
+    fetch: apiApp.fetch,
+  });
+  logger.info('aula-mcp.api.listening', { port: api.port });
+  process.stdout.write(`aula-mcp API listening on http://${HOST}:${api.port}/api/v1\n`);
+}
+
 // Graceful shutdown — finish in-flight requests before exiting.
 let shuttingDown = false;
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
@@ -832,6 +888,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     ]);
     await server.stop();
     if (setupServer) await setupServer.stop();
+    if (apiServer) await apiServer.stop();
     sync?.stop();
     multiParent?.contexts.dispose();
     await storage?.close();

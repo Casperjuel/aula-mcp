@@ -9,7 +9,7 @@
 
 import { createHash } from 'node:crypto';
 import type { Logger } from '@aula-mcp/aula-auth';
-import { createRemoteJWKSet, errors, type JWTVerifyGetKey, jwtVerify } from 'jose';
+import { createRemoteJWKSet, errors, type JWTPayload, type JWTVerifyGetKey, jwtVerify } from 'jose';
 import type { OidcConfig } from './server-mode.ts';
 
 /** Asymmetric algorithms only; an HMAC token would mean a shared secret. */
@@ -54,6 +54,14 @@ export class CallerAuthError extends Error {
 
 export type CallerVerifier = (authorization: string | null | undefined) => Promise<Caller>;
 
+/** A verified caller and the claims of their token. */
+export interface VerifiedToken {
+  caller: Caller;
+  claims: JWTPayload;
+}
+
+export type TokenVerifier = (authorization: string | null | undefined) => Promise<VerifiedToken>;
+
 export interface OidcVerifierOptions extends OidcConfig {
   /** Key lookup to use instead of discovering the issuer's JWKS (tests). */
   keys?: JWTVerifyGetKey;
@@ -62,6 +70,12 @@ export interface OidcVerifierOptions extends OidcConfig {
 }
 
 export function createOidcVerifier(options: OidcVerifierOptions): CallerVerifier {
+  const verify = createTokenVerifier(options);
+  return async (authorization) => (await verify(authorization)).caller;
+}
+
+/** Like createOidcVerifier, but also hands back the token's claims. */
+export function createTokenVerifier(options: OidcVerifierOptions): TokenVerifier {
   const { issuer, audience, acceptIdTokens } = options;
   let keysPromise: Promise<JWTVerifyGetKey> | undefined = options.keys
     ? Promise.resolve(options.keys)
@@ -104,8 +118,16 @@ export function createOidcVerifier(options: OidcVerifierOptions): CallerVerifier
     if (typeof payload.sub !== 'string' || payload.sub === '') {
       throw new CallerAuthError('invalid_token', 'Token has no subject.');
     }
-    return { issuer, sub: payload.sub };
+    return { caller: { issuer, sub: payload.sub }, claims: payload };
   };
+}
+
+/** The scopes a token grants: `scope` (space separated) or `scp` (a list). */
+export function scopesOf(claims: JWTPayload): string[] {
+  if (typeof claims.scope === 'string') return claims.scope.split(' ').filter(Boolean);
+  if (Array.isArray(claims.scp))
+    return claims.scp.filter((s): s is string => typeof s === 'string');
+  return [];
 }
 
 async function discoverKeys(issuer: string, fetchImpl: typeof fetch): Promise<JWTVerifyGetKey> {

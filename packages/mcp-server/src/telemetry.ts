@@ -235,7 +235,7 @@ function routeOf(c: Parameters<MiddlewareHandler>[0]): string {
  * when it sends `traceparent`) and the request-duration histogram. Health
  * checks are counted but not traced.
  */
-export function httpTelemetry(server: 'mcp' | 'setup'): MiddlewareHandler {
+export function httpTelemetry(server: 'mcp' | 'setup' | 'api' | 'ui'): MiddlewareHandler {
   return async (c, next) => {
     const started = performance.now();
     const method = c.req.method;

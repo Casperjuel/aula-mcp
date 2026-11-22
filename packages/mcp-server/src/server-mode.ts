@@ -18,6 +18,10 @@
  * AULA_MCP_SETUP_CLIENT_ID and, for a confidential client,
  * AULA_MCP_SETUP_CLIENT_SECRET. Single-parent mode doesn't use them.
  *
+ * The API (AULA_MCP_API_PORT, api.ts) needs multi-parent mode; see
+ * resolveApi. The dashboard server in front of it runs on its own (ui-server.ts,
+ * resolveUiServer).
+ *
  * Every half-configured state is a startup error rather than a guess: the
  * flag without an issuer/audience, or OIDC settings without the flag. A typo
  * must never leave someone believing auth is on when it isn't.
@@ -155,4 +159,116 @@ function secureUrl(name: string, value: string): URL {
     );
   }
   return url;
+}
+
+/** The API on its own port, multi-parent mode only. */
+export interface ApiConfig {
+  port: number;
+  /** Must appear in the `aud` of the API's tokens; defaults to /mcp's. */
+  audience: string;
+  /** Needed for every change; null when changes need no scope. */
+  writeScope: string | null;
+  /** The dashboard server's key, when one sits in front of the API. */
+  uiKey: string | null;
+  /** Where browsers open that dashboard; the calendar feed link points there. */
+  uiUrl: string | null;
+}
+
+/** A UI key long enough not to be guessed. */
+const MIN_UI_KEY = 32;
+
+function port(name: string, raw: string): number {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0 || value > 65535) {
+    throw new ServerModeError(`${name}="${raw}" is not a valid port.`);
+  }
+  return value;
+}
+
+function origin(name: string, value: string): string {
+  const url = secureUrl(name, value);
+  if (url.pathname !== '/' || url.search || url.hash) {
+    throw new ServerModeError(`${name} must be an origin without a path, got "${value}".`);
+  }
+  return url.origin;
+}
+
+export function resolveApi(env: Env, mode: ServerMode): ApiConfig | null {
+  const raw = env.AULA_MCP_API_PORT?.trim() ?? '';
+  const uiKey = env.AULA_MCP_API_UI_KEY ?? '';
+  const uiUrl = env.AULA_MCP_UI_URL?.trim() ?? '';
+  if (!raw) {
+    if (env.AULA_MCP_API_AUDIENCE || env.AULA_MCP_API_WRITE_SCOPE !== undefined || uiKey || uiUrl) {
+      throw new ServerModeError(
+        'AULA_MCP_API_* settings are set but the API is off (AULA_MCP_API_PORT).',
+      );
+    }
+    return null;
+  }
+  if (mode.kind !== 'multi-parent') {
+    throw new ServerModeError(
+      'The API (AULA_MCP_API_PORT) needs multi-parent mode: each call is a parent signed in with OIDC.',
+    );
+  }
+  if (uiKey && uiKey.length < MIN_UI_KEY) {
+    throw new ServerModeError(`AULA_MCP_API_UI_KEY must be at least ${MIN_UI_KEY} characters.`);
+  }
+  if (uiKey && !uiUrl) {
+    throw new ServerModeError(
+      'AULA_MCP_API_UI_KEY needs AULA_MCP_UI_URL, where browsers open the dashboard.',
+    );
+  }
+  const scope = env.AULA_MCP_API_WRITE_SCOPE;
+  return {
+    port: port('AULA_MCP_API_PORT', raw),
+    audience: env.AULA_MCP_API_AUDIENCE?.trim() || mode.oidc.audience,
+    writeScope: scope === undefined ? 'aula:write' : scope.trim() || null,
+    uiKey: uiKey || null,
+    uiUrl: uiUrl ? origin('AULA_MCP_UI_URL', uiUrl) : null,
+  };
+}
+
+/** The dashboard server in front of the API (ui-server.ts). */
+export interface UiServerConfig {
+  port: number;
+  issuer: string;
+  login: SetupLoginConfig;
+  /** Asked for at sign-in on top of openid, profile and email. */
+  scopes: string[];
+  apiUrl: string;
+  uiKey: string;
+}
+
+export function resolveUiServer(env: Env): UiServerConfig {
+  const need = (name: string): string => {
+    const value = env[name]?.trim() ?? '';
+    if (!value) throw new ServerModeError(`The dashboard server requires ${name}.`);
+    return value;
+  };
+  const issuer = need('AULA_MCP_OIDC_ISSUER');
+  secureUrl('AULA_MCP_OIDC_ISSUER', issuer);
+  const publicUrl = origin('AULA_MCP_UI_URL', need('AULA_MCP_UI_URL'));
+  const clientId = need('AULA_MCP_UI_CLIENT_ID');
+  const clientSecret = env.AULA_MCP_UI_CLIENT_SECRET ?? '';
+  const uiKey = need('AULA_MCP_API_UI_KEY');
+  if (uiKey.length < MIN_UI_KEY) {
+    throw new ServerModeError(`AULA_MCP_API_UI_KEY must be at least ${MIN_UI_KEY} characters.`);
+  }
+  // Inside the cluster, so plain http to the API's service is the norm.
+  const apiUrl = need('AULA_MCP_API_URL');
+  try {
+    const url = new URL(apiUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error();
+  } catch {
+    throw new ServerModeError(`AULA_MCP_API_URL is not an http(s) URL: "${apiUrl}".`);
+  }
+  const scopes = (env.AULA_MCP_UI_SCOPES ?? 'aula:write').split(/[\s,]+/).filter(Boolean);
+  return {
+    port: port('AULA_MCP_UI_PORT', env.AULA_MCP_UI_PORT?.trim() || '8099'),
+    issuer,
+    login: { publicUrl, clientId, ...(clientSecret ? { clientSecret } : {}) },
+    scopes,
+    apiUrl,
+    uiKey,
+  };
 }

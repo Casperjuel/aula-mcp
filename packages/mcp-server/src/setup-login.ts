@@ -12,6 +12,11 @@
  * Sessions live in memory: a restart signs everyone out, which costs a
  * redirect. The state cookie ties a callback to the browser that started the
  * login, so nobody can sign someone else's browser in to their account.
+ *
+ * For the dashboard server in front of the API (ui-app.ts), `forwardTokens`
+ * also keeps the parent's access and refresh token in the session, on the
+ * server only, and renews the access token before it runs out. The browser
+ * only ever holds the session cookie.
  */
 
 import type { Logger } from '@aula-mcp/aula-auth';
@@ -41,6 +46,9 @@ export interface SetupLogin {
   parent(c: Context): SignedInParent | null;
   /** A state-changing request from the setup UI's own pages. */
   sameOrigin(c: Context): boolean;
+  /** With `forwardTokens`: a current access token of this browser's parent,
+   *  renewed when needed; null when signed out or the renewal was refused. */
+  accessToken?(c: Context): Promise<string | null>;
 }
 
 export interface SetupLoginOptions extends SetupLoginConfig {
@@ -49,6 +57,8 @@ export interface SetupLoginOptions extends SetupLoginConfig {
   /** Key lookup instead of the issuer's JWKS (tests). */
   keys?: JWTVerifyGetKey;
   fetch?: typeof fetch;
+  /** Keep the tokens to call the API with, asking for these extra scopes too. */
+  forwardTokens?: { scopes: string[] };
 }
 
 interface Provider {
@@ -74,7 +84,21 @@ interface Pending {
 
 interface Session extends SignedInParent {
   expiresAt: number;
+  /** With `forwardTokens` only. Never logged, never sent to the browser. */
+  tokens?: Tokens;
+  /** A renewal in flight, so parallel requests share it. */
+  renewing?: Promise<Tokens | null> | undefined;
 }
+
+interface Tokens {
+  access: string;
+  refresh?: string;
+  /** When the access token runs out, ms. */
+  accessExpiresAt: number;
+}
+
+/** Renew this long before the access token runs out. */
+const RENEW_EARLY_MS = 30 * 1000;
 
 export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
   const { issuer, clientId, clientSecret, publicUrl, logger } = options;
@@ -137,7 +161,7 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
         response_type: 'code',
         client_id: clientId,
         redirect_uri: redirectUri,
-        scope: 'openid profile email',
+        scope: ['openid', 'profile', 'email', ...(options.forwardTokens?.scopes ?? [])].join(' '),
         state,
         nonce,
         code_challenge: await s256(verifier),
@@ -170,8 +194,13 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
         return unavailable(c, err);
       }
 
-      const idToken = await exchangeCode(idp, code, entry.verifier);
+      const grant = await exchangeCode(idp, code, entry.verifier);
+      const idToken = typeof grant?.id_token === 'string' ? grant.id_token : null;
       if (!idToken) return c.text('Sign-in failed: the code was not accepted.', 400);
+      const tokens = options.forwardTokens ? tokensOf(grant) : undefined;
+      if (options.forwardTokens && !tokens) {
+        return c.text('Sign-in failed: no access token was issued.', 400);
+      }
 
       let claims: Record<string, unknown>;
       try {
@@ -205,6 +234,7 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
           ? { email: claims.email }
           : {}),
         expiresAt: Date.now() + SESSION_TTL_MS,
+        ...(tokens ? { tokens } : {}),
       });
       setCookie(c, sessionCookie, id, { ...cookieOptions, maxAge: SESSION_TTL_MS / 1000 });
       return c.redirect(`${publicUrl}${entry.next}`, 303);
@@ -233,14 +263,21 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
     });
   }
 
-  async function exchangeCode(idp: Provider, code: string, verifier: string) {
-    const body = new URLSearchParams({
+  function exchangeCode(idp: Provider, code: string, verifier: string) {
+    return tokenRequest(idp, {
       grant_type: 'authorization_code',
       code,
       redirect_uri: redirectUri,
       code_verifier: verifier,
-      client_id: clientId,
     });
+  }
+
+  /** A call to the token endpoint; null when it is refused. */
+  async function tokenRequest(
+    idp: Provider,
+    params: Record<string, string>,
+  ): Promise<Record<string, unknown> | null> {
+    const body = new URLSearchParams({ ...params, client_id: clientId });
     const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' };
     if (clientSecret) {
       const basic = `${encodeURIComponent(clientId)}:${encodeURIComponent(clientSecret)}`;
@@ -248,11 +285,62 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
     }
     const res = await fetchImpl(idp.tokenEndpoint, { method: 'POST', headers, body });
     if (!res.ok) {
-      logger.warn('setup.auth.code_exchange_failed', { status: res.status });
+      logger.warn('setup.auth.token_request_failed', {
+        grant: params.grant_type,
+        status: res.status,
+      });
       return null;
     }
-    const json = (await res.json()) as { id_token?: unknown };
-    return typeof json.id_token === 'string' ? json.id_token : null;
+    const json = (await res.json().catch(() => null)) as unknown;
+    return json && typeof json === 'object' ? (json as Record<string, unknown>) : null;
+  }
+
+  function tokensOf(grant: Record<string, unknown> | null, previous?: Tokens): Tokens | undefined {
+    if (!grant || typeof grant.access_token !== 'string' || grant.access_token === '')
+      return undefined;
+    const expiresIn = typeof grant.expires_in === 'number' ? grant.expires_in : 60;
+    const refresh =
+      typeof grant.refresh_token === 'string' ? grant.refresh_token : previous?.refresh;
+    return {
+      access: grant.access_token,
+      ...(refresh ? { refresh } : {}),
+      accessExpiresAt: Date.now() + expiresIn * 1000,
+    };
+  }
+
+  async function renew(session: Session): Promise<Tokens | null> {
+    const refresh = session.tokens?.refresh;
+    if (!refresh) return null;
+    let idp: Provider;
+    try {
+      idp = await provider();
+    } catch {
+      return null;
+    }
+    return (
+      tokensOf(
+        await tokenRequest(idp, { grant_type: 'refresh_token', refresh_token: refresh }),
+        session.tokens,
+      ) ?? null
+    );
+  }
+
+  async function accessToken(c: Context): Promise<string | null> {
+    const id = getCookie(c, sessionCookie);
+    const session = id ? sessions.get(id) : undefined;
+    if (!id || !session?.tokens || session.expiresAt <= Date.now()) return null;
+    if (session.tokens.accessExpiresAt - RENEW_EARLY_MS > Date.now()) return session.tokens.access;
+    session.renewing ??= renew(session).finally(() => {
+      session.renewing = undefined;
+    });
+    const tokens = await session.renewing;
+    if (!tokens) {
+      // The identity provider ended the session; sign in again.
+      sessions.delete(id);
+      return null;
+    }
+    session.tokens = tokens;
+    return tokens.access;
   }
 
   function parent(c: Context): SignedInParent | null {
@@ -275,7 +363,7 @@ export function createSetupLogin(options: SetupLoginOptions): SetupLogin {
     return c.req.header('origin') === publicUrl;
   }
 
-  return { mount, parent, sameOrigin };
+  return { mount, parent, sameOrigin, ...(options.forwardTokens ? { accessToken } : {}) };
 }
 
 async function discover(

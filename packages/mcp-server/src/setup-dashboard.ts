@@ -779,9 +779,16 @@ const pct = (x) => Math.round(Math.min(Math.max(Number(x) || 0, 0), 1) * 100) + 
 const OWNER_READS = /^data\\/(stats|items|activity|messages\\/roles|gallery|attachments)(\\/|\\?|$)/;
 const withOwner = (path) => (state.owner && OWNER_READS.test(path)
   ? path + (path.includes('?') ? '&' : '?') + 'owner=' + encodeURIComponent(state.owner) : path);
+// The sign-in ran out (a restart, or the identity provider ended it): sign in
+// again and come back to this view.
+const signInAgain = (res, body) => {
+  if (res.status !== 401 || body.error !== 'not signed in') return;
+  location.href = new URL('auth/login?next=' + encodeURIComponent(location.pathname), document.baseURI).href;
+};
 const getJson = async (path) => {
   const res = await fetch(withOwner(path), { headers: { accept: 'application/json' } });
   const body = await res.json().catch(() => ({}));
+  signInAgain(res, body);
   if (!res.ok) throw Object.assign(new Error(body.error || ('HTTP ' + res.status)), { status: res.status });
   return body;
 };
@@ -792,6 +799,7 @@ const postJson = async (path, data) => {
     body: JSON.stringify(data || {}),
   });
   const body = await res.json().catch(() => ({}));
+  signInAgain(res, body);
   if (!res.ok) throw Object.assign(new Error(body.error || ('HTTP ' + res.status)), { status: res.status });
   return body;
 };
