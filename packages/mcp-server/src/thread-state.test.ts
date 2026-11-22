@@ -105,14 +105,11 @@ afterEach(() => {
 });
 
 describe('dashboard thread state', () => {
-  test('mark read moves the read marker, sets the read flag and stores it', async () => {
+  test('mark read moves the read marker to the latest message and stores it', async () => {
     const { post, thread, audit, calls, primed } = await setup();
     const res = await post('/data/messages/301/read');
     expect(res.status).toBe(200);
-    expect(calls).toEqual([
-      { method: 'setLastReadMessage', args: [301, 'm.2'] },
-      { method: 'setThreadsRead', args: [[9301], true] },
-    ]);
+    expect(calls).toEqual([{ method: 'setLastReadMessage', args: [301, 'm.2'] }]);
     expect(primed()).toBe(1);
     expect((await thread('301')).read).toBe(true);
     const [entry] = await audit();

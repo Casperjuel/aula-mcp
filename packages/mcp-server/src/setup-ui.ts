@@ -941,14 +941,10 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
     return threadChange(c, 'mark_read', { read: true }, (d, id) => {
       const messageId = (d.latestMessage as { id?: unknown } | null | undefined)?.id;
       if (messageId == null) return 'latest message id';
-      // The read marker is what the web client moves when a thread opens; the
-      // subscription status is the app's read flag. Set both so every Aula
-      // client agrees right away.
-      const subscriptionId = d.subscriptionId;
-      return async (client) => {
-        await client.setLastReadMessage(id, String(messageId));
-        if (typeof subscriptionId === 'number') await client.setThreadsRead([subscriptionId], true);
-      };
+      // Aula has no "mark as read" verb; see AulaClient.setLastReadMessage.
+      // messaging.updateSubscriptionStatus with isRead: true answered 400
+      // live, so the read marker is the only write here.
+      return (client) => client.setLastReadMessage(id, String(messageId));
     });
   });
   app.post('/data/messages/:id/unread', async (c) => {
