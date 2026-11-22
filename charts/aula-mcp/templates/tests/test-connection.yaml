@@ -37,17 +37,20 @@ spec:
           echo "/mcp without a token: $code"
           test "$code" = 401
           {{- if and .Values.kagent.enabled .Values.kagent.remoteMCPServer.discovery }}
-          # The tool list answers without a token; a tool call does not.
+          # The tool list answers without a token; a tool call does not. The
+          # root filesystem is read-only, so the body stays in a variable.
           rpc() {
-            curl -s -o /tmp/out -w '%{http_code}' -X POST "$base/mcp" \
+            curl -s -w '\n%{http_code}' -X POST "$base/mcp" \
               -H 'content-type: application/json' \
               -H 'accept: application/json, text/event-stream' -d "$1"
           }
-          code=$(rpc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+          out=$(rpc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+          code=$(printf '%s\n' "$out" | tail -n 1)
           echo "tools/list without a token: $code"
           test "$code" = 200
-          grep -q '"tools"' /tmp/out
-          code=$(rpc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aula_discover","arguments":{}}}')
+          printf '%s' "$out" | grep -q '"tools"'
+          out=$(rpc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aula_discover","arguments":{}}}')
+          code=$(printf '%s\n' "$out" | tail -n 1)
           echo "tools/call without a token: $code"
           test "$code" = 401
           {{- end }}

@@ -30,5 +30,8 @@ Anyone who can reach /mcp acts as this parent. Keep it inside the cluster.
 {{- if .Values.kagent.enabled }}
 
 kagent: RemoteMCPServer {{ .Values.kagent.namespace }}/{{ .Values.kagent.remoteMCPServer.name }}
-{{- if include "aula-mcp.multiParent" . }} (token passthrough; no discovered tools in its status is expected){{ end }}
+{{- if include "aula-mcp.multiParent" . }} (token passthrough
+{{- if .Values.kagent.remoteMCPServer.discovery }}; kagent lists the tools without a token, tool calls need one)
+{{- else }}; discovery off, so no discovered tools in its status is expected){{ end }}
+{{- end }}
 {{- end }}
