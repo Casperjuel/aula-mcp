@@ -32,6 +32,7 @@ import {
   syncGallery,
 } from './gallery.ts';
 import type { AuditEntry, ItemInput, ParentStorage, Storage } from './storage.ts';
+import { traceSyncJob } from './telemetry.ts';
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -461,21 +462,23 @@ export function createSyncScheduler(options: SyncSchedulerOptions): SyncSchedule
           await session.getGuardianUserId();
         }
         const aula = client;
-        const result = await jobs[job]({
-          client: aula,
-          store,
-          childIds: () => {
-            children ??= aula
-              .getProfilesByLogin()
-              .then((data) =>
-                (data.profiles ?? []).flatMap((p) => (p.children ?? []).map((c) => c.id)),
-              );
-            return children;
-          },
-          firstRun: !previous?.lastSuccessAt,
-          now: new Date(started),
-          ...(options.gallery ? { gallery: options.gallery.forParent(parentId) } : {}),
-        });
+        const result = await traceSyncJob(job, trigger, () =>
+          jobs[job]({
+            client: aula,
+            store,
+            childIds: () => {
+              children ??= aula
+                .getProfilesByLogin()
+                .then((data) =>
+                  (data.profiles ?? []).flatMap((p) => (p.children ?? []).map((c) => c.id)),
+                );
+              return children;
+            },
+            firstRun: !previous?.lastSuccessAt,
+            now: new Date(started),
+            ...(options.gallery ? { gallery: options.gallery.forParent(parentId) } : {}),
+          }),
+        );
         await store.saveSyncState({
           job,
           lastRunAt: seconds(started),

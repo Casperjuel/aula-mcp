@@ -1,0 +1,50 @@
+{{- if .Values.perses.enabled }}
+{{- $p := .Values.perses }}
+{{- $service := include "aula-mcp.serviceName" . }}
+{{- $metrics := $p.metricSelector | default (printf "job=%q" $service) }}
+{{- $logs := $p.logSelector | default (printf "{service_name=%q}" $service) }}
+{{- /* Values go into single-quoted YAML strings: double any '. */}}
+{{- $esc := dict "m" ($metrics | replace "'" "''") "l" ($logs | replace "'" "''") "s" ($service | replace "'" "''") }}
+{{- $d := .Files.Get "files/perses-dashboard.yaml" }}
+{{- $d = regexReplaceAll "(?m)^#.*\\n" $d "" }}
+{{- $d = $d | replace "__METRICS__" $esc.m | replace "__LOGS__" $esc.l | replace "__SERVICE__" $esc.s }}
+{{- $d = $d | replace "__DASHBOARD__" ($p.dashboard.name | quote) | replace "__PROJECT__" ($p.project.name | quote) | replace "__DISPLAY_NAME__" ($p.dashboard.displayName | quote) }}
+{{- $d = $d | replace "__DURATION__" ($p.dashboard.duration | quote) | replace "__REFRESH__" ($p.dashboard.refreshInterval | quote) | replace "__LINKS__" ($p.links | toJson) }}
+{{- range $kind, $key := dict "Prometheus" "prometheus" "Tempo" "tempo" "Loki" "loki" }}
+{{- $ph := printf "__%s_DATASOURCE__" (upper $key) }}
+{{- $name := index $p.datasources $key }}
+{{- if $name }}
+{{- $d = $d | replace $ph (printf "{kind: %sDatasource, name: %q}" $kind $name) }}
+{{- else }}
+{{- $d = regexReplaceAll (printf "(?m)^ *datasource: %s\\n" $ph) $d "" }}
+{{- end }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "aula-mcp.fullname" . }}-perses
+  namespace: {{ $p.namespace | default .Release.Namespace }}
+  labels:
+    {{- include "aula-mcp.labels" . | nindent 4 }}
+    {{- with $p.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with $p.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+data:
+  {{- /* The sidecar writes every key into one directory: keep keys unique. */}}
+  {{- if $p.project.create }}
+  {{ printf "%s-00-project.yaml" $p.project.name }}: |
+    kind: Project
+    metadata:
+      name: {{ $p.project.name | quote }}
+    spec:
+      display:
+        name: {{ $p.project.displayName | quote }}
+        description: {{ $p.project.description | quote }}
+  {{- end }}
+  {{ printf "%s-50-%s.yaml" $p.project.name $p.dashboard.name }}: |
+    {{- $d | nindent 4 }}
+{{- end }}

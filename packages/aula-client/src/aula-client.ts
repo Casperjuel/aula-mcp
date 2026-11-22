@@ -61,6 +61,7 @@ import {
   AulaStepUpRequiredError,
   aulaReason,
 } from './errors.ts';
+import { tracedAulaCall } from './telemetry.ts';
 import { postWebUrl, threadWebUrl } from './web-urls.ts';
 
 export interface AulaClientOptions {
@@ -779,7 +780,10 @@ export class AulaClient {
         method: 'GET',
       });
     };
-    return this.parseEnvelope<T>(await send(await this.ensureApiVersion()), send);
+    const version = await this.ensureApiVersion();
+    return tracedAulaCall(method, 'GET', async () =>
+      this.parseEnvelope<T>(await send(version), send),
+    );
   }
 
   /** POST JSON body to an Aula API method. Sets CSRF header from cookie jar. */
@@ -794,7 +798,9 @@ export class AulaClient {
       if (csrf) headers['csrfp-token'] = csrf;
       return this.http.request(url, { method: 'POST', headers, body });
     };
-    return this.parseEnvelope<T>(await send(version), send);
+    return tracedAulaCall(method, 'POST', async () =>
+      this.parseEnvelope<T>(await send(version), send),
+    );
   }
 
   /**

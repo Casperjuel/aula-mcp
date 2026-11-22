@@ -173,6 +173,24 @@ spec:
             {{- end }}
             - name: AULA_MCP_GALLERY_STOP_AT
               value: {{ .Values.gallery.stopAt | quote }}
+            {{- if .Values.telemetry.enabled }}
+            - name: AULA_MCP_OTEL
+              value: "1"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: {{ .Values.telemetry.endpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ include "aula-mcp.serviceName" . | quote }}
+            - name: AULA_MCP_OTEL_SIGNALS
+              value: {{ include "aula-mcp.telemetrySignals" . | quote }}
+            - name: AULA_MCP_OTEL_SAMPLE_RATIO
+              value: {{ .Values.telemetry.traceSampleRatio | quote }}
+            - name: OTEL_METRIC_EXPORT_INTERVAL
+              value: {{ mul .Values.telemetry.metricIntervalSeconds 1000 | quote }}
+            {{- with .Values.telemetry.resourceAttributes }}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: {{ include "aula-mcp.resourceAttributes" $ | quote }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

@@ -65,9 +65,41 @@ kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
 | `networkPolicy.enabled` / `.from` | on / `[]` | Allowed peers. kagent's namespace is added when `kagent.enabled`. |
 | `kagent.enabled` | `false` | Create a `RemoteMCPServer` in `kagent.namespace`. |
 | `kagent.agent.enabled` | `false` | Also create an example `Agent` that uses it. |
+| `telemetry.enabled` / `.endpoint` | off / `""` | OpenTelemetry over OTLP/HTTP to a collector (`AULA_MCP_OTEL=1`). See below. |
+| `telemetry.signals.traces` / `.metrics` / `.logs` | all `true` | Which signals to send once telemetry is on. |
+| `telemetry.serviceName` / `.traceSampleRatio` / `.metricIntervalSeconds` / `.resourceAttributes` | release name / `1` / `30` / `{}` | `service.name`, share of traces kept, metric export interval, extra resource attributes. |
+| `perses.enabled` | `false` | A Perses dashboard as a ConfigMap for the Perses provisioning sidecar. Needs telemetry with metrics. |
+| `perses.project.name` / `.create` | `aula-mcp` / `true` | The Perses project to put it in; `create: false` to use an existing one. |
+| `perses.datasources.prometheus` / `.tempo` / `.loki` | `""` | Perses datasource names; empty uses the default of that kind. |
+| `perses.metricSelector` / `.logSelector` | `job="<service>"` / `{service_name="<service>"}` | How the dashboard finds this service's metrics and logs. |
 
 With `networkPolicy` on, add your Gateway's namespace to `networkPolicy.from`
 when you enable an HTTPRoute.
+
+## Telemetry and Perses
+
+```yaml
+telemetry:
+  enabled: true
+  endpoint: http://otel-collector.observability.svc.cluster.local:4318
+  serviceName: aula-mcp
+perses:
+  enabled: true
+  project: { name: apps, create: false }
+  datasources: { tempo: tempo, loki: loki }
+  # Behind a collector that Prometheus scrapes, the service is in exported_job.
+  metricSelector: exported_job="aula-mcp"
+```
+
+Sent: route templates (never paths with ids), Aula method names, sync jobs,
+tool names, status codes, counts and durations, as spans, metrics and log
+lines. Never sent: Aula content, message text, URLs with access tokens.
+Parent ids are not metric labels. Log lines are info and up (debug too with
+`debugLogs`), with usernames, session ids, cookies and tokens masked.
+
+The dashboard has tiles for traffic, server errors, failing Aula calls, sync
+failures, open MCP sessions and writes to Aula, then rows for HTTP, the Aula
+API, sync, MCP tools, the audit log, traces and logs.
 
 ## kagent with Keycloak (multi-parent)
 

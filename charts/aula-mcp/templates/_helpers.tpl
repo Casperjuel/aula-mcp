@@ -37,6 +37,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 
 {{/* Refuse combinations that would expose a parent's Aula session. */}}
 {{- define "aula-mcp.validate" -}}
+{{- if and .Values.telemetry.enabled (not .Values.telemetry.endpoint) }}{{ fail "telemetry needs telemetry.endpoint (an OTLP/HTTP collector URL)" }}{{ end }}
+{{- if and .Values.perses.enabled (not (and .Values.telemetry.enabled .Values.telemetry.signals.metrics)) }}{{ fail "perses needs telemetry.enabled and telemetry.signals.metrics: the dashboard reads those metrics" }}{{ end }}
 {{- if not (has .Values.mode (list "single-parent" "multi-parent")) }}
 {{- fail "mode must be single-parent or multi-parent" }}
 {{- end }}
@@ -68,4 +70,25 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if and .Values.httpRoute.setupUi.enabled (not .Values.setupUi.enabled) }}
 {{- fail "httpRoute.setupUi needs setupUi.enabled" }}
 {{- end }}
+{{- end }}
+
+{{/* service.name for telemetry and the dashboard. */}}
+{{- define "aula-mcp.serviceName" -}}
+{{- .Values.telemetry.serviceName | default (include "aula-mcp.fullname" .) }}
+{{- end }}
+
+{{- define "aula-mcp.telemetrySignals" -}}
+{{- $on := list }}
+{{- range $name := list "traces" "metrics" "logs" }}
+{{- if index $.Values.telemetry.signals $name }}{{ $on = append $on $name }}{{ end }}
+{{- end }}
+{{- join "," $on }}
+{{- end }}
+
+{{- define "aula-mcp.resourceAttributes" -}}
+{{- $pairs := list }}
+{{- range $k, $v := .Values.telemetry.resourceAttributes }}
+{{- $pairs = append $pairs (printf "%s=%v" $k $v) }}
+{{- end }}
+{{- join "," $pairs }}
 {{- end }}

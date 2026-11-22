@@ -14,6 +14,7 @@ import type { GalleryView } from './gallery.ts';
 import type { SharedAccess } from './local-tools.ts';
 import type { FeedStatus, ParentStorage } from './storage.ts';
 import type { ParentSync } from './sync.ts';
+import { instrumentTool } from './telemetry.ts';
 import { type ToolNameStyle, toolName, toolNameStyle, underscoreTools } from './tool-names.ts';
 import { registerTools } from './tools.ts';
 import { VERSION } from './version.ts';
@@ -144,6 +145,15 @@ export function createMcpApp({
  * the session through `mcp.connect()`.
  */
 class AulaMcpServer extends McpServer {
+  // Every tool call gets a span and a duration (telemetry.ts); a no-op with
+  // telemetry off.
+  override registerTool: McpServer['registerTool'] = (name, config, callback) =>
+    super.registerTool(
+      name,
+      config,
+      instrumentTool(name, callback as (...args: unknown[]) => unknown) as typeof callback,
+    );
+
   override connect(transport: Transport): Promise<void> {
     acceptNullToolArguments(transport);
     return super.connect(transport);

@@ -34,6 +34,7 @@ import {
   type StorageKeys,
 } from './storage-crypto.ts';
 import { postgresDriver, type SqlDriver, sqliteDriver } from './storage-sql.ts';
+import { countAuditEvent } from './telemetry.ts';
 
 /** The parent id rows are stored under in single-parent mode. */
 export const SINGLE_PARENT_ID = 'default';
@@ -664,6 +665,7 @@ export class ParentStorage {
    */
   async audit(entry: AuditEntry): Promise<void> {
     this.writable();
+    countAuditEvent(entry.category, entry.action.slice(0, 64), entry.ok);
     // A millisecond after the last entry at least, so entries keep their order.
     const at = Math.max(Date.now(), lastAuditAt + 1);
     lastAuditAt = at;

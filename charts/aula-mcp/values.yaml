@@ -78,6 +78,71 @@ sync:
 
 extraEnv: []
 
+# OpenTelemetry over OTLP/HTTP (AULA_MCP_OTEL=1). Off by default. Traces,
+# metrics and logs can be switched on separately. What is sent: route
+# templates, Aula method names, sync jobs, tool names, status codes, counts
+# and durations. Never Aula content, URLs with tokens, or the text of a
+# message; parent ids are not metric labels. Log lines (info and up, debug
+# when debugLogs is on) have usernames, session ids and tokens masked.
+telemetry:
+  enabled: false
+  # OTLP/HTTP base URL of a collector, e.g.
+  # http://otel-collector.observability.svc.cluster.local:4318
+  # (/v1/traces, /v1/metrics and /v1/logs are added).
+  endpoint: ""
+  # service.name; empty means the release's full name.
+  serviceName: ""
+  signals:
+    traces: true
+    metrics: true
+    logs: true
+  # Share of new traces kept, 0..1. A caller's sampled traceparent is kept.
+  traceSampleRatio: 1
+  metricIntervalSeconds: 30
+  # Extra resource attributes (OTEL_RESOURCE_ATTRIBUTES), e.g.
+  # deployment.environment.name: homelab
+  resourceAttributes: {}
+
+# A Perses dashboard for the telemetry above, as a ConfigMap for the Perses
+# provisioning sidecar (it picks up ConfigMaps carrying `labels`). Off by
+# default. Needs telemetry.signals.metrics; the trace and log rows need
+# traces and logs too, and a Tempo and a Loki datasource in Perses.
+perses:
+  enabled: false
+  # Namespace for the ConfigMap; empty means the release namespace. Set it
+  # when the sidecar watches one namespace only.
+  namespace: ""
+  labels:
+    perses.dev/resource: "true"
+  annotations: {}
+  project:
+    # The Perses project the dashboard goes in.
+    name: aula-mcp
+    # Also create that project. false when it exists already (shared with
+    # other apps) or is made elsewhere.
+    create: true
+    displayName: aula-mcp
+    description: Aula MCP server
+  dashboard:
+    name: aula-mcp
+    displayName: aula-mcp
+    duration: 6h
+    refreshInterval: 1m
+  # Perses datasource names; empty uses the project's or global default of
+  # that kind.
+  datasources:
+    prometheus: ""
+    tempo: ""
+    loki: ""
+  # Label matchers that pick this service's metrics, without braces. Empty
+  # means job="<serviceName>", what the collector's Prometheus exporter sets.
+  # Behind a scraped collector it is often exported_job="<serviceName>".
+  metricSelector: ""
+  # Loki stream selector for the logs. Empty means {service_name="<serviceName>"}.
+  logSelector: ""
+  # Toolbar links: [{name, url, tooltip}].
+  links: []
+
 persistence:
   enabled: true
   # Use an existing PVC instead of creating one.

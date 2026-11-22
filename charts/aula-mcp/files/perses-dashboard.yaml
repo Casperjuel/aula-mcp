@@ -1,0 +1,788 @@
+# Perses dashboard for aula-mcp, rendered by templates/perses.yaml.
+# The __PLACEHOLDERS__ are filled from .Values.perses and .Values.telemetry;
+# a datasource line whose name is empty is dropped, so Perses uses the default
+# datasource of that kind. Metric names are the OpenTelemetry ones as the
+# collector's Prometheus exporter writes them: dots become underscores, a
+# unit of seconds adds _seconds, counters add _total.
+kind: 'Dashboard'
+metadata:
+  name: __DASHBOARD__
+  project: __PROJECT__
+spec:
+  display:
+    name: __DISPLAY_NAME__
+    description: 'aula-mcp: is it answering, is Aula answering, is sync keeping up, and what changed in Aula.'
+  duration: __DURATION__
+  refreshInterval: __REFRESH__
+  links: __LINKS__
+  panels:
+    requestRate:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Requests per second'
+          description: 'HTTP requests answered by the MCP server and the dashboard, over 5 minutes.'
+        plugin:
+          kind: 'StatChart'
+          spec:
+            calculation: 'last'
+            format:
+              unit: 'decimal'
+              decimalPlaces: 2
+            thresholds:
+              defaultColor: '#2e9e4f'
+              steps: []
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum(rate(http_server_request_duration_seconds_count{__METRICS__}[5m]))'
+    serverErrors:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Server errors'
+          description: 'Share of HTTP answers with a 5xx status over 5 minutes. Above 0 means a route failed: see the HTTP row and the logs.'
+        plugin:
+          kind: 'StatChart'
+          spec:
+            calculation: 'last'
+            format:
+              unit: 'percent-decimal'
+              decimalPlaces: 1
+            thresholds:
+              defaultColor: '#2e9e4f'
+              steps:
+                - value: 0.001
+                  color: '#e0902a'
+                - value: 0.05
+                  color: '#c8372d'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: '(sum(rate(http_server_request_duration_seconds_count{__METRICS__,http_response_status_code=~"5.."}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_request_duration_seconds_count{__METRICS__}[5m])), 1e-9)'
+    aulaErrors:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Aula calls failing'
+          description: 'Share of calls to Aula''s API that failed over 15 minutes. A few are normal (expired sessions); many means Aula is down or changed.'
+        plugin:
+          kind: 'StatChart'
+          spec:
+            calculation: 'last'
+            format:
+              unit: 'percent-decimal'
+              decimalPlaces: 1
+            thresholds:
+              defaultColor: '#2e9e4f'
+              steps:
+                - value: 0.05
+                  color: '#e0902a'
+                - value: 0.25
+                  color: '#c8372d'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: '(sum(rate(aula_client_request_duration_seconds_count{__METRICS__,outcome="error"}[15m])) or vector(0)) / clamp_min(sum(rate(aula_client_request_duration_seconds_count{__METRICS__}[15m])), 1e-9)'
+    syncFailures:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Sync failures (1h)'
+          description: 'Background sync jobs that failed in the last hour. Find the job in the Sync row and the reason in the logs.'
+        plugin:
+          kind: 'StatChart'
+          spec:
+            calculation: 'last'
+            format:
+              unit: 'decimal'
+              decimalPlaces: 0
+            thresholds:
+              defaultColor: '#2e9e4f'
+              steps:
+                - value: 1
+                  color: '#e0902a'
+                - value: 5
+                  color: '#c8372d'
+            mappings:
+              - kind: 'Value'
+                spec:
+                  value: '0'
+                  result:
+                    value: 'None'
+                    color: '#2e9e4f'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum(increase(aula_mcp_sync_duration_seconds_count{__METRICS__,outcome="error"}[1h])) or vector(0)'
+    sessions:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Open MCP sessions'
+          description: 'MCP clients connected now (agents, Claude Desktop), over both transports.'
+        plugin:
+          kind: 'StatChart'
+          spec:
+            calculation: 'last'
+            format:
+              unit: 'decimal'
+              decimalPlaces: 0
+            thresholds:
+              defaultColor: '#2e9e4f'
+              steps: []
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum(aula_mcp_sessions{__METRICS__}) or vector(0)'
+    aulaWrites:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Writes to Aula (24h)'
+          description: 'Changes made in Aula through aula-mcp in the last day: replies, new messages, read markers, sick reports, plan changes. From the audit log, counts only.'
+        plugin:
+          kind: 'StatChart'
+          spec:
+            calculation: 'last'
+            format:
+              unit: 'decimal'
+              decimalPlaces: 0
+            thresholds:
+              defaultColor: '#2e9e4f'
+              steps: []
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum(increase(aula_mcp_audit_events_total{__METRICS__,category="aula"}[24h])) or vector(0)'
+    httpByRoute:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Requests by route'
+          description: 'Requests per second for each route template (ids are never part of the route).'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'decimal'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum by (server, http_route) (rate(http_server_request_duration_seconds_count{__METRICS__}[5m]))'
+                  seriesNameFormat: '{{server}} {{http_route}}'
+    httpLatency:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Slowest routes (p95)'
+          description: '95 % of requests to a route answer faster than this. Routes that call Aula live are slower than those that read storage.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'seconds'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{__METRICS__}[5m])))'
+                  seriesNameFormat: '{{http_route}}'
+    httpStatus:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Answers by status'
+          description: 'HTTP status codes per second. 4xx is usually a client or a sign-in that expired; 5xx is ours.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'decimal'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{__METRICS__}[5m]))'
+                  seriesNameFormat: '{{http_response_status_code}}'
+    aulaByMethod:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Aula calls by method'
+          description: 'Calls to Aula''s API per second, by Aula method name.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'decimal'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum by (aula_method) (rate(aula_client_request_duration_seconds_count{__METRICS__}[5m]))'
+                  seriesNameFormat: '{{aula_method}}'
+    aulaLatency:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Aula latency (p95)'
+          description: '95 % of calls to this Aula method answer faster than this.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'seconds'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'histogram_quantile(0.95, sum by (le, aula_method) (rate(aula_client_request_duration_seconds_bucket{__METRICS__}[5m])))'
+                  seriesNameFormat: '{{aula_method}}'
+    aulaFailures:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Aula failures by status'
+          description: 'Failed Aula calls per second by method and HTTP status (0: no answer). 400 on a write usually means Aula refused the request body.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'decimal'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum by (aula_method, http_response_status_code) (rate(aula_client_request_duration_seconds_count{__METRICS__,outcome="error"}[5m]))'
+                  seriesNameFormat: '{{aula_method}} {{http_response_status_code}}'
+    syncRuns:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Sync runs'
+          description: 'Sync jobs run per hour, by job and outcome.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'decimal'
+                decimalPlaces: 0
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum by (aula_mcp_sync_job, outcome) (increase(aula_mcp_sync_duration_seconds_count{__METRICS__}[1h]))'
+                  seriesNameFormat: '{{aula_mcp_sync_job}} {{outcome}}'
+    syncDuration:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Sync duration (p95)'
+          description: 'How long a sync job takes, by job. A slow first run is normal: it fetches the history.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'seconds'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'histogram_quantile(0.95, sum by (le, aula_mcp_sync_job) (rate(aula_mcp_sync_duration_seconds_bucket{__METRICS__}[5m])))'
+                  seriesNameFormat: '{{aula_mcp_sync_job}}'
+    syncItems:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Items synced'
+          description: 'Items per hour that sync fetched from Aula, changed in storage, or skipped.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'decimal'
+                decimalPlaces: 0
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum by (aula_mcp_sync_job, kind) (increase(aula_mcp_sync_items_total{__METRICS__}[1h]))'
+                  seriesNameFormat: '{{aula_mcp_sync_job}} {{kind}}'
+    toolCalls:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Tool calls'
+          description: 'MCP tool calls per minute by tool and outcome. An error is a tool that threw or answered isError.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'decimal'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum by (tool, outcome) (rate(aula_mcp_tool_duration_seconds_count{__METRICS__}[5m])) * 60'
+                  seriesNameFormat: '{{tool}} {{outcome}}'
+    toolLatency:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Tool latency (p95)'
+          description: '95 % of calls to this tool answer faster than this.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'seconds'
+                decimalPlaces: 2
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'histogram_quantile(0.95, sum by (le, tool) (rate(aula_mcp_tool_duration_seconds_bucket{__METRICS__}[5m])))'
+                  seriesNameFormat: '{{tool}}'
+    auditEvents:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Audit events'
+          description: 'Audit log entries per hour by category, action and outcome: writes to Aula, syncs, sharing, sign-ins. Counts only, never content.'
+        plugin:
+          kind: 'TimeSeriesChart'
+          spec:
+            legend:
+              position: 'bottom'
+            yAxis:
+              format:
+                unit: 'decimal'
+                decimalPlaces: 0
+              min: 0
+            visual:
+              palette:
+                mode: 'categorical'
+                name: 'tableau10'
+        queries:
+          - kind: 'TimeSeriesQuery'
+            spec:
+              plugin:
+                kind: 'PrometheusTimeSeriesQuery'
+                spec:
+                  datasource: __PROMETHEUS_DATASOURCE__
+                  query: 'sum by (category, action, outcome) (increase(aula_mcp_audit_events_total{__METRICS__}[1h]))'
+                  seriesNameFormat: '{{category}} {{action}} {{outcome}}'
+    recentTraces:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Recent traces'
+          description: 'The newest requests, tool calls and sync jobs. Click one to see which Aula calls it made and how long each took.'
+        plugin:
+          kind: 'TraceTable'
+          spec: {}
+        queries:
+          - kind: 'TraceQuery'
+            spec:
+              plugin:
+                kind: 'TempoTraceQuery'
+                spec:
+                  datasource: __TEMPO_DATASOURCE__
+                  query: '{ resource.service.name = "__SERVICE__" }'
+                  limit: 20
+    errorTraces:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Traces with errors'
+          description: 'The newest traces with a failed span: a failed Aula call, tool or sync job.'
+        plugin:
+          kind: 'TraceTable'
+          spec: {}
+        queries:
+          - kind: 'TraceQuery'
+            spec:
+              plugin:
+                kind: 'TempoTraceQuery'
+                spec:
+                  datasource: __TEMPO_DATASOURCE__
+                  query: '{ resource.service.name = "__SERVICE__" && status = error }'
+                  limit: 20
+    problemLogs:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'Warnings and errors'
+          description: 'Log lines at warning level and up. Sensitive fields (usernames, sessions, tokens) are masked before they leave the pod.'
+        plugin:
+          kind: 'LogsTable'
+          spec:
+            allowWrap: true
+            enableDetails: true
+            showTime: true
+        queries:
+          - kind: 'LogQuery'
+            spec:
+              plugin:
+                kind: 'LokiLogQuery'
+                spec:
+                  datasource: __LOKI_DATASOURCE__
+                  query: '__LOGS__ | severity_text=~"WARN|ERROR"'
+    allLogs:
+      kind: 'Panel'
+      spec:
+        display:
+          name: 'All log lines'
+          description: 'Every log line aula-mcp sent: info and up, debug too when debug logs are on.'
+        plugin:
+          kind: 'LogsTable'
+          spec:
+            allowWrap: true
+            enableDetails: true
+            showTime: true
+        queries:
+          - kind: 'LogQuery'
+            spec:
+              plugin:
+                kind: 'LokiLogQuery'
+                spec:
+                  datasource: __LOKI_DATASOURCE__
+                  query: __LOGS__
+  layouts:
+    - kind: 'Grid'
+      spec:
+        display:
+          title: 'At a glance'
+        items:
+          - x: 0
+            y: 0
+            width: 4
+            height: 4
+            content:
+              "$ref": '#/spec/panels/requestRate'
+          - x: 4
+            y: 0
+            width: 4
+            height: 4
+            content:
+              "$ref": '#/spec/panels/serverErrors'
+          - x: 8
+            y: 0
+            width: 4
+            height: 4
+            content:
+              "$ref": '#/spec/panels/aulaErrors'
+          - x: 12
+            y: 0
+            width: 4
+            height: 4
+            content:
+              "$ref": '#/spec/panels/syncFailures'
+          - x: 16
+            y: 0
+            width: 4
+            height: 4
+            content:
+              "$ref": '#/spec/panels/sessions'
+          - x: 20
+            y: 0
+            width: 4
+            height: 4
+            content:
+              "$ref": '#/spec/panels/aulaWrites'
+    - kind: 'Grid'
+      spec:
+        display:
+          title: 'HTTP'
+        items:
+          - x: 0
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/httpByRoute'
+          - x: 8
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/httpLatency'
+          - x: 16
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/httpStatus'
+    - kind: 'Grid'
+      spec:
+        display:
+          title: 'Aula API'
+        items:
+          - x: 0
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/aulaByMethod'
+          - x: 8
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/aulaLatency'
+          - x: 16
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/aulaFailures'
+    - kind: 'Grid'
+      spec:
+        display:
+          title: 'Sync'
+          collapse:
+            open: false
+        items:
+          - x: 0
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/syncRuns'
+          - x: 8
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/syncDuration'
+          - x: 16
+            y: 0
+            width: 8
+            height: 8
+            content:
+              "$ref": '#/spec/panels/syncItems'
+    - kind: 'Grid'
+      spec:
+        display:
+          title: 'MCP tools'
+          collapse:
+            open: false
+        items:
+          - x: 0
+            y: 0
+            width: 12
+            height: 8
+            content:
+              "$ref": '#/spec/panels/toolCalls'
+          - x: 12
+            y: 0
+            width: 12
+            height: 8
+            content:
+              "$ref": '#/spec/panels/toolLatency'
+    - kind: 'Grid'
+      spec:
+        display:
+          title: 'Audit'
+          collapse:
+            open: false
+        items:
+          - x: 0
+            y: 0
+            width: 24
+            height: 8
+            content:
+              "$ref": '#/spec/panels/auditEvents'
+    - kind: 'Grid'
+      spec:
+        display:
+          title: 'Traces'
+          collapse:
+            open: false
+        items:
+          - x: 0
+            y: 0
+            width: 12
+            height: 10
+            content:
+              "$ref": '#/spec/panels/recentTraces'
+          - x: 12
+            y: 0
+            width: 12
+            height: 10
+            content:
+              "$ref": '#/spec/panels/errorTraces'
+    - kind: 'Grid'
+      spec:
+        display:
+          title: 'Logs'
+          collapse:
+            open: false
+        items:
+          - x: 0
+            y: 0
+            width: 24
+            height: 10
+            content:
+              "$ref": '#/spec/panels/problemLogs'
+          - x: 0
+            y: 10
+            width: 24
+            height: 10
+            content:
+              "$ref": '#/spec/panels/allLogs'

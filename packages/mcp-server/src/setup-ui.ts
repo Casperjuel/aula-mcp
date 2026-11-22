@@ -53,7 +53,7 @@ import {
   type TokenStore,
 } from '@aula-mcp/aula-auth';
 import type { AulaClient, UpdatePresenceTemplateArgs } from '@aula-mcp/aula-client';
-import { type Context, Hono } from 'hono';
+import { type Context, Hono, type MiddlewareHandler } from 'hono';
 import { type SSEStreamingApi, streamSSE } from 'hono/streaming';
 import QRCode from 'qrcode';
 import { isInline } from './attachments.ts';
@@ -116,6 +116,8 @@ const IDENTITY_PICK_TIMEOUT_MS = 5 * 60 * 1000;
 
 export interface SetupAppOptions {
   logger?: Logger;
+  /** Runs before every route, e.g. request telemetry. */
+  middleware?: MiddlewareHandler;
   /** Override the token store (tests). Production uses the addon's
    *  EncryptedFileTokenStore under `AULA_MCP_DIR`. */
   store?: TokenStore;
@@ -282,6 +284,7 @@ export function createSetupApp(options: SetupAppOptions = {}): Hono {
   const loginSessions = new Map<string, LoginSession>();
 
   const app = new Hono();
+  if (options.middleware) app.use(options.middleware);
 
   // Signed-in parent for this request; the middleware below guarantees one.
   const parentOf = (c: Context) => parents?.login.parent(c) ?? null;

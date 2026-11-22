@@ -58,6 +58,9 @@
  *                               sync.ts.
  *   AULA_MCP_GALLERY_DIR      — gallery downloads (default <AULA_MCP_DIR>/gallery);
  *                               AULA_MCP_GALLERY=0 lists albums only. See gallery.ts.
+ *   AULA_MCP_OTEL=1           — OpenTelemetry over OTLP/HTTP to
+ *                               OTEL_EXPORTER_OTLP_ENDPOINT; AULA_MCP_OTEL_SIGNALS
+ *                               picks traces,metrics,logs. See telemetry.ts.
  */
 
 import { consoleLogger, silentLogger } from '@aula-mcp/aula-auth';
@@ -85,12 +88,26 @@ import { openStorage, SINGLE_PARENT_ID, StorageConfigError } from './storage.ts'
 import { StorageKeyMismatchError } from './storage-copy.ts';
 import { StorageKeyError } from './storage-crypto.ts';
 import { createSyncScheduler, realSyncSchedule, type SyncParent } from './sync.ts';
+import {
+  httpTelemetry,
+  observeGauge,
+  startTelemetry,
+  telemetryConfig,
+  withTelemetryLogs,
+} from './telemetry.ts';
 import { startTokenKeepAlive } from './token-keepalive.ts';
+import { VERSION } from './version.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
 const HOST = process.env.AULA_MCP_HOST ?? '127.0.0.1';
 
-const logger = process.env.AULA_MCP_LOG === '1' ? consoleLogger('aula-mcp') : silentLogger;
+const otel = (() => {
+  const config = telemetryConfig(process.env, VERSION);
+  return config ? startTelemetry(config) : null;
+})();
+
+const baseLogger = process.env.AULA_MCP_LOG === '1' ? consoleLogger('aula-mcp') : silentLogger;
+const logger = otel ? withTelemetryLogs(baseLogger) : baseLogger;
 
 const mode = (() => {
   try {
@@ -370,6 +387,8 @@ httpSweeper.unref?.();
 
 const app = new Hono();
 
+if (otel) app.use(httpTelemetry('mcp'));
+
 app.get('/healthz', (c) => c.json({ ok: true, name: 'aula-mcp' }));
 
 if (multiParent) {
@@ -536,6 +555,13 @@ const SSE_MAX_SESSIONS = Math.max(1, Number(process.env.AULA_MCP_SSE_MAX_SESSION
 const SSE_IDLE_MS = Math.max(1_000, Number(process.env.AULA_MCP_SSE_IDLE_MS ?? 300_000));
 const SSE_SWEEP_INTERVAL_MS = Math.max(1_000, Math.floor(SSE_IDLE_MS / 4));
 const sseSessions = new Map<string, SseSession>();
+
+if (otel) {
+  observeGauge('aula_mcp.sessions', 'Open MCP sessions, by transport.', () => [
+    { value: streamableHttpSessions.size, attributes: { transport: 'streamable_http' } },
+    { value: sseSessions.size, attributes: { transport: 'sse' } },
+  ]);
+}
 
 async function closeSseSession(sessionId: string, reason: string): Promise<void> {
   const session = sseSessions.get(sessionId);
@@ -761,8 +787,14 @@ if (INGRESS_PORT_RAW) {
           },
           autoRenew: keepAliveEnabled,
           myData,
+          ...(otel ? { middleware: httpTelemetry('setup') } : {}),
         }
-      : { logger, autoRenew: keepAliveEnabled, myData },
+      : {
+          logger,
+          autoRenew: keepAliveEnabled,
+          myData,
+          ...(otel ? { middleware: httpTelemetry('setup') } : {}),
+        },
   );
   setupServer = Bun.serve({
     port: ingressPort,
@@ -806,6 +838,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   } catch (err) {
     logger.error('aula-mcp.shutdown_error', { error: (err as Error).message });
   }
+  await otel?.shutdown();
   process.exit(0);
 }
 process.on('SIGINT', shutdown);
