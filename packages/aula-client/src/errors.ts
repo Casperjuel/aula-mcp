@@ -28,18 +28,27 @@ export class AulaStepUpRequiredError extends AulaClientError {
 /**
  * Aula's own reason for a failed call, from the `status` of its JSON envelope:
  * the message and sub code, cut short and reduced to plain characters. These
- * are Aula's error texts, not mailbox content. Empty when the body is not
- * such an envelope.
+ * are Aula's error texts, not mailbox content. When Aula gives no message,
+ * the body's shape is named instead (field names, Aula's own status code,
+ * length), never its values.
  */
 export function aulaReason(body: string | undefined): string {
-  if (!body) return '';
-  let status: Record<string, unknown> | undefined;
+  if (!body) return 'empty body';
+  let parsed: unknown;
   try {
-    status = (JSON.parse(body) as { status?: Record<string, unknown> })?.status;
+    parsed = JSON.parse(body);
   } catch {
-    return '';
+    return `not JSON, ${body.length} characters`;
   }
-  if (!status || typeof status !== 'object') return '';
+  const keys = (v: unknown) =>
+    v && typeof v === 'object' && !Array.isArray(v)
+      ? Object.keys(v)
+          .filter((k) => /^[A-Za-z_]{1,40}$/.test(k))
+          .slice(0, 12)
+          .join(' ')
+      : typeof v;
+  const status = (parsed as { status?: Record<string, unknown> } | null)?.status;
+  if (!status || typeof status !== 'object') return `no status; fields ${keys(parsed)}`;
   const clean = (v: unknown) =>
     typeof v === 'string' || typeof v === 'number'
       ? String(v)
@@ -48,9 +57,15 @@ export function aulaReason(body: string | undefined): string {
           .trim()
           .slice(0, 120)
       : '';
-  return [clean(status.message), status.subCode != null ? `subCode ${clean(status.subCode)}` : '']
+  const reason = [
+    clean(status.message),
+    status.subCode != null ? `subCode ${clean(status.subCode)}` : '',
+  ]
     .filter(Boolean)
     .join(', ');
+  if (reason) return reason;
+  const code = typeof status.code === 'number' ? `code ${status.code}; ` : '';
+  return `no message; ${code}status fields ${keys(status)}; fields ${keys(parsed)}`;
 }
 
 /** Catch-all for non-2xx responses that aren't otherwise typed. */
