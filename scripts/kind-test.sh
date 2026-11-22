@@ -53,8 +53,8 @@ install multi-parent-kagent
 
 kubectl --context "$ctx" -n kagent get remotemcpserver aula-mcp \
   -o jsonpath='{.spec.tokenPassthrough} {.metadata.labels.kagent\.dev/discovery}{"\n"}' |
-  grep -qx 'true disabled'
-echo "RemoteMCPServer kagent/aula-mcp: tokenPassthrough on, discovery disabled"
+  grep -qx 'true '
+echo "RemoteMCPServer kagent/aula-mcp: tokenPassthrough on, discovery on"
 
 # A pod outside kagent and without the client label must not get through.
 if kubectl --context "$ctx" -n "$NAMESPACE" run np-check --rm -i --restart=Never \

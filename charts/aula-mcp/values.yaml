@@ -294,6 +294,12 @@ kagent:
     name: aula-mcp
     description: Aula (Danish school platform) for the signed-in parent only
     timeout: 60s
+    # Multi-parent: let kagent's controller list the tools without a token
+    # (AULA_MCP_ANONYMOUS_TOOL_LIST=1), so they show in kagent and agents can
+    # pick them. Only initialize and tools/list answer without a token; tool
+    # calls still need the parent's. With false, kagent discovery is off and
+    # kagent shows no tools.
+    discovery: true
   agent:
     enabled: false
     name: aula-assistant

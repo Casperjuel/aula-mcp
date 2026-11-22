@@ -7,9 +7,9 @@ metadata:
   namespace: {{ .Values.kagent.namespace }}
   labels:
     {{- include "aula-mcp.labels" . | nindent 4 }}
-    {{- if $multi }}
+    {{- if and $multi (not .Values.kagent.remoteMCPServer.discovery) }}
     # The controller lists tools without a caller token, which multi-parent
-    # mode refuses. Agents list them at run time with the parent's token.
+    # mode refuses unless discovery is on (AULA_MCP_ANONYMOUS_TOOL_LIST).
     kagent.dev/discovery: disabled
     {{- end }}
 spec:

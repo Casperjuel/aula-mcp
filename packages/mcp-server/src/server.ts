@@ -47,6 +47,9 @@
  *   AULA_MCP_OIDC_AUDIENCE    — the audience aula-mcp's tokens carry (`aud`)
  *   AULA_MCP_OIDC_ACCEPT_ID_TOKEN — 1 to also accept ID tokens (kagent behind
  *                               oauth2-proxy forwards only those). Default 0.
+ *   AULA_MCP_ANONYMOUS_TOOL_LIST=1 — answer initialize and tools/list on /mcp
+ *                               without a token (tool-listing.ts), for kagent's
+ *                               tool discovery. Every other call still needs one.
  *   AULA_MCP_SETUP_URL        — multi-parent setup UI: the origin browsers open
  *                               it on. Required with AULA_MCP_INGRESS_PORT.
  *   AULA_MCP_SETUP_CLIENT_ID  — the setup UI's OIDC client; it signs each
@@ -106,6 +109,7 @@ import {
   withTelemetryLogs,
 } from './telemetry.ts';
 import { startTokenKeepAlive } from './token-keepalive.ts';
+import { isListingRequest, serveToolListing } from './tool-listing.ts';
 import { VERSION } from './version.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
@@ -411,7 +415,19 @@ if (multiParent) {
   app.get('/.well-known/oauth-protected-resource/mcp', metadata);
 }
 
+// Multi-parent: the tool list without a token, for clients that list tools on
+// their own (see tool-listing.ts). Opt-in; everything else still signs in.
+const anonymousToolList = Boolean(multiParent) && process.env.AULA_MCP_ANONYMOUS_TOOL_LIST === '1';
+
 async function handleMcp(request: Request): Promise<Response> {
+  if (anonymousToolList && (await isListingRequest(request))) {
+    return serveToolListing(request, logger, {
+      sync: Boolean(sync),
+      gallery: Boolean(storage && galleryFiles),
+      local: Boolean(storage),
+      shared: Boolean(storage),
+    });
+  }
   const caller = await authenticate(request);
   if (caller instanceof Response) return caller;
 

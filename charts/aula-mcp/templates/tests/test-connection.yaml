@@ -36,4 +36,19 @@ spec:
             -H 'accept: application/json, text/event-stream' -d '{}')
           echo "/mcp without a token: $code"
           test "$code" = 401
+          {{- if and .Values.kagent.enabled .Values.kagent.remoteMCPServer.discovery }}
+          # The tool list answers without a token; a tool call does not.
+          rpc() {
+            curl -s -o /tmp/out -w '%{http_code}' -X POST "$base/mcp" \
+              -H 'content-type: application/json' \
+              -H 'accept: application/json, text/event-stream' -d "$1"
+          }
+          code=$(rpc '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
+          echo "tools/list without a token: $code"
+          test "$code" = 200
+          grep -q '"tools"' /tmp/out
+          code=$(rpc '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"aula_discover","arguments":{}}}')
+          echo "tools/call without a token: $code"
+          test "$code" = 401
+          {{- end }}
           {{- end }}

@@ -57,6 +57,10 @@ spec:
             - name: AULA_MCP_OIDC_ACCEPT_ID_TOKEN
               value: "1"
             {{- end }}
+            {{- if and .Values.kagent.enabled .Values.kagent.remoteMCPServer.discovery }}
+            - name: AULA_MCP_ANONYMOUS_TOOL_LIST
+              value: "1"
+            {{- end }}
             {{- else }}
             # Single-parent mode refuses a non-loopback bind without this; the
             # NetworkPolicy limits who can reach it.

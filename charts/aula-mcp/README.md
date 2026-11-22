@@ -69,6 +69,7 @@ kubectl -n aula-mcp exec -it deploy/aula-mcp -- bun apps/cli/src/index.ts login
 | `httpRoute.mcp` / `.setupUi` / `.api` / `.ui` | off | Gateway API routes; need `parentRefs`. |
 | `networkPolicy.enabled` / `.from` | on / `[]` | Allowed peers. kagent's namespace is added when `kagent.enabled`. |
 | `kagent.enabled` | `false` | Create a `RemoteMCPServer` in `kagent.namespace`. |
+| `kagent.remoteMCPServer.discovery` | `true` | Multi-parent: answer `tools/list` without a token so kagent shows the tools. Tool calls still need one. |
 | `kagent.agent.enabled` | `false` | Also create an example `Agent` that uses it. |
 | `telemetry.enabled` / `.endpoint` | off / `""` | OpenTelemetry over OTLP/HTTP to a collector (`AULA_MCP_OTEL=1`). See below. |
 | `telemetry.signals.traces` / `.metrics` / `.logs` | all `true` | Which signals to send once telemetry is on. |
@@ -205,10 +206,15 @@ directory. A parent can't see or change another parent's login.
    `url` must be https (http only for localhost). Sessions live in memory, so
    a restart asks parents to sign in again.
 
-The `RemoteMCPServer` gets the label `kagent.dev/discovery: disabled`, because
-aula-mcp refuses the controller's tool listing, which carries no token. Agents
-list the tools at run time with the parent's token instead. So its status
-shows no discovered tools; that is expected.
+kagent's controller lists the tools without a token. With
+`kagent.remoteMCPServer.discovery` (the default) aula-mcp answers `initialize`
+and `tools/list` without one (`AULA_MCP_ANONYMOUS_TOOL_LIST=1`), so the tools
+show in kagent and agents can pick them. Every other call still needs the
+parent's token: a tool call without one gets 401. Tool names and descriptions
+are the same for every parent, so the list tells nothing about anyone. With
+`discovery: false` the `RemoteMCPServer` gets the label
+`kagent.dev/discovery: disabled` and kagent shows no tools; agents still list
+them at run time with the parent's token.
 
 ### API and dashboard (optional)
 
@@ -276,7 +282,9 @@ It checks:
 
 - `/healthz` answers;
 - multi-parent mode refuses `/mcp` without a token (401);
-- the `RemoteMCPServer` has token passthrough on and discovery off;
+- with kagent, `tools/list` answers without a token and `tools/call` does not
+  (401);
+- the `RemoteMCPServer` has token passthrough on and discovery on;
 - the NetworkPolicy blocks a pod that isn't allowed.
 
 It installs only the kagent CRDs, not kagent or Keycloak.
