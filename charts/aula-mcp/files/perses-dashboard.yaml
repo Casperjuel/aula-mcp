@@ -602,7 +602,7 @@ spec:
                 kind: 'LokiLogQuery'
                 spec:
                   datasource: __LOKI_DATASOURCE__
-                  query: __LOGS__
+                  query: '__LOGS__'
   layouts:
     - kind: 'Grid'
       spec:
