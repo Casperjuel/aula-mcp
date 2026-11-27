@@ -19,6 +19,7 @@ import {
   type StoredTokenRecord,
   silentLogger,
   type TokenStore,
+  type WireTracer,
   withFreshTokens,
 } from '@aula-mcp/aula-auth';
 import {
@@ -35,6 +36,8 @@ import {
 export interface AulaContextOptions {
   store?: TokenStore;
   logger?: Logger;
+  /** Wire tracer for every HTTP exchange this context makes; see trace-config.ts. */
+  tracer?: WireTracer;
 }
 
 export class AulaContext {
@@ -59,7 +62,10 @@ export class AulaContext {
   constructor(options: AulaContextOptions = {}) {
     this.store = options.store ?? defaultStore();
     this.logger = options.logger ?? silentLogger;
-    this.http = new AulaHttpClient({ logger: this.logger });
+    this.http = new AulaHttpClient({
+      logger: this.logger,
+      ...(options.tracer ? { tracer: options.tracer } : {}),
+    });
     this.watchTokenFile();
   }
 

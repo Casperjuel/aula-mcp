@@ -152,7 +152,7 @@ export class AulaHttpClient {
     const body = await response.text();
     const durationMs = Date.now() - start;
     if (this.tracer !== noopTracer) {
-      const sanitisedBody = sanitizeResponseBody(body);
+      const sanitisedBody = sanitizeResponseBody(body, undefined, url);
       this.tracer.record({
         ts: new Date().toISOString(),
         seq,
