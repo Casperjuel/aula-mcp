@@ -19,6 +19,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { AulaContext } from './aula-context.ts';
 import { resolveCalendarRange } from './calendar-range.ts';
+import { GATED_CONTACT_FILTERS, gateContactList } from './contact-gate.ts';
 import { buildDiscoverManifest } from './discover.ts';
 
 const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024;
@@ -709,20 +710,35 @@ export function registerTools(server: McpServer, context: AulaContext): void {
         filter: z
           .string()
           .optional()
-          .describe('Aula role filter. Defaults to "child"; other values are untested.'),
+          .describe('Aula role filter: "child" (default), "guardian" or "employee".'),
         page: z.number().int().min(1).optional().describe('1-based page. Defaults to 1.'),
       },
     },
     async (args) => {
+      // The consent gate follows the rules of Aula's contacts page, which only
+      // offers these three filters; any other value is refused, not guessed at.
+      const filter = args.filter ?? 'child';
+      if (!(GATED_CONTACT_FILTERS as readonly string[]).includes(filter)) {
+        return jsonContent({
+          error: 'unsupported_filter',
+          message: `Use filter ${GATED_CONTACT_FILTERS.map((f) => `"${f}"`).join(', ')}.`,
+        });
+      }
       const client = await context.getClient();
       await context.getGuardianUserId();
-      return jsonContent(
-        await client.getContactList({
-          groupId: args.groupId,
-          ...(args.filter ? { filter: args.filter } : {}),
-          ...(args.page !== undefined ? { page: args.page } : {}),
-        }),
-      );
+      const rows = await client.getContactList({
+        groupId: args.groupId,
+        filter,
+        ...(args.page !== undefined ? { page: args.page } : {}),
+      });
+      const gated = gateContactList(rows);
+      if (gated === undefined) {
+        return jsonContent({
+          error: 'unexpected_shape',
+          message: 'Aula did not return a list of contacts.',
+        });
+      }
+      return jsonContent(gated);
     },
   );
 
