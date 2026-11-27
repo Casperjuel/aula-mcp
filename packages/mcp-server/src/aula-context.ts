@@ -45,14 +45,20 @@ export class AulaContext {
   // explicitly assign `undefined` to invalidate the cache (the strict
   // `exactOptionalPropertyTypes` flag forbids `field = undefined` on `T?`).
   private clientPromise: Promise<AulaClient> | undefined;
-  private widgetManagerPromise: Promise<WidgetTokenManager> | undefined;
+  /** Bound to the client it was built with: the manager calls
+   *  aulaToken.getAulaToken through that client, and getClient() builds a
+   *  new one when the access token expires (#164). */
+  private cachedWidgetManager: { client: AulaClient; manager: WidgetTokenManager } | undefined;
   private cachedRecord: StoredTokenRecord | undefined;
   /** Guardian user-id from getProfileContext. Used as the
    *  sessionId/sessionUUID/sessionuuid parameter by the third-party
    *  integrations. Stored as string — Aula returns either a numeric id
    *  or an opaque alphanumeric token; we treat it as opaque to match
-   *  upstream Python's `str(child["userId"])` handling. */
-  private cachedGuardianUserId: string | undefined;
+   *  upstream Python's `str(child["userId"])` handling.
+   *
+   *  Bound to the client it was fetched with, like the widget manager —
+   *  see getGuardianUserId. */
+  private cachedGuardian: { client: AulaClient; userId: string } | undefined;
   private tokenFileWatcher: FSWatcher | undefined;
   private tokenFileChangeDebounce: NodeJS.Timeout | undefined;
 
@@ -153,9 +159,9 @@ export class AulaContext {
    *  401/403 indicates the server's view of our tokens is wrong. */
   invalidate(): void {
     this.clientPromise = undefined;
-    this.widgetManagerPromise = undefined;
+    this.cachedWidgetManager = undefined;
     this.cachedRecord = undefined;
-    this.cachedGuardianUserId = undefined;
+    this.cachedGuardian = undefined;
   }
 
   /**
@@ -166,24 +172,32 @@ export class AulaContext {
    * Per Python `client.py:670/757` — the integration calls fail without it.
    * Aula returns this as either a number or an opaque alphanumeric token;
    * we coerce to string and pass through verbatim.
+   *
+   * Cached per client, not once per context: getProfileContext also
+   * activates the guardian profile for the access token it is called with,
+   * so a new client (after a token refresh) must make the call again.
    */
   async getGuardianUserId(): Promise<string> {
-    if (this.cachedGuardianUserId !== undefined) return this.cachedGuardianUserId;
     const client = await this.getClient();
+    if (this.cachedGuardian?.client === client) return this.cachedGuardian.userId;
     const ctx = await client.getProfileContext('guardian');
     if (ctx.userId == null || ctx.userId === '') {
       throw new Error('profiles.getProfileContext returned no userId');
     }
-    this.cachedGuardianUserId = String(ctx.userId);
-    return this.cachedGuardianUserId;
+    const userId = String(ctx.userId);
+    this.cachedGuardian = { client, userId };
+    return userId;
   }
 
+  /** Rebuilt whenever getClient() returns a new client. The token-file
+   *  watcher's invalidate() used to hide the stale manager, but it does not
+   *  fire on every setup (bind mounts, keychain store) — #164. */
   async getWidgetManager(): Promise<WidgetTokenManager> {
-    if (!this.widgetManagerPromise) {
-      this.widgetManagerPromise = (async () =>
-        new WidgetTokenManager({ client: await this.getClient() }))();
+    const client = await this.getClient();
+    if (this.cachedWidgetManager?.client !== client) {
+      this.cachedWidgetManager = { client, manager: new WidgetTokenManager({ client }) };
     }
-    return this.widgetManagerPromise;
+    return this.cachedWidgetManager.manager;
   }
 
   async getEasyIq(): Promise<EasyIqClient> {
