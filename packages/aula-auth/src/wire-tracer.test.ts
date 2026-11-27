@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import {
   formatTraceText,
   InMemoryTracer,
@@ -236,5 +239,51 @@ describe('InMemoryTracer + formatTraceText', () => {
     expect(text).toContain('GET https://example.com/x');
     expect(text).toContain('200 (42 ms, 15 bytes)');
     expect(text).toContain('<html>hi</html>');
+  });
+});
+
+describe('JsonlFileTracer write failures', () => {
+  // record() is fire-and-forget, so a rejected write (disk full, directory
+  // removed while the server runs) must not become an unhandled rejection
+  // that takes the whole process down. Run in a child process so a crash
+  // can't take the test runner with it.
+  test('a write to an unusable path does not kill the process', async () => {
+    const tracerModule = join(import.meta.dir, 'wire-tracer.ts');
+    const blocker = join(mkdtempSync(join(tmpdir(), 'aula-tracer-fail-')), 'file');
+    writeFileSync(blocker, 'not a directory');
+    const script = `
+      const { JsonlFileTracer } = await import(${JSON.stringify(tracerModule)});
+      const t = new JsonlFileTracer(${JSON.stringify(join(blocker, 'sub', 'trace.jsonl'))});
+      t.record({ ts: '', seq: 1, method: 'GET', url: 'x', requestHeaders: {}, requestBody: '',
+        status: 200, responseHeaders: {}, responseBody: '', responseBodyBytes: 0, durationMs: 0 });
+      setTimeout(() => console.log('alive'), 300);
+    `;
+    const proc = Bun.spawn([process.execPath, '-e', script], { stdout: 'pipe', stderr: 'pipe' });
+    const code = await proc.exited;
+    const out = await new Response(proc.stdout).text();
+    rmSync(dirname(blocker), { recursive: true, force: true });
+    expect(out).toContain('alive');
+    expect(code).toBe(0);
+  });
+});
+
+describe('sanitizeResponseBody — widget token endpoint', () => {
+  const body = JSON.stringify({ status: { message: 'OK' }, data: 'fake-widget-token' });
+  test('redacts `data` from aulaToken.getAulaToken', () => {
+    const out = sanitizeResponseBody(
+      body,
+      undefined,
+      'https://x.test/api/?method=aulaToken.getAulaToken',
+    );
+    expect(out.text).not.toContain('fake-widget-token');
+    expect(out.text).toContain('"message":"OK"');
+  });
+  test('keeps `data` on every other endpoint', () => {
+    const out = sanitizeResponseBody(
+      body,
+      undefined,
+      'https://x.test/api/?method=calendar.getEvents',
+    );
+    expect(out.text).toContain('fake-widget-token');
   });
 });

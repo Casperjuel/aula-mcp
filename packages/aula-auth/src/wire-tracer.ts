@@ -61,16 +61,28 @@ export class InMemoryTracer implements WireTracer {
 /** Append-only JSONL file tracer. Creates the parent dir if needed. */
 export class JsonlFileTracer implements WireTracer {
   private dirReady = false;
+  private warned = false;
   constructor(private readonly path: string) {}
   record(entry: WireEntry): void {
-    void this.write(entry);
+    // Fire-and-forget, so a failed write (disk full, file's directory removed
+    // while a server runs) must not surface as an unhandled rejection, which
+    // would kill the process. Warn once and keep going.
+    this.write(entry).catch((err: unknown) => {
+      if (this.warned) return;
+      this.warned = true;
+      process.stderr.write(
+        `wire-tracer: cannot write ${this.path}: ${(err as Error).message}; further failures are not reported\n`,
+      );
+    });
   }
   private async write(entry: WireEntry): Promise<void> {
     if (!this.dirReady) {
       await mkdir(dirname(this.path), { recursive: true });
       this.dirReady = true;
     }
-    await appendFile(this.path, `${JSON.stringify(entry)}\n`, 'utf8');
+    // mode only applies when this call creates the file, e.g. after it was
+    // removed mid-run; transcripts stay owner-only either way.
+    await appendFile(this.path, `${JSON.stringify(entry)}\n`, { encoding: 'utf8', mode: 0o600 });
   }
 }
 
@@ -94,6 +106,8 @@ const SECRET_HEADERS = new Set([
   'set-cookie',
   'csrfp-token',
   'x-csrf-token',
+  // Meebook sends the guardian session id as a header.
+  'sessionuuid',
 ]);
 
 /** Body field names (in form-urlencoded or JSON) we redact. */
@@ -118,6 +132,10 @@ const SECRET_BODY_FIELDS = [
   'randoma',
   'identityclaim',
   'chosenoptionjson',
+  // Guardian session id the widget integrations send (Min Uddannelse,
+  // Systematic, EasyIQ) alongside the widget bearer token.
+  'sessionuuid',
+  'sessionid',
 ];
 
 const SECRET_BODY_FIELDS_SET = new Set(SECRET_BODY_FIELDS.map((s) => s.toLowerCase()));
@@ -139,6 +157,8 @@ const SECRET_URL_PARAMS = new Set([
   '__requestverificationtoken',
   'ticket',
   'session_code',
+  'sessionuuid',
+  'sessionid',
 ]);
 
 /**
@@ -245,9 +265,24 @@ export function sanitizeRequestBody(
   }
 }
 
+/**
+ * `aulaToken.getAulaToken` answers the widget bearer token as the envelope's
+ * `data`. `data` can't go on the field denylist — every Aula response uses
+ * it — so this one endpoint is matched by URL.
+ */
+function isWidgetTokenUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).searchParams.get('method') === 'aulaToken.getAulaToken';
+  } catch {
+    return false;
+  }
+}
+
 export function sanitizeResponseBody(
   body: string,
   cap = DEFAULT_BODY_CAP,
+  url?: string,
 ): {
   text: string;
   bytes: number;
@@ -258,7 +293,17 @@ export function sanitizeResponseBody(
   if (looksLikeJson(body)) {
     try {
       const parsed = JSON.parse(body) as unknown;
-      cleaned = JSON.stringify(redactJson(parsed));
+      const redacted = redactJson(parsed);
+      if (
+        isWidgetTokenUrl(url) &&
+        redacted &&
+        typeof redacted === 'object' &&
+        'data' in redacted &&
+        typeof redacted.data === 'string'
+      ) {
+        redacted.data = `<redacted ${redacted.data.length}>`;
+      }
+      cleaned = JSON.stringify(redacted);
     } catch {
       // fall through to raw
     }

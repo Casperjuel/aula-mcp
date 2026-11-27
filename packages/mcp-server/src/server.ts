@@ -24,6 +24,11 @@
  *   AULA_MCP_WRITE=1          — enable write tools (aula.presence.set_template);
  *                               the server is read-only without it
  *   AULA_MCP_LOG=1            — verbose console logs from auth/client layers
+ *   AULA_MCP_TRACE_FILE       — append every HTTP exchange as one redacted JSONL
+ *                               line to this file (created 0600; same redaction
+ *                               as `aula login --debug`). Off by default; an
+ *                               unusable path refuses to start. HTTP server
+ *                               only; server-stdio.ts ignores it.
  *   AULA_MCP_ALLOW_REMOTE=1   — allow binding to non-loopback addresses (refuses
  *                               by default; the server is single-user and any
  *                               peer with /mcp access can drive your tokens)
@@ -48,6 +53,7 @@ import { AulaContext } from './aula-context.ts';
 import { createMcpApp, type McpApp } from './setup.ts';
 import { createSetupApp } from './setup-ui.ts';
 import { HonoSseTransport } from './sse-transport.ts';
+import { createHttpTracer, resolveTraceFilePath } from './trace-config.ts';
 
 const PORT = Number(process.env.AULA_MCP_PORT ?? 7878);
 const HOST = process.env.AULA_MCP_HOST ?? '127.0.0.1';
@@ -56,11 +62,26 @@ const logger = process.env.AULA_MCP_LOG === '1' ? consoleLogger('aula-mcp') : si
 
 assertSafeBindAddress(HOST);
 
+// Fail loud at boot on a bad trace path, like assertSafeBindAddress: the
+// tracer's writes are fire-and-forget, so a broken path would otherwise drop
+// every entry silently.
+const TRACE_FILE_PATH = resolveTraceFilePath();
+let httpTracer: ReturnType<typeof createHttpTracer>;
+try {
+  httpTracer = createHttpTracer(TRACE_FILE_PATH);
+} catch (err) {
+  process.stderr.write(
+    `AULA_MCP_TRACE_FILE="${TRACE_FILE_PATH}" is not usable: ${(err as Error).message}\n`,
+  );
+  process.exit(2);
+}
+if (httpTracer) logger.info('aula-mcp.trace_file.enabled', { path: TRACE_FILE_PATH });
+
 // One AulaContext for every session on both transports. A context owns the
 // token refresh (de-duplicated per context), the AulaClient and its caches;
 // one per session meant each session refreshed and cached on its own and
 // held its own token-file watcher.
-const aulaContext = new AulaContext({ logger });
+const aulaContext = new AulaContext({ logger, ...(httpTracer ? { tracer: httpTracer } : {}) });
 
 // Streamable HTTP transport.
 //
